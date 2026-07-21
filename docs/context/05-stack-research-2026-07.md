@@ -603,3 +603,601 @@ the €2 000 machine and the €20 000 one.
 
 ---
 
+## 6. Authentication and authorisation, self-hosted, no managed identity provider
+
+### The constraint restated, because it changes the usual answer
+
+C2 forbids Supabase Auth and Supabase RLS. C1 forbids a managed IdP. C5 forbids anything
+that needs an auth specialist. What is left is: **you own the identity store, and it lives in
+the same PostgreSQL 18.4 that already holds the documents, the vectors and the Procrastinate
+queue.** That is not a limitation to work around — it is the single fact that makes every
+choice below easy, because "look up the session" and "check the matter permission" become
+one query against a database the request is already talking to.
+
+### JOSE / JWT libraries — this is where the CVEs are
+
+| Library | Current version | Licence | Verdict |
+|---|---|---|---|
+| **PyJWT** | **2.13.0 (2026-05-21)** | MIT, Python ≥ 3.9 | **Use this.** Prior: 2.12.1 (2026-03-13), 2.12.0 (2026-03-12), 2.11.0 (2026-01-30), 2.10.1 (2024-11-28). Narrow surface — sign, verify, nothing else |
+| **Authlib** | **1.7.2 (2026-05-06)**; maintenance line **1.6.12 (2026-05-04)** | BSD-3-Clause, Python ≥ 3.10 | Use **only** if you need a full OAuth2/OIDC server or client. See the advisory table below before you do |
+| **python-jose** | **3.5.0 (2025-05-28)** | MIT | **Rule out.** Three releases in five years: 3.3.0 (2021-06-05), 3.4.0 (2025-02-18), 3.5.0 (2025-05-28). 115 open issues, last push 2026-04-14 |
+
+Sources: [pyjwt on PyPI](https://pypi.org/pypi/pyjwt/json), [authlib on PyPI](https://pypi.org/pypi/authlib/json),
+[python-jose on PyPI](https://pypi.org/pypi/python-jose/json), [mpdavis/python-jose (GitHub API)](https://api.github.com/repos/mpdavis/python-jose).
+
+**python-jose is the trap that legacy FastAPI tutorials still lead people into.** It carries
+**CVE-2024-33663** — algorithm confusion with OpenSSH ECDSA keys and other key formats, which
+is an authentication-bypass class bug — and **CVE-2024-33664**, a "JWT bomb" DoS via a crafted
+JWE with a high compression ratio. Both affect ≤ 3.3.0; 3.4.0 fixed the first.
+Sources: [Red Hat bug 2277297 (CVE-2024-33663)](https://bugzilla.redhat.com/show_bug.cgi?id=2277297),
+[CVE-2024-33664](https://vulert.com/vuln-db/CVE-2024-33664).
+The library sat unmaintained for **three and a half years** with a known auth bypass. It is
+back from the dead, not healthy. Do not start a 2026 product on it.
+
+**Authlib's 2026 has been genuinely bad.** The GitHub Advisory Database lists **twelve**
+advisories for the package. The recent ones:
+
+| CVE | Severity | Published | Affected | Patched |
+|---|---|---|---|---|
+| **CVE-2026-27962** — JWS JWK header injection, signature verification bypass | **Critical, CVSS 9.1** | 2026-03-15 | ≤ 1.6.8 | 1.6.9 |
+| CVE-2026-28498 — fail-open crypto verification in OIDC hash binding (`at_hash`/`c_hash`) | High | 2026-03-15 | ≤ 1.6.8 | 1.6.9 |
+| CVE-2026-28490 — JWE RSA1_5 Bleichenbacher padding oracle | High | 2026-03-15 | ≤ 1.6.8 | **patched version unverified** |
+| CVE-2026-28802 — `alg: none` with blank signature passes verification | High | Feb 2026 | 1.6.5–1.6.6 | 1.6.7 |
+| CVE-2026-41425 — CSRF when using cache-backed OAuth clients | Moderate | 2026-04-16 | < 1.6.11 | 1.6.11 |
+| CVE-2026-44681 — OIDC implicit/hybrid open redirect | Moderate | 2026-05-07 | ≤ 1.6.11, ≤ 1.7.0 | 1.6.12 / 1.7.1 |
+| CVE-2026-41479 — unauthenticated open redirect on unsupported `response_type` | Moderate | 2026-06-08 | < 1.6.6 → HEAD | 1.6.10 / 1.7.1 |
+
+Plus, in the preceding twelve months: CVE-2025-59420 (High, JWS/JWT accepts unknown `crit`
+headers), CVE-2025-61920 (High, DoS via oversized JOSE segments), CVE-2025-62706 (Moderate,
+JWE `zip=DEF` decompression bomb), CVE-2025-68158 (Moderate, 1-click account takeover), and
+CVE-2024-37568 (High, algorithm confusion with asymmetric public keys).
+Sources: [GitHub Advisory Database — authlib](https://github.com/advisories?query=authlib),
+[lepture/authlib security advisories (GitHub API)](https://api.github.com/repos/lepture/authlib/security-advisories),
+[GHSA-wvwj-cvrp-7pv5 / CVE-2026-27962](https://github.com/lepture/authlib/security/advisories/GHSA-wvwj-cvrp-7pv5),
+[ARMO on CVE-2026-28802](https://www.armosec.io/blog/authlib-cve-2026-28802-jwt-signature-verification-bypass/).
+
+**Read this correctly.** It is not "Authlib is bad code" — it is a small maintainer team
+carrying the largest JOSE/OAuth/OIDC surface in Python, and that surface is under active
+research. The correct inference for us is **do not deploy that surface at all.** Every one of
+the four High/Critical bugs above is in JWS/JWE/OIDC verification paths we would not use if we
+never issue a JWT to a browser. **Under C1 there is no air-gapped machine that will pick up a
+1.6.9 patch on the day it ships.** An unpatched CVSS 9.1 auth bypass sitting on a law firm's
+document server for six months is the worst outcome in this entire document.
+
+### Password hashing
+
+| Library | Current version | Licence | Verdict |
+|---|---|---|---|
+| **argon2-cffi** | **25.1.0 (2025-06-03)** | MIT, Python ≥ 3.8 | The reference Argon2 binding. Quiet because it is finished — prior 23.1.0 (2023-08-15) |
+| **pwdlib** | **0.3.0 (2025-10-25)** | MIT, Python ≥ 3.10 | Thin wrapper over argon2-cffi and bcrypt with a hash-upgrade path. By François Voron (the FastAPI-Users author) |
+| **bcrypt** | 5.0.0 (2025-09-25) | Apache-2.0 | Fine, but Argon2id is the 2026 default |
+| **passlib** | **1.7.4 (2020-10-08)** | BSD | **Rule out.** Nearly six years without a release |
+
+Sources: [argon2-cffi on PyPI](https://pypi.org/pypi/argon2-cffi/json), [pwdlib on PyPI](https://pypi.org/pypi/pwdlib/json),
+[bcrypt on PyPI](https://pypi.org/pypi/bcrypt/json), [passlib on PyPI](https://pypi.org/pypi/passlib/json).
+
+**The strongest available signal on all of the above:** the *official* FastAPI security
+tutorial now installs `pyjwt` and `pwdlib[argon2]`. It no longer teaches python-jose or
+passlib. Source: [FastAPI — OAuth2 with JWT tutorial](https://fastapi.tiangolo.com/tutorial/security/oauth2-jwt/).
+Under C5, "what the framework's own documentation tells an AI coding agent to write" is worth
+more than any benchmark on this page.
+
+### FastAPI-Users — the obvious pick, and why it is now a liability
+
+**15.0.5, released 2026-03-27.** MIT, Python ≥ 3.10. 6 200 stars, still actively pushed
+(2026-07-20). It ships registration, login, password reset, email verification, OAuth2 flows,
+pluggable password validation, SQLAlchemy and Beanie backends, and JWT/database/Redis strategies.
+
+**But it entered maintenance mode at v15.0.1 (2025-10-25):** *"While we'll continue to provide
+security updates and dependency maintenance, no new features will be added."* The maintainers
+state they are working on a successor toolkit that will supersede it.
+Sources: [fastapi-users releases (GitHub API)](https://api.github.com/repos/fastapi-users/fastapi-users/releases),
+[fastapi-users on PyPI](https://pypi.org/pypi/fastapi-users/json).
+
+Two more facts matter. **v15.0.0 dropped Python 3.9 and Pydantic v1** — a real migration if you
+are not already on Pydantic 2. And **v15.0.2 (2025-12-19) shipped a CSRF fix in the OAuth2
+authorize flow** — i.e. the library has its own vulnerability history, and adopting it means
+tracking that history on an air-gapped install.
+
+The deeper objection is fit. FastAPI-Users is built around **JWT-issuing, multi-strategy,
+OAuth2-social-login, self-service registration** — a public SaaS signup funnel. This product
+has none of that. A law firm has a fixed roster of named users provisioned by an administrator;
+there is no registration, no email verification (there is no mail server on an air-gapped box),
+no social login, no password-reset email. **You would adopt a maintenance-mode dependency and a
+JWT strategy layer to get roughly two hundred lines of code you actually need.**
+
+### Sessions vs JWT for a single-tenant on-prem install — the honest answer
+
+The case for stateless JWT is exactly one thing: *validating a token must not require a shared
+store, because the services validating it cannot reach one.* That is a horizontal-scale,
+multi-service, multi-region argument.
+
+**Here there is one machine, one database, and one application process.** The premise is absent.
+And the costs are not:
+
+- **No revocation.** A paralegal removed from a matter — or fired — keeps their access until
+  the token expires. For a product whose non-negotiables include *RBAC by matter (Chinese walls)*
+  and *full audit trail*, that is a compliance defect, not an inconvenience.
+- **You build refresh-token rotation anyway**, which is a server-side revocable-token store —
+  i.e. you build sessions, badly, in addition to JWT.
+- **The whole algorithm-confusion / `alg:none` / JWK-header-injection bug class** listed above
+  simply does not exist if there is no signed token to confuse.
+- **It does not save the database round-trip.** Matter-level permissions change and must be
+  authoritative, so every request hits Postgres for the matter scope regardless. Once you are
+  querying per request, a session lookup on a primary-key index is free. **This is the decisive
+  point:** the stateless benefit is cancelled by the Chinese-walls requirement.
+
+**Note on Starlette's `SessionMiddleware`:** it is a *signed cookie*, backed by itsdangerous
+2.2.0 (2024-04-16) — client-side state, not a server-side session, and not revocable. It is fine
+for flash messages and CSRF nonces. It is not a session store.
+(Starlette 1.3.1, 2026-06-12 — the 1.0 line landed in May 2026.)
+Source: [starlette on PyPI](https://pypi.org/pypi/starlette/json).
+
+**What to build instead** — and it is genuinely small:
+
+1. `POST /login` verifies the Argon2id hash, then mints **256 bits from `secrets.token_urlsafe`**.
+2. Store **SHA-256 of the token** in a `session` table (`user_id`, `created_at`, `last_seen_at`,
+   `expires_at`, `revoked_at`, `user_agent`, `ip`). Hash at rest so a database leak is not a
+   credential leak.
+3. Return it in a cookie: `HttpOnly`, `Secure`, `SameSite=Lax`, `Path=/`.
+4. One FastAPI dependency resolves cookie → `Principal`. Revocation is `UPDATE … SET revoked_at`.
+5. The session table **is** the login audit trail, and `pg_dump` already backs it up.
+
+JWT keeps exactly one job: short-lived internal service tokens (worker → API), symmetric HS256,
+with `algorithms=["HS256"]` passed explicitly to `jwt.decode` — never inferred from the header.
+
+### Per-request authorisation
+
+C2 forbids **Supabase** RLS. It does not forbid **PostgreSQL** RLS, which is core Postgres and
+available on every managed tier. That distinction is worth stating explicitly, because it is the
+one place a clever option is genuinely on the table.
+
+- **Primary enforcement: application layer.** One `Principal`, one FastAPI dependency, and a
+  repository layer in which **every query function takes a matter scope as a mandatory
+  positional argument**. Make it impossible to write a query without one — that is a code-review
+  and type-checking property an AI agent will respect, whereas "remember to filter" is not.
+- **Defence in depth: native Postgres RLS**, with policies reading `current_setting('app.actor_id')`
+  set by `SET LOCAL` inside the request's transaction. Real value: a missed `WHERE` clause returns
+  zero rows instead of another matter's documents.
+  **The footgun:** `SET LOCAL` is transaction-scoped, and with a pooled connection — or a
+  Procrastinate worker that reuses connections across jobs — a leaked GUC leaks a Chinese wall.
+  Adopt it **only** behind a test that opens two concurrent pooled sessions and proves the GUC
+  does not cross. If that test is not written, do not enable RLS; a false sense of containment
+  is worse than none.
+- **Policy engines (Casbin/pycasbin, OPA)** — considered and rejected. They add a policy DSL and
+  a second place where authorisation lives. A `matter_membership(user_id, matter_id, role)` table
+  plus one dependency is smaller, faster, auditable in SQL, and something the technical lead can
+  read. Under C5 that wins.
+
+### Passkeys / WebAuthn — and the constraint that nobody sees coming
+
+**`webauthn` (py_webauthn, Duo Labs) 3.0.0, released 2026-06-29.** BSD-3-Clause, Python ≥ 3.10.
+Prior: 2.8.0 (2026-06-13), 2.7.1 (2026-02-11), 2.7.0 (2025-09-04). 1 053 stars, actively pushed,
+not archived. Four functions: `generate_registration_options`, `verify_registration_response`,
+`generate_authentication_options`, `verify_authentication_response`.
+Sources: [webauthn on PyPI](https://pypi.org/pypi/webauthn/json), [duo-labs/py_webauthn (GitHub API)](https://api.github.com/repos/duo-labs/py_webauthn).
+The library is fine. The library is not the problem.
+
+**WebAuthn only runs in a secure context.** Browsers permit it over HTTPS, with `localhost` as
+the sole exemption — **a bare LAN IP address is blocked by the specification**, self-signed
+certificates are a development-only escape, and the credential is bound at registration time to
+a **relying-party ID derived from the origin's effective domain**.
+Sources: [MDN — Web Authentication API](https://developer.mozilla.org/en-US/docs/Web/API/Web_Authentication_API),
+[Corbado — testing passkeys from localhost](https://www.corbado.com/blog/test-passkeys-localhost-ngrok).
+
+Translated into this deployment:
+
+- Users reaching the app at `https://192.168.1.40` **cannot use passkeys at all.**
+- It works only if the firm has an internal DNS name (`apx.cabinet.local`) *and* a certificate
+  those workstations trust — which means the firm's own internal CA, or a real certificate for a
+  name they control. That is a Windows-domain task on the customer's side, and it is the single
+  most likely thing to go wrong during an install.
+- **If the firm ever renames the host, every registered passkey is dead.** On an air-gapped
+  machine with no remote access, you cannot fix that for them.
+
+**So: build password + Argon2id + TOTP first.** TOTP (`pyotp` 2.10.0, 2026-06-14, MIT) has no
+domain binding, no certificate requirement, no network, and works from any phone offline —
+it is the only second factor that is unconditionally deployable here. Design the
+`credential` table polymorphically (`type` ∈ `password | totp | webauthn`) so passkeys are an
+additive row, and enable WebAuthn per site once the FQDN and certificate exist.
+
+> ### Recommendation 6 — **Own the auth: opaque server-side sessions in PostgreSQL, Argon2id via `pwdlib[argon2]`, PyJWT 2.13.x for internal service tokens only, TOTP via `pyotp` as the second factor, `py_webauthn` 3.0.x as an additive credential type behind a per-site FQDN + certificate gate. No FastAPI-Users. No Authlib unless a customer forces OIDC. Never python-jose or passlib.**
+> **Strongest reason:** it removes the entire JOSE attack surface from a machine that cannot be
+> patched. Every High/Critical CVE in this section — `alg:none`, JWK header injection, algorithm
+> confusion, fail-open hash binding — is unreachable if no signed token is ever presented by a
+> browser. And because the Chinese-walls requirement forces a database read on every request
+> anyway, statelessness buys literally nothing while costing revocation, which the product's own
+> non-negotiables require.
+> **Main risk:** you are writing security code instead of importing it, and a one-person team
+> plus AI agents writing session handling is exactly how timing-unsafe token comparison, missing
+> `HttpOnly`, absent CSRF protection on state-changing routes, and session-fixation-on-privilege-
+> change get shipped. Mitigate by keeping the surface tiny (one login route, one dependency, one
+> table), hashing tokens at rest, and writing the four adversarial tests **first**: revoked
+> session rejected, expired session rejected, cross-matter read returns zero rows, GUC does not
+> leak across pooled connections.
+> **Second risk, and it is the more likely one:** the assumption that the firm has no identity
+> provider. A firm large enough to buy this runs Microsoft 365 or an on-prem AD, and their
+> security questionnaire will ask for SSO. That is not incompatible with C1 — ADFS/Entra on the
+> LAN is reachable from an air-gapped machine — but it drags Authlib, with the advisory record
+> above, onto the critical path. **Keep the `Principal` resolution behind one interface** so an
+> OIDC backend can be added without touching any route.
+
+---
+
+## 7. Packaging an offline install, and updating it later
+
+### What "offline install" has to mean here
+
+Three separate problems that get confused with one another: **(a)** getting several gigabytes of
+container images and model weights onto a machine with no network; **(b)** proving to a law
+firm's IT contact that what arrived is what you sent; **(c)** changing the database schema on a
+machine you cannot log into, without breaking it, and being able to undo it. Only (a) is about
+packaging. (b) and (c) are what actually determine whether one person can support several sites.
+
+### Option A — Docker Compose bundle with pre-pulled images
+
+**Docker Engine 29.6.2 (2026-07-16); Docker Compose v5.3.1 (2026-07-07).**
+Sources: [moby/moby releases (GitHub API)](https://api.github.com/repos/moby/moby/releases),
+[docker/compose releases (GitHub API)](https://api.github.com/repos/docker/compose/releases).
+
+The mechanism is `docker save` on the build side producing a tar of all images, transferred by
+USB/DVD, then `docker load` on the target, with the `compose.yaml` and a `.env` alongside.
+Sources: [Preparing Docker images for air-gapped installation (RepoFlow)](https://docs.repoflow.io/Self-Hosting/air-gapped-preparation),
+[Air-gapped deployment with Docker Compose (RepoFlow)](https://docs.repoflow.io/Self-Hosting/Installation/docker-compose/air-gapped-deployment),
+[docker-compose-offline-install](https://github.com/DevinKott/docker-compose-offline-install).
+
+What this gets right for us specifically:
+
+- **It is the same artefact in dev and prod (C1 + C2).** The Compose file that a developer runs
+  against a hosted Postgres is the Compose file the firm runs, minus one service.
+- pgvector arrives *inside* the `pgvector/pgvector:pg18` image — §1 already noted this is zero
+  extra install steps.
+- Model weights, `tessdata` and Docling artifacts are image layers, so §3's and §4's offline
+  requirements are satisfied by the same mechanism.
+- The IT contact's job is: copy a directory, run one script. That is the ceiling of what is
+  realistic.
+
+The cost is honest: Docker must be installed and permitted. Some firms' IT policy forbids it.
+Note also that Podman is a drop-in for air-gapped use if Docker is refused.
+Source: [Using Podman in air-gapped environments](https://oneuptime.com/blog/post/2026-03-18-use-podman-air-gapped-environments/view).
+
+### Option B — a single binary
+
+Genuinely excellent when it applies: one file, no runtime, no Docker, atomic updates, and the
+frontend embedded via `go:embed`.
+Source: [Embedding frontend assets in Go binaries](https://leapcell.io/blog/embedding-frontend-assets-in-go-binaries).
+
+**It does not apply.** The bundle is PostgreSQL 18.4 with the pgvector extension, a Python
+application, Procrastinate workers, Tesseract, and a vLLM or Ollama inference server plus
+multi-gigabyte model weights. A single binary cannot sensibly contain PostgreSQL, and Python's
+freezers (PyInstaller, Nuitka) produce fragile artefacts once native extensions —
+`psycopg`, `argon2-cffi`, `torch`, OCR bindings — are involved. This is ruled out by the shape of
+the stack, not by preference. If the stack were Go + SQLite it would be the right answer.
+
+### Option C — Tauri / Electron desktop wrapper
+
+**Tauri 2.11.5, released 2026-07-01** (2.11.4, 2026-06-30). Source: [tauri-apps/tauri releases (GitHub API)](https://api.github.com/repos/tauri-apps/tauri/releases).
+
+There is one real, non-obvious benefit: **a desktop shell serves from `localhost`, which is a
+secure context — it dissolves §6's WebAuthn problem and the whole internal-TLS-certificate
+problem in one move.** That is worth naming, because it is the only argument for this option
+that is not aesthetic.
+
+Everything else is against it:
+
+- It does not replace the server. Postgres, the workers and the inference server still ship. It
+  is **additive** complexity.
+- A second toolchain (Rust, platform SDKs) and **per-OS code-signing certificates** — Apple
+  Developer ID, Windows Authenticode — which expire, cost money annually, and whose renewal
+  failure breaks installs at every site simultaneously.
+- The product is multi-user with matter-level Chinese walls. A desktop wrapper means N installs
+  and N updates instead of one server the firm's existing browsers point at. For a one-person
+  team that is strictly worse arithmetic.
+
+Rule out as the distribution mechanism. Revisit only as an optional thin client if passkeys
+become contractual.
+
+### Signing and verification that works with no internet
+
+**cosign 3.1.2 (2026-07-17).** Source: [sigstore/cosign releases (GitHub API)](https://api.github.com/repos/sigstore/cosign/releases).
+
+The critical detail: **keyless signing does not work air-gapped** — it needs Fulcio and Rekor.
+Use a **key pair**. On the connected side, `cosign sign --key cosign.key`, then
+`cosign save $IMAGE --dir ./bundle`; on the air-gapped side,
+`cosign verify --key cosign.pub --offline --local-image ./bundle`. The verification material
+travels as an annotation on the image manifest, so `--offline` is a genuine offline verify.
+Sources: [sigstore/cosign](https://github.com/sigstore/cosign),
+[Verifying cosign signatures offline](https://some-natalie.dev/blog/cosign-disconnected/),
+[cosign issue #3437 — fully air-gapped sign and verify](https://github.com/sigstore/cosign/issues/3437).
+
+Two rules that matter more than the tool choice:
+
+1. **The public key must arrive by a different channel than the bundle.** Publish the fingerprint
+   on your website and put it in the contract. A signature verified with a key that travelled on
+   the same USB stick proves nothing.
+2. **The installer verifies, and refuses to continue on failure.** If verification is a step in a
+   PDF, it will be skipped. Also ship a `SHA256SUMS` with a detached signature for the humans who
+   want a second check they understand.
+
+### Migrations on an unattended upgrade — the part that actually breaks
+
+**Alembic 1.18.5 (2026-06-25)**, MIT, Python ≥ 3.10; the 1.18 line opened 2026-01-09.
+Source: [alembic on PyPI](https://pypi.org/pypi/alembic/json).
+
+The upgrade script must, in this order and failing closed at every step:
+
+1. **`pg_dump -Fc` before anything.** Verify the exit code *and* that the file is non-trivial in
+   size. **If the backup fails, do not migrate.** This is the single most important line in the
+   installer.
+2. **Record the currently-running image digests** to a file next to the backup. Without this,
+   rollback is guesswork.
+3. Run `alembic upgrade head` on a connection with **`lock_timeout` and `statement_timeout` set**.
+   Without them, a migration that cannot get its lock queues every application query behind it
+   and the firm experiences a total outage with no error message.
+   Source: [Zero-downtime Alembic migrations on PostgreSQL](https://goldlapel.com/grounds/replication-scaling-cloud/alembic-zero-downtime-migrations).
+4. Only then start the new containers.
+
+Three disciplines make this survivable:
+
+- **Expand/contract, always.** A release that removes a column ships at least one release *after*
+  the code that stopped reading it. This is what makes step 3 reversible without a restore.
+- **Lint migrations in CI.** Squawk flags `ADD COLUMN` with a `DEFAULT` (table lock) and
+  `CREATE INDEX` without `CONCURRENTLY` — exactly the two mistakes an AI agent makes.
+- **Rehearse against real shapes.** `alembic upgrade head --sql` lets you review the SQL before it
+  runs — but you cannot review anything on an unattended install, so the review happens in *your*
+  CI against a restored dump of a representative database. Not on the customer's machine.
+  Source: [Applying and rolling back migrations](https://www.stacklesson.com/react-fastapi/fastapi-alembic/ch25-lesson-03-applying-and-rolling-back/).
+
+**Rollback: do not use `alembic downgrade` on a customer machine.** Downgrade functions are the
+least-exercised code in any repository, they are frequently wrong, and `downgrade base` drops
+everything. The rollback that actually works is: **stop containers → restore the pre-upgrade
+`pg_dump` → re-tag the recorded previous image digests → start.** One documented command,
+tested in CI on every release. Keep writing `downgrade()` bodies for local development; never
+run them in production.
+
+### What comparable on-premise products actually ship in 2026
+
+- **Kubernetes-shaped enterprise tooling exists and is mature.** Replicated/KOTS builds an
+  `.airgap` bundle containing manifests and images plus a `kotsadm.tar.gz`, and **requires a
+  private container registry inside the air-gapped network**; KOTS rewrites image names and pushes
+  to it. Updates are new `.airgap` bundles uploaded through an admin console. Their April 2026
+  release added Helm v4 support and browser-based air-gap bundle downloads. Zarf occupies the same
+  niche. Sources: [Replicated — air gap install in existing clusters](https://docs.replicated.com/enterprise/installing-existing-cluster-airgapped),
+  [Replicated — distribute to air-gapped environments](https://www.replicated.com/air-gap).
+  **This is the wrong shape for us.** It presumes Kubernetes and a registry the firm operates.
+- **For single-machine on-prem, the pattern is Docker Compose plus an offline image tarball plus a
+  shell installer**, with Helm/KOTS reserved for customers who already run Kubernetes. Plane, for
+  example, advertises Docker, Kubernetes or fully air-gapped deployment with signed offline
+  bundles. Source: [Plane self-hosted](https://plane.so/self-hosted).
+- A comprehensive 2026 survey of what GitLab, Metabase, Mattermost and SonarQube specifically ship
+  for air-gap could not be confirmed against primary sources — **unverified**. The Compose +
+  tarball + installer pattern is nonetheless the consistent answer across every vendor
+  documentation page reviewed.
+
+### No telemetry, no remote access — as build-time properties
+
+Zero telemetry cannot be a policy; it has to be baked in and tested. In the image:
+`NEXT_TELEMETRY_DISABLED=1`, `DO_NOT_TRACK=1`, `SCARF_NO_ANALYTICS=1` (§3), `HF_HUB_OFFLINE=1`
+and `TRANSFORMERS_OFFLINE=1`. Then the **network-disabled CI test from §3 becomes the
+acceptance test for the whole bundle**, not just for Docling: bring the stack up with no network
+namespace, ingest a fixture, run a query, verify a login. If anything reaches for the internet,
+the build fails.
+
+No remote access means diagnostics must be a **support bundle**: one command producing a tarball
+of versions, image digests, the current Alembic revision, container health, disk and RAM,
+row counts, and log tails **with document content stripped**. It must be readable plain text —
+a law firm will not email you anything they cannot inspect first. Design the redaction now;
+it is the difference between a 20-minute diagnosis and a site visit.
+
+### What is realistic for one person across several sites
+
+- **Support exactly two versions, N and N−1, and write that into the contract.** Three concurrent
+  versions is where a one-person team stops being able to reproduce bugs.
+- **Pin image digests, never tags.** Keep a `versions.lock` per site in your own repository — it
+  is the only record of what is actually running somewhere you cannot log into.
+- **One `preflight` command** checking Docker version, disk, RAM, GPU presence and PostgreSQL
+  reachability, which refuses to proceed rather than half-installing.
+- **`install.sh` and `upgrade.sh`, both idempotent, both taking a bundle path**, both safe to
+  re-run after a failure. The IT contact's recovery action must always be "run it again".
+
+> ### Recommendation 7 — **Ship a Docker Compose bundle: a `docker save` image tarball signed with a cosign key pair and verified `--offline` by the installer, plus an `upgrade.sh` that takes a `pg_dump` before every Alembic migration and rolls back by restoring the dump and re-tagging recorded image digests. Two supported versions, everything pinned by digest, one redacted support bundle command. No single binary, no desktop wrapper.**
+> **Strongest reason:** it is the only option where the air-gapped install and the hosted dev tier
+> are the same artefact (C1 + C2), where the IT contact's entire job is "copy a directory and run
+> one script", and where pgvector, model weights, `tessdata` and the inference server all arrive
+> as image layers rather than as five separate install procedures a non-specialist can get wrong.
+> **Main risk:** the rollback path is the least-exercised code you will ship and it will be
+> executed for the first time by someone you cannot talk to, under time pressure, on a machine
+> you cannot see. Mitigate by running the full restore-and-re-tag path in CI on **every** release
+> against a restored production-shaped dump — not as a documented procedure, as an automated test.
+> **Second risk:** a customer whose IT policy forbids Docker, or who wants a VM appliance (OVA)
+> instead. Mitigate cheaply by keeping the Compose file free of Docker-specific extensions so a
+> Podman `podman compose` path stays open, and by never letting install steps live anywhere other
+> than the two scripts.
+
+---
+
+## 8. Backend and frontend framework sanity check
+
+### Backend — Python/FastAPI is still right, with two footnotes
+
+| Component | Current stable | Date | Note |
+|---|---|---|---|
+| **FastAPI** | **0.139.2** | 2026-07-16 | 0.139.1 same day; 0.139.0 (2026-07-01), 0.138.1 (2026-06-25), 0.138.0 (2026-06-20) |
+| **Starlette** | **1.3.1** | 2026-06-12 | The **1.0 line landed May 2026** — 1.0.1 (2026-05-21), 1.2.0 (2026-05-28), 1.3.0 (2026-06-11) |
+| **Uvicorn** | **0.51.0** | 2026-07-08 | 0.50.2 (2026-07-06), 0.50.0 (2026-07-04) |
+| **Pydantic** | **2.13.4** | 2026-05-06 | 2.14.0a1 (2026-05-22) is alpha — do not ship |
+| **SQLAlchemy** | **2.0.51** | 2026-06-15 | **2.1.0b3 (2026-06-27) is beta — do not ship** |
+| **psycopg** | **3.3.4** | 2026-05-01 | **LGPL-3.0-only** — see below |
+| **Alembic** | **1.18.5** | 2026-06-25 | §7 |
+| **Python** | **3.13.14** | 2026-06-10 | 3.14.6 same date; **3.10 reaches EOL 2026-10-31** |
+
+Sources: [fastapi releases (GitHub API)](https://api.github.com/repos/fastapi/fastapi/releases),
+[starlette](https://pypi.org/pypi/starlette/json), [uvicorn](https://pypi.org/pypi/uvicorn/json),
+[pydantic](https://pypi.org/pypi/pydantic/json), [sqlalchemy](https://pypi.org/pypi/sqlalchemy/json),
+[psycopg](https://pypi.org/pypi/psycopg/json), [Python end-of-life data](https://endoflife.date/api/python.json).
+
+**Migration traps, concretely:**
+
+- **Starlette reached 1.0 in May 2026 and FastAPI pins it in a narrow range.** Do not upgrade
+  Starlette independently of FastAPI; a Starlette major has historically forced a FastAPI bump.
+  Pin both exactly and move them together.
+- **FastAPI is still 0.x after seven years.** That is a versioning convention, not instability —
+  but it means a *minor* bump can carry a breaking change. Pin the exact version in the lockfile
+  and read the release notes for each bump. On an air-gapped product this is not optional.
+- **Target Python 3.13, not 3.14.** The C-extension dependencies this stack leans on — psycopg,
+  argon2-cffi, torch, OCR bindings — lag a major release, and free-threaded builds are not
+  something a one-person team should be debugging. Anything still on 3.10 must move before
+  2026-10-31.
+- **psycopg 3 is LGPL-3.0-only.** For a proprietary on-prem product this is almost certainly
+  fine — dynamic import of an unmodified library — but §3 already committed to counsel review
+  for extract-msg's GPL. **Put psycopg on the same list.** It costs nothing to ask both questions
+  in one email; it is expensive to discover the answer late.
+
+**The one serious counter-argument: Django.** It ships sessions, password hashing, permissions,
+an admin, and migrations — four of the things §6 and §7 require and that we just decided to
+build or bolt on. And §2 noted Procrastinate has **first-class Django integration**. For a
+non-hands-on lead plus AI agents, "the framework already did the boring 20%" is a real argument.
+What defeats it: Pydantic-typed request/response contracts and streaming responses are the shape
+of this application, AI coding agents produce markedly better FastAPI than Django REST Framework
+in 2026, and the async story for LLM streaming is cleaner. **Record it as a genuine near-miss,
+not a non-starter.** Litestar and Flask both fail C5 on adoption and typing respectively.
+
+### Frontend — is Next.js sound for a machine with no internet?
+
+**Current stable: Next.js 16.2.11 and 15.5.21, both published 2026-07-21** — both are security
+releases covering advisories in Server Actions, middleware, rewrites and image optimization.
+Next.js 16.0 shipped **2025-10-21**.
+Sources: [vercel/next.js releases (GitHub API)](https://api.github.com/repos/vercel/next.js/releases),
+[Next.js 16 announcement](https://nextjs.org/blog/next-16).
+
+**Answering the literal question first: does production mode have an external dependency? No.**
+
+- `next start` / `output: 'standalone'` runs on a Node.js server with **no outbound calls**.
+  Standalone produces a self-contained `.next/standalone` with only the dependencies actually
+  used and no `node_modules` at runtime.
+- **Image optimization** "works self-hosted with zero configuration when deploying using
+  `next start`" — it uses `sharp` locally, not a service.
+- **Fonts are not a runtime dependency:** with `next/font`, "CSS and font files are downloaded at
+  build time and self-hosted with the rest of your static assets, with no requests sent to Google
+  by the browser." The download happens on *your* build machine.
+- **Telemetry is real but build-time.** It is **on by default** and collected during `next build`,
+  `next dev` and `next export` — command invoked, Next.js version, machine info, plugins, build
+  duration, page count. Not during `next start`. Disable with `NEXT_TELEMETRY_DISABLED=1` or
+  `next telemetry disable`. Since we build in CI and ship an image, the firm's machine never runs
+  a telemetry-emitting command — **set the variable in the Dockerfile anyway** (§7).
+  Sources: [Next.js self-hosting guide](https://nextjs.org/docs/app/guides/self-hosting),
+  [Next.js telemetry](https://nextjs.org/telemetry).
+
+So Next.js *works* offline. The question is whether it is **earned**, and here the answer is no.
+
+**What Next.js costs on this specific deployment:**
+
+- **A second language runtime in the bundle**, with its own CVE stream. Next.js shipped security
+  fixes for both the 15 and 16 lines on 2026-07-21 alone. On an air-gapped machine you cannot push
+  those, and neither can the firm. Every Node dependency is a patch you now owe someone (§7's
+  two-supported-versions problem, doubled).
+- **Node.js 20.9+ minimum**; the current LTS is 24.18.0 (2026-06-23, "Krypton"), current release
+  26.5.0 (2026-07-08) — another runtime version matrix to track across sites.
+  Source: [Node.js release index](https://nodejs.org/dist/index.json).
+- **Next.js 16's breaking-change list is long**: async `params`/`searchParams`/`cookies()`/
+  `headers()`/`draftMode()`, `middleware.ts` → `proxy.ts`, AMP removed, `next lint` removed,
+  `serverRuntimeConfig`/`publicRuntimeConfig` removed, `revalidateTag()` signature changed,
+  parallel routes now require explicit `default.js` or the build fails, `next/image` defaults
+  changed (`qualities`, `minimumCacheTTL`, `imageSizes`), Turbopack the default bundler. That is a
+  large migration surface for a product with a multi-year on-prem support horizon.
+- **Every feature Next.js 16 is architected around is dead weight or a hazard here.** Cache
+  Components, PPR, ISR, CDN caching, streaming through a reverse proxy, multi-instance cache
+  coordination, `NEXT_SERVER_ACTIONS_ENCRYPTION_KEY`, `deploymentId` version-skew handling — this
+  is an authenticated LAN tool for perhaps 5–50 users with **zero** SEO requirement. Caching
+  stale legal-triage results is a defect, not a feature.
+- **Server Actions create a second server-side execution context**, which means authorisation and
+  matter-scope checks must be correct in *two* places instead of one. Given §6's Chinese-walls
+  requirement and C5's "AI agents write the code", that is a defect generator with a compliance
+  consequence.
+
+**`output: 'export'` is not the rescue.** It does produce static files and would let a
+Next.js-fluent team keep their tooling — but static export disables proxy/middleware, ISR, Server
+Actions and the default image optimizer. You would carry Next.js's entire build complexity and
+breaking-change cadence to get a static bundle. Say it plainly: that is the worst of both.
+
+### The simpler frontend, said plainly
+
+**Build a Vite SPA and serve the static output from the reverse proxy that already exists.**
+
+- **Vite 8.1.5 (2026-07-16)**; the 8.x stable line opened April 2026.
+  Source: [vite on npm](https://registry.npmjs.org/vite).
+- **React Router 8.2.0 (2026-07-08)** in declarative/data mode, or TanStack Router.
+  Source: [react-router on npm](https://registry.npmjs.org/react-router).
+  TanStack Start reached v1.0 in March 2026 but is a full-stack framework we do not need
+  (*release date from secondary sources — treat the exact date as unverified*).
+  Source: [TanStack Start overview](https://tanstack.com/start/latest/docs/framework/react/overview).
+
+What this deletes, concretely: **the Node.js runtime disappears from the shipped bundle entirely.**
+No Node container, no Node CVE stream, no Node version matrix across sites, no second place where
+authorisation can be wrong. The build output is `index.html` plus hashed assets — files nginx
+serves. It is one fewer deployable, which is the same argument §1 used to keep vectors in
+Postgres and §2 used to delete Redis. The consistency is not accidental: **every constraint in
+this document points the same way, and Next.js is the one place the earlier reasoning was about
+to be contradicted.**
+
+What you give up: SSR and SEO, worth exactly zero for an authenticated internal tool; and initial
+page weight, which is irrelevant on a LAN.
+
+> ### Recommendation 8 — **Keep Python 3.13 / FastAPI 0.139.x (pinned exactly, with Starlette moved only in lockstep). Replace Next.js with a Vite 8 SPA plus React Router 8, built in CI to static files and served by the same reverse proxy that fronts the API.**
+> **Strongest reason:** Next.js is technically offline-capable but structurally wrong for this
+> shape — it adds a Node.js runtime and its patch obligations to an air-gapped bundle, a second
+> server-side execution context where matter-level authorisation can be wrong, and an entire
+> caching architecture whose every feature is a liability in a legal-triage tool. A Vite SPA
+> deletes a deployable and leaves exactly one place where auth is enforced.
+> **Main risk:** hiring and AI-agent fluency. Next.js is the default that models and contractors
+> produce best; a Vite SPA means owning routing, data fetching, auth-token handling and build
+> configuration yourself, and there is more low-quality Next.js training data than good Vite-SPA
+> training data. Mitigate by choosing conventional, heavily-documented pieces inside the SPA
+> (React Router in data mode, TanStack Query, one component library) rather than assembling
+> something bespoke, and by generating the API client from FastAPI's OpenAPI schema so the
+> contract between the two halves is machine-checked rather than hand-written.
+> **Note on Django:** the backend near-miss above is worth revisiting if §6's self-built session
+> and permission code turns out to be larger than estimated. That is the trigger to reopen it —
+> not taste.
+
+---
+
+## Open risks across all eight areas
+
+Three decisions in this document are more likely than the rest to look wrong by July 2027. Each
+is stated with the single observation that would falsify it, because a risk you cannot test is
+just anxiety.
+
+**1. Recommendation 1 — pgvector as the only vector store.** The entire memory argument rests on
+an *assumed* chunk yield of 3–8 M for a 100 000-document matter, on a corpus nobody has seen. The
+escape hatch (pgvectorscale StreamingDiskANN) breaks C2 by being unavailable on the managed dev
+tier, so being wrong means an on-prem-only code path — the exact divergence C2 exists to prevent.
+> **Falsified by:** measuring actual chunk yield on a real 100k-document `.msg` + PDF corpus. If
+> it exceeds ~8 M chunks, or if HNSW p95 query latency on a matter-scoped filter exceeds ~2 s, or
+> if the index build cannot complete within `maintenance_work_mem` on a 64 GB machine, the
+> single-store decision is wrong. **This measurement must happen before any retrieval code is
+> written** — it is the cheapest and highest-value test in the whole plan.
+
+**2. Recommendation 6 — that the firm has no identity provider.** Self-built sessions are correct
+*if* identity stops at the application boundary. Firms large enough to buy this run Microsoft 365
+or an on-prem AD, and enterprise security questionnaires ask for SSO as a matter of routine. Being
+wrong here does not merely add work — it puts Authlib, with a **CVSS 9.1 signature-verification
+bypass patched only in March 2026** and eleven other advisories, onto the critical path of an
+unpatchable machine.
+> **Falsified by:** the first real customer's security questionnaire or IT review requiring
+> SAML/OIDC federation. Watch for it during the first pilot, not at contract signature. Cheap
+> insurance now: keep `Principal` resolution behind one interface, and never let a route import
+> the session table directly.
+
+**3. Recommendation 5 — that one machine carries the whole workload.** §3 sized OCR, §4 sized
+embedding, and §5 sized LLM inference **independently, each assuming the CCBE €2 000 machine**.
+Nobody added them up. Tesseract at ~25 pages/min, BGE-M3 at 4 800 passages/s, and a 24B model
+doing 150 M prefill tokens are three jobs contending for the same 24 GB of VRAM and the same CPU,
+and the estimates are engineering arithmetic rather than measurements. There is also no headroom
+for the fact that a firm will want to work on matter B while matter A ingests.
+> **Falsified by:** an end-to-end timed run of 5 000 real documents on the target hardware with
+> OCR, embedding and LLM judgement all active concurrently. If wall-clock ingest exceeds one
+> weekend for 100 000 documents, or if the scanned-PDF proportion pushes Tesseract past the LLM as
+> the bottleneck, the hardware recommendation and the €2 000 sales story are both wrong. **The
+> §5 cascade design — dedup and retrieval filters before LLM judgement — is the mitigation, and
+> it should be built first, not last.**
