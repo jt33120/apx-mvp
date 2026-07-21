@@ -1,0 +1,1386 @@
+<!doctype html>
+<html lang="fr">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Lexoria</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Lora:ital,wght@0,500;0,600;1,400&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg: #f1efe9;
+      --sidebar-bg: #18293c;
+      --sidebar-hover: rgba(255,255,255,0.065);
+      --sidebar-active-bg: rgba(255,255,255,0.11);
+      --sidebar-border: rgba(255,255,255,0.07);
+      --panel: #ffffff;
+      --panel-warm: #faf8f4;
+      --panel-subtle: #f5f3ef;
+      --line: #e5e0d6;
+      --line-soft: #ede9e2;
+      --text: #1b2a38;
+      --text-2: #3c4f61;
+      --muted: #8090a2;
+      --brand: #1b3352;
+      --brand-2: #254d74;
+      --accent: #b8924a;
+      --accent-soft: #faf3e5;
+      --accent-border: #dfc999;
+      --green: #0b7265;
+      --green-soft: #e2f5f1;
+      --green-border: #9fd4cc;
+      --amber: #895018;
+      --amber-soft: #fdf4e5;
+      --amber-border: #e8c68a;
+      --red: #8b1f1f;
+      --red-soft: #fdf0f0;
+      --red-border: #e8aaaa;
+      --shadow-xs: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.03);
+      --shadow-sm: 0 2px 8px rgba(27,51,82,0.07), 0 1px 2px rgba(27,51,82,0.04);
+      --shadow-md: 0 4px 16px rgba(27,51,82,0.08), 0 1px 4px rgba(27,51,82,0.04);
+      --r-xs: 6px;
+      --r-sm: 8px;
+      --r: 12px;
+      --r-lg: 16px;
+    }
+
+    *, *::before, *::after { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 14px;
+      line-height: 1.6;
+      background: var(--bg);
+      color: var(--text);
+      -webkit-font-smoothing: antialiased;
+      -moz-osx-font-smoothing: grayscale;
+    }
+
+    h1, h2, h3, h4, p { margin: 0; }
+
+    /* ─────────── App shell ─────────── */
+    .app {
+      min-height: 100vh;
+      display: grid;
+      grid-template-columns: 252px 1fr;
+    }
+
+    /* ─────────── Sidebar ─────────── */
+    .sidebar {
+      background: var(--sidebar-bg);
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    .sidebar-brand {
+      padding: 22px 18px 18px;
+      border-bottom: 1px solid var(--sidebar-border);
+      flex-shrink: 0;
+    }
+
+    .brand-inner {
+      display: flex;
+      align-items: center;
+      gap: 11px;
+    }
+
+    .logo-mark {
+      width: 36px;
+      height: 36px;
+      border-radius: 9px;
+      background: linear-gradient(140deg, #c9a55a 0%, #dbbf7e 100%);
+      display: grid;
+      place-items: center;
+      color: #18293c;
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: 0.04em;
+      flex-shrink: 0;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+    }
+
+    .brand-name {
+      font-size: 15.5px;
+      font-weight: 700;
+      color: #ffffff;
+      letter-spacing: -0.01em;
+    }
+
+    .brand-sub {
+      font-size: 10.5px;
+      color: rgba(255,255,255,0.38);
+      margin-top: 1px;
+      line-height: 1.4;
+    }
+
+    /* Nav */
+    .sidebar-nav {
+      padding: 12px 10px;
+      display: flex;
+      flex-direction: column;
+      gap: 1px;
+      border-bottom: 1px solid var(--sidebar-border);
+      flex-shrink: 0;
+    }
+
+    .nav-btn {
+      border: 0;
+      background: transparent;
+      text-align: left;
+      color: rgba(255,255,255,0.52);
+      padding: 9px 10px;
+      border-radius: var(--r-sm);
+      cursor: pointer;
+      font: inherit;
+      font-size: 13px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 9px;
+      transition: background 0.12s ease, color 0.12s ease;
+    }
+
+    .nav-btn .icon { width: 16px; height: 16px; flex-shrink: 0; opacity: 0.6; }
+    .nav-btn.active { background: var(--sidebar-active-bg); color: #ffffff; }
+    .nav-btn.active .icon { opacity: 1; }
+    .nav-btn:hover:not(.active) { background: var(--sidebar-hover); color: rgba(255,255,255,0.82); }
+
+    /* Practices */
+    .sidebar-section {
+      padding: 14px 18px;
+      border-bottom: 1px solid var(--sidebar-border);
+      flex-shrink: 0;
+    }
+
+    .sidebar-label {
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.11em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.26);
+      margin-bottom: 9px;
+    }
+
+    .practice-list { display: flex; flex-direction: column; gap: 1px; }
+
+    .practice-item {
+      padding: 6px 8px;
+      border-radius: var(--r-xs);
+      font-size: 12.5px;
+      color: rgba(255,255,255,0.48);
+      cursor: default;
+      transition: color 0.12s;
+    }
+    .practice-item:hover { color: rgba(255,255,255,0.72); }
+
+    /* Shortcuts */
+    .sidebar-shortcuts {
+      padding: 14px 18px 20px;
+      margin-top: auto;
+      border-top: 1px solid var(--sidebar-border);
+      flex-shrink: 0;
+    }
+
+    .shortcut-list { display: flex; flex-direction: column; gap: 12px; margin-top: 10px; }
+
+    .shortcut-row {
+      display: grid;
+      grid-template-columns: 24px 1fr;
+      gap: 9px;
+      align-items: flex-start;
+    }
+
+    .shortcut-n {
+      width: 24px;
+      height: 24px;
+      border-radius: 7px;
+      background: rgba(197,169,90,0.18);
+      color: #d4b870;
+      display: grid;
+      place-items: center;
+      font-size: 10px;
+      font-weight: 700;
+      flex-shrink: 0;
+      margin-top: 1px;
+    }
+
+    .shortcut-title { font-size: 12px; font-weight: 600; color: rgba(255,255,255,0.62); }
+    .shortcut-text  { font-size: 11px; color: rgba(255,255,255,0.30); margin-top: 2px; line-height: 1.4; }
+
+    /* ─────────── Main ─────────── */
+    .main { min-width: 0; display: flex; flex-direction: column; }
+
+    /* ─────────── Topbar ─────────── */
+    .topbar {
+      height: 60px;
+      padding: 0 30px;
+      border-bottom: 1px solid var(--line);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 16px;
+      position: sticky;
+      top: 0;
+      background: rgba(241,239,233,0.90);
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      z-index: 20;
+    }
+
+    .topbar-eyebrow {
+      font-size: 9.5px;
+      font-weight: 600;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 1px;
+    }
+
+    .topbar-title {
+      font-size: 16px;
+      font-weight: 600;
+      color: var(--brand);
+      letter-spacing: -0.02em;
+    }
+
+    .topbar-right { display: flex; align-items: center; gap: 7px; }
+
+    .status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 11px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: var(--panel);
+      font-size: 11.5px;
+      font-weight: 400;
+      color: var(--text-2);
+      white-space: nowrap;
+    }
+
+    .s-dot {
+      width: 6px; height: 6px;
+      border-radius: 50%;
+      background: var(--green);
+      flex-shrink: 0;
+    }
+
+    .lang-toggle {
+      display: inline-flex;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      padding: 3px;
+      gap: 2px;
+    }
+
+    .lang-toggle button {
+      border: 0;
+      background: transparent;
+      border-radius: 999px;
+      padding: 4px 10px;
+      cursor: pointer;
+      font: inherit;
+      font-size: 11.5px;
+      font-weight: 500;
+      color: var(--muted);
+      transition: background 0.12s, color 0.12s;
+    }
+
+    .lang-toggle button.active { background: var(--brand); color: white; }
+
+    /* ─────────── Content area ─────────── */
+    .content { padding: 26px 30px 40px; }
+
+    .tab-panel { display: grid; gap: 18px; }
+    .hidden { display: none !important; }
+
+    /* ─────────── Grids ─────────── */
+    .g4    { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; }
+    .g2    { display: grid; grid-template-columns: 1fr 1fr; gap: 18px; }
+    .g3-2  { display: grid; grid-template-columns: 3fr 2fr; gap: 18px; }
+    .g2-3  { display: grid; grid-template-columns: 2fr 3fr; gap: 18px; }
+
+    /* ─────────── Card ─────────── */
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--r-lg);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .cp  { padding: 22px 24px; }
+    .cpl { padding: 26px 28px; }
+
+    /* ─────────── Section head ─────────── */
+    .sh {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 12px;
+      margin-bottom: 18px;
+    }
+
+    .sh-title {
+      font-family: 'Lora', Georgia, 'Times New Roman', serif;
+      font-size: 16.5px;
+      font-weight: 600;
+      color: var(--brand);
+      letter-spacing: -0.01em;
+      line-height: 1.3;
+    }
+
+    .sh-sub {
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+      line-height: 1.55;
+    }
+
+    /* ─────────── Badges ─────────── */
+    .bd {
+      display: inline-flex;
+      align-items: center;
+      font-size: 10.5px;
+      font-weight: 500;
+      border-radius: var(--r-xs);
+      padding: 3px 8px;
+      white-space: nowrap;
+      letter-spacing: 0.01em;
+    }
+
+    .bd-outline { border: 1px solid var(--line); background: var(--panel-subtle); color: var(--text-2); }
+    .bd-brand   { background: #e5eef7; color: var(--brand); }
+    .bd-green   { background: var(--green-soft); color: var(--green); }
+    .bd-amber   { background: var(--amber-soft); color: var(--amber); }
+    .bd-red     { background: var(--red-soft);   color: var(--red); }
+    .bd-accent  { background: var(--accent-soft); color: #6e4a18; border: 1px solid var(--accent-border); }
+
+    /* ─────────── KPI stat card ─────────── */
+    .kpi {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      padding: 16px 18px 15px;
+      box-shadow: var(--shadow-xs);
+    }
+
+    .kpi-label {
+      font-size: 10.5px;
+      font-weight: 600;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 9px;
+    }
+
+    .kpi-value {
+      font-size: 28px;
+      font-weight: 700;
+      color: var(--brand);
+      letter-spacing: -0.04em;
+      line-height: 1;
+      margin-bottom: 5px;
+    }
+
+    .kpi-sub { font-size: 11px; color: var(--muted); }
+
+    /* ─────────── Activity feed ─────────── */
+    .feed { display: flex; flex-direction: column; }
+
+    .feed-row {
+      display: flex;
+      gap: 13px;
+      align-items: flex-start;
+      padding: 13px 0;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .feed-row:last-child { border-bottom: 0; padding-bottom: 0; }
+    .feed-row:first-child { padding-top: 0; }
+
+    .feed-pip {
+      width: 7px; height: 7px;
+      border-radius: 50%;
+      margin-top: 5px;
+      flex-shrink: 0;
+    }
+
+    .feed-title { font-size: 13px; font-weight: 500; color: var(--text); margin-bottom: 2px; }
+    .feed-text  { font-size: 12px; color: var(--muted); line-height: 1.55; }
+
+    /* ─────────── Document list (library) ─────────── */
+    .doc-list { display: flex; flex-direction: column; gap: 8px; }
+
+    .doc-row {
+      display: flex;
+      align-items: flex-start;
+      gap: 11px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      background: var(--panel-warm);
+      transition: border-color 0.12s;
+    }
+
+    .doc-row:hover { border-color: #ccc7bc; }
+
+    .doc-ext {
+      width: 30px; height: 30px;
+      border-radius: 7px;
+      background: var(--panel-subtle);
+      border: 1px solid var(--line);
+      display: grid;
+      place-items: center;
+      font-size: 9.5px;
+      font-weight: 700;
+      color: var(--brand);
+      flex-shrink: 0;
+      letter-spacing: 0.02em;
+    }
+
+    .doc-name { font-size: 12.5px; font-weight: 500; color: var(--text); margin-bottom: 3px; }
+    .doc-meta { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+
+    /* ─────────── Numbered list (principles / guardrails) ─────────── */
+    .num-list { display: flex; flex-direction: column; gap: 14px; }
+
+    .num-row {
+      display: grid;
+      grid-template-columns: 26px 1fr;
+      gap: 11px;
+      align-items: flex-start;
+    }
+
+    .num-n {
+      width: 26px; height: 26px;
+      border-radius: 7px;
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-border);
+      color: #6e4a18;
+      display: grid;
+      place-items: center;
+      font-size: 10.5px;
+      font-weight: 700;
+      flex-shrink: 0;
+    }
+
+    .num-title { font-size: 12.5px; font-weight: 600; color: var(--text); margin-bottom: 2px; }
+    .num-text  { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+
+    /* ─────────── Research ─────────── */
+    .q-box {
+      background: var(--panel-subtle);
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      padding: 14px 16px;
+      margin-bottom: 14px;
+    }
+
+    .q-eyebrow {
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 7px;
+    }
+
+    .q-text { font-size: 13.5px; color: var(--text); line-height: 1.65; }
+
+    .ans-wrap {
+      border: 1px solid var(--accent-border);
+      border-radius: var(--r);
+      overflow: hidden;
+    }
+
+    .ans-head {
+      padding: 9px 16px;
+      background: #fdf5e4;
+      border-bottom: 1px solid var(--accent-border);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: #6e4a18;
+    }
+
+    .ans-body { background: #fffcf5; padding: 18px 20px; }
+
+    .ans-summary {
+      font-size: 13.5px;
+      line-height: 1.72;
+      color: var(--text);
+      margin-bottom: 16px;
+      padding-bottom: 14px;
+      border-bottom: 1px solid #f0e8d2;
+    }
+
+    .ans-block { margin-bottom: 13px; }
+    .ans-block:last-child { margin-bottom: 0; }
+
+    .ans-block-label {
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.09em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 5px;
+    }
+
+    .ans-block-text { font-size: 12.5px; line-height: 1.65; color: var(--text-2); }
+
+    .cit {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 17px; height: 17px;
+      border-radius: 50%;
+      background: #d4bc96;
+      color: #4a3010;
+      font-size: 9.5px;
+      font-weight: 700;
+      margin: 0 1px;
+      vertical-align: middle;
+      position: relative;
+      top: -1px;
+    }
+
+    /* ─────────── Sources panel ─────────── */
+    .src-list { display: flex; flex-direction: column; gap: 9px; }
+
+    .src-item {
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      padding: 13px 15px;
+      background: var(--panel-warm);
+    }
+
+    .src-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .src-name { font-size: 12.5px; font-weight: 600; color: var(--text); }
+
+    .src-quote {
+      font-size: 12px;
+      font-style: italic;
+      color: var(--text-2);
+      line-height: 1.62;
+      padding-left: 10px;
+      border-left: 2.5px solid var(--accent-border);
+    }
+
+    .audit-card {
+      background: var(--panel-subtle);
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      padding: 14px 16px;
+    }
+
+    .audit-label {
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 7px;
+    }
+
+    .audit-text { font-size: 11.5px; color: var(--text-2); line-height: 1.7; }
+
+    /* ─────────── Watch ─────────── */
+    .alert-list { display: flex; flex-direction: column; gap: 10px; }
+
+    .alert-card {
+      border-radius: var(--r);
+      padding: 15px 17px;
+      border: 1px solid;
+    }
+
+    .alert-card.hi  { background: #fef5f5; border-color: var(--red-border); }
+    .alert-card.mid { background: #fefdf2; border-color: var(--amber-border); }
+    .alert-card.lo  { background: #f2faf8; border-color: var(--green-border); }
+
+    .alert-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: flex-start;
+      gap: 10px;
+      margin-bottom: 7px;
+    }
+
+    .alert-title { font-size: 13px; font-weight: 600; color: var(--text); }
+    .alert-text  { font-size: 12.5px; color: var(--text-2); line-height: 1.6; }
+
+    /* Weekly brief */
+    .brief-list { display: flex; flex-direction: column; }
+
+    .brief-row {
+      padding: 13px 0;
+      border-bottom: 1px solid var(--line-soft);
+    }
+
+    .brief-row:first-child { padding-top: 0; }
+    .brief-row:last-child  { border-bottom: 0; padding-bottom: 0; }
+
+    .brief-eyebrow {
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .brief-text { font-size: 12.5px; color: var(--text-2); line-height: 1.6; }
+
+    /* ─────────── Drafting ─────────── */
+    .config-list { display: flex; flex-direction: column; gap: 8px; }
+
+    .config-item {
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      background: var(--panel-warm);
+    }
+
+    .config-label {
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 4px;
+    }
+
+    .config-value { font-size: 12.5px; color: var(--text); line-height: 1.55; }
+
+    /* Document editor area */
+    .doc-editor {
+      border: 1px solid var(--line);
+      border-radius: var(--r-lg);
+      overflow: hidden;
+      background: var(--panel);
+      box-shadow: var(--shadow-sm);
+    }
+
+    .doc-toolbar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 18px;
+      background: var(--panel-subtle);
+      border-bottom: 1px solid var(--line);
+      gap: 12px;
+    }
+
+    .doc-toolbar-left { font-size: 12px; font-weight: 600; color: var(--text-2); }
+    .doc-toolbar-sub  { font-size: 10.5px; color: var(--muted); margin-top: 1px; }
+
+    .doc-actions { display: flex; gap: 5px; }
+
+    .doc-action-btn {
+      padding: 4px 11px;
+      border: 1px solid var(--line);
+      border-radius: var(--r-xs);
+      background: var(--panel);
+      font: inherit;
+      font-size: 11px;
+      font-weight: 500;
+      color: var(--text-2);
+      cursor: pointer;
+      transition: border-color 0.12s, background 0.12s;
+    }
+
+    .doc-action-btn:hover { background: var(--panel-subtle); border-color: #ccc7bc; }
+
+    .doc-body { padding: 26px 30px 28px; }
+
+    .doc-section {
+      margin-bottom: 20px;
+      padding-bottom: 20px;
+      border-bottom: 1px solid #eeebe5;
+    }
+
+    .doc-section:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+
+    .doc-section-label {
+      font-size: 9.5px;
+      font-weight: 700;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+
+    .doc-section-text { font-size: 13.5px; line-height: 1.76; color: var(--text-2); }
+
+    .review-callout {
+      background: var(--accent-soft);
+      border: 1px solid var(--accent-border);
+      border-radius: var(--r);
+      padding: 13px 16px;
+      margin-top: 0;
+    }
+
+    .review-callout .doc-section-label { color: #6e4a18; }
+    .review-callout .doc-section-text  { color: #5c3e14; font-size: 13px; }
+
+    /* ─────────── Responsive ─────────── */
+    @media (max-width: 1280px) {
+      .g4 { grid-template-columns: repeat(2, 1fr); }
+    }
+
+    @media (max-width: 1060px) {
+      .g3-2, .g2-3, .g2 { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 900px) {
+      .app { grid-template-columns: 1fr; }
+      .sidebar { height: auto; position: static; }
+      .topbar { position: static; }
+    }
+
+    @media (max-width: 640px) {
+      .content, .topbar { padding-left: 16px; padding-right: 16px; }
+      .g4 { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ═══ SIDEBAR ═══ -->
+  <aside class="sidebar">
+
+    <div class="sidebar-brand">
+      <div class="brand-inner">
+        <div class="logo-mark">LX</div>
+        <div>
+          <div class="brand-name">Lexoria</div>
+          <div class="brand-sub" data-i18n="brandSubtitle"></div>
+        </div>
+      </div>
+    </div>
+
+    <nav class="sidebar-nav">
+      <button class="nav-btn active" data-tab="dashboard">
+        <svg class="icon" viewBox="0 0 16 16" fill="none"><rect x="1.5" y="1.5" width="5.5" height="5.5" rx="1.5" fill="currentColor"/><rect x="9" y="1.5" width="5.5" height="5.5" rx="1.5" fill="currentColor" opacity="0.45"/><rect x="1.5" y="9" width="5.5" height="5.5" rx="1.5" fill="currentColor" opacity="0.45"/><rect x="9" y="9" width="5.5" height="5.5" rx="1.5" fill="currentColor" opacity="0.45"/></svg>
+        <span data-i18n="navDashboard"></span>
+      </button>
+      <button class="nav-btn" data-tab="research">
+        <svg class="icon" viewBox="0 0 16 16" fill="none"><circle cx="6.5" cy="6.5" r="4" stroke="currentColor" stroke-width="1.6"/><path d="m10 10 3.5 3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span data-i18n="navResearch"></span>
+      </button>
+      <button class="nav-btn" data-tab="watch">
+        <svg class="icon" viewBox="0 0 16 16" fill="none"><path d="M8 2a6 6 0 1 0 0 12A6 6 0 0 0 8 2z" stroke="currentColor" stroke-width="1.6"/><path d="M8 5v3.5l2 1.2" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span data-i18n="navWatch"></span>
+      </button>
+      <button class="nav-btn" data-tab="drafting">
+        <svg class="icon" viewBox="0 0 16 16" fill="none"><rect x="2.5" y="2.5" width="11" height="11" rx="2" stroke="currentColor" stroke-width="1.6"/><path d="M5 5.5h6M5 8h6M5 10.5h3.5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/></svg>
+        <span data-i18n="navDrafting"></span>
+      </button>
+    </nav>
+
+    <div class="sidebar-section">
+      <div class="sidebar-label" data-i18n="practicesTitle"></div>
+      <div class="practice-list">
+        <div class="practice-item" data-i18n="practice1"></div>
+        <div class="practice-item" data-i18n="practice2"></div>
+        <div class="practice-item" data-i18n="practice3"></div>
+        <div class="practice-item" data-i18n="practice4"></div>
+      </div>
+    </div>
+
+    <div class="sidebar-shortcuts">
+      <div class="sidebar-label" data-i18n="shortcutsTitle"></div>
+      <div class="shortcut-list">
+        <div class="shortcut-row">
+          <div class="shortcut-n">1</div>
+          <div>
+            <div class="shortcut-title" data-i18n="shortcut1Title"></div>
+            <div class="shortcut-text"  data-i18n="shortcut1Text"></div>
+          </div>
+        </div>
+        <div class="shortcut-row">
+          <div class="shortcut-n">2</div>
+          <div>
+            <div class="shortcut-title" data-i18n="shortcut2Title"></div>
+            <div class="shortcut-text"  data-i18n="shortcut2Text"></div>
+          </div>
+        </div>
+        <div class="shortcut-row">
+          <div class="shortcut-n">3</div>
+          <div>
+            <div class="shortcut-title" data-i18n="shortcut3Title"></div>
+            <div class="shortcut-text"  data-i18n="shortcut3Text"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ═══ MAIN ═══ -->
+  <main class="main">
+
+    <div class="topbar">
+      <div>
+        <div class="topbar-eyebrow" data-i18n="headerEyebrow"></div>
+        <div class="topbar-title"   data-i18n="headerTitle"></div>
+      </div>
+      <div class="topbar-right">
+        <div class="status-pill">
+          <span class="s-dot"></span>
+          <span data-i18n="pill1"></span>
+        </div>
+        <div class="status-pill" data-i18n="pill2"></div>
+        <div class="lang-toggle">
+          <button id="lang-fr" class="active">FR</button>
+          <button id="lang-en">EN</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="content">
+
+      <!-- ══════════ DASHBOARD ══════════ -->
+      <section id="dashboard" class="tab-panel">
+
+        <div class="g4">
+          <div class="kpi">
+            <div class="kpi-label" data-i18n="stat1Label"></div>
+            <div class="kpi-value">12 480</div>
+            <div class="kpi-sub" data-i18n="stat1Text"></div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label" data-i18n="stat2Label"></div>
+            <div class="kpi-value">18</div>
+            <div class="kpi-sub" data-i18n="stat2Text"></div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label" data-i18n="stat3Label"></div>
+            <div class="kpi-value">236</div>
+            <div class="kpi-sub" data-i18n="stat3Text"></div>
+          </div>
+          <div class="kpi">
+            <div class="kpi-label" data-i18n="stat4Label"></div>
+            <div class="kpi-value">7</div>
+            <div class="kpi-sub" data-i18n="stat4Text"></div>
+          </div>
+        </div>
+
+        <div class="g3-2">
+          <!-- Overview -->
+          <div class="card">
+            <div class="cp">
+              <div class="sh">
+                <div>
+                  <div class="sh-title" data-i18n="overviewTitle"></div>
+                  <div class="sh-sub"   data-i18n="overviewText"></div>
+                </div>
+                <span class="bd bd-brand" data-i18n="overviewBadge"></span>
+              </div>
+              <div class="num-list">
+                <div class="num-row">
+                  <div class="num-n">1</div>
+                  <div>
+                    <div class="num-title" data-i18n="principle1Title"></div>
+                    <div class="num-text"  data-i18n="principle1Text"></div>
+                  </div>
+                </div>
+                <div class="num-row">
+                  <div class="num-n">2</div>
+                  <div>
+                    <div class="num-title" data-i18n="principle2Title"></div>
+                    <div class="num-text"  data-i18n="principle2Text"></div>
+                  </div>
+                </div>
+                <div class="num-row">
+                  <div class="num-n">3</div>
+                  <div>
+                    <div class="num-title" data-i18n="principle3Title"></div>
+                    <div class="num-text"  data-i18n="principle3Text"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Activity feed -->
+          <div class="card">
+            <div class="cp">
+              <div class="sh">
+                <div>
+                  <div class="sh-title" data-i18n="activityTitle"></div>
+                  <div class="sh-sub"   data-i18n="activityText"></div>
+                </div>
+              </div>
+              <div class="feed">
+                <div class="feed-row">
+                  <div class="feed-pip" style="background:var(--red)"></div>
+                  <div>
+                    <div class="feed-title" data-i18n="activity1Title"></div>
+                    <div class="feed-text"  data-i18n="activity1Text"></div>
+                  </div>
+                </div>
+                <div class="feed-row">
+                  <div class="feed-pip" style="background:var(--accent)"></div>
+                  <div>
+                    <div class="feed-title" data-i18n="activity2Title"></div>
+                    <div class="feed-text"  data-i18n="activity2Text"></div>
+                  </div>
+                </div>
+                <div class="feed-row">
+                  <div class="feed-pip" style="background:var(--green)"></div>
+                  <div>
+                    <div class="feed-title" data-i18n="activity3Title"></div>
+                    <div class="feed-text"  data-i18n="activity3Text"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="g2">
+          <!-- Library -->
+          <div class="card">
+            <div class="cp">
+              <div class="sh">
+                <div>
+                  <div class="sh-title" data-i18n="libraryTitle"></div>
+                  <div class="sh-sub"   data-i18n="libraryText"></div>
+                </div>
+              </div>
+              <div class="doc-list">
+                <div class="doc-row">
+                  <div class="doc-ext">DOC</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="doc-name">Annotated_SPA_2024.docx</div>
+                    <div class="doc-meta" data-i18n="library1"></div>
+                  </div>
+                  <span class="bd bd-green" data-i18n="tagCorporate"></span>
+                </div>
+                <div class="doc-row">
+                  <div class="doc-ext">PDF</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="doc-name">Regulatory_Update_ICT.pdf</div>
+                    <div class="doc-meta" data-i18n="library2"></div>
+                  </div>
+                  <span class="bd bd-brand" data-i18n="tagRegulatory"></span>
+                </div>
+                <div class="doc-row">
+                  <div class="doc-ext">MSG</div>
+                  <div style="flex:1;min-width:0">
+                    <div class="doc-name">Internal_Note_Data_Transfers.msg</div>
+                    <div class="doc-meta" data-i18n="library3"></div>
+                  </div>
+                  <span class="bd bd-amber" data-i18n="tagCompliance"></span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Principles -->
+          <div class="card">
+            <div class="cp">
+              <div class="sh">
+                <div>
+                  <div class="sh-title" data-i18n="principlesTitle"></div>
+                  <div class="sh-sub"   data-i18n="principlesText"></div>
+                </div>
+              </div>
+              <div class="num-list">
+                <div class="num-row">
+                  <div class="num-n">1</div>
+                  <div>
+                    <div class="num-title" data-i18n="principle1Title"></div>
+                    <div class="num-text"  data-i18n="principle1Text"></div>
+                  </div>
+                </div>
+                <div class="num-row">
+                  <div class="num-n">2</div>
+                  <div>
+                    <div class="num-title" data-i18n="principle2Title"></div>
+                    <div class="num-text"  data-i18n="principle2Text"></div>
+                  </div>
+                </div>
+                <div class="num-row">
+                  <div class="num-n">3</div>
+                  <div>
+                    <div class="num-title" data-i18n="principle3Title"></div>
+                    <div class="num-text"  data-i18n="principle3Text"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ══════════ RESEARCH ══════════ -->
+      <section id="research" class="tab-panel hidden">
+
+        <div class="g3-2" style="align-items:start">
+
+          <!-- Q + A -->
+          <div class="card">
+            <div class="cpl">
+              <div class="sh">
+                <div>
+                  <div class="sh-title" data-i18n="researchTitle"></div>
+                  <div class="sh-sub"   data-i18n="researchText"></div>
+                </div>
+                <span class="bd bd-brand" data-i18n="researchBadge"></span>
+              </div>
+
+              <div class="q-box">
+                <div class="q-eyebrow" data-i18n="questionLabel"></div>
+                <div class="q-text"    data-i18n="questionText"></div>
+              </div>
+
+              <div class="ans-wrap">
+                <div class="ans-head" data-i18n="answerLabel"></div>
+                <div class="ans-body">
+                  <div class="ans-summary">
+                    <span data-i18n="answerSummary"></span><span class="cit">1</span>,
+                    <span data-i18n="answerSummary2"></span><span class="cit">2</span>,
+                    <span data-i18n="answerSummary3"></span><span class="cit">3</span>.
+                  </div>
+                  <div class="ans-block">
+                    <div class="ans-block-label" data-i18n="ruleLabel"></div>
+                    <div class="ans-block-text"><span data-i18n="ruleText"></span> <span class="cit">1</span><span class="cit">2</span></div>
+                  </div>
+                  <div class="ans-block">
+                    <div class="ans-block-label" data-i18n="factsLabel"></div>
+                    <div class="ans-block-text"><span data-i18n="factsText"></span> <span class="cit">2</span><span class="cit">3</span></div>
+                  </div>
+                  <div class="ans-block">
+                    <div class="ans-block-label" data-i18n="conclusionLabel"></div>
+                    <div class="ans-block-text" data-i18n="conclusionText"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Sources + Audit -->
+          <div style="display:grid;gap:14px;align-content:start">
+
+            <div class="card">
+              <div class="cp">
+                <div class="sh">
+                  <div>
+                    <div class="sh-title" data-i18n="sourcesTitle"></div>
+                    <div class="sh-sub"   data-i18n="sourcesText"></div>
+                  </div>
+                </div>
+                <div class="src-list">
+                  <div class="src-item">
+                    <div class="src-header">
+                      <div class="src-name">1 · Annotated_SPA_2024.docx</div>
+                      <span class="bd bd-green" data-i18n="sourceTag1"></span>
+                    </div>
+                    <div class="src-quote" data-i18n="source1"></div>
+                  </div>
+                  <div class="src-item">
+                    <div class="src-header">
+                      <div class="src-name">2 · Negotiation_Memo_MA.msg</div>
+                      <span class="bd bd-brand" data-i18n="sourceTag2"></span>
+                    </div>
+                    <div class="src-quote" data-i18n="source2"></div>
+                  </div>
+                  <div class="src-item">
+                    <div class="src-header">
+                      <div class="src-name">3 · Tax_Warranty_Playbook.pdf</div>
+                      <span class="bd bd-amber" data-i18n="sourceTag3"></span>
+                    </div>
+                    <div class="src-quote" data-i18n="source3"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="cp">
+                <div class="audit-label" data-i18n="auditTitle"></div>
+                <div class="audit-text"  data-i18n="auditText"></div>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </section>
+
+      <!-- ══════════ WATCH ══════════ -->
+      <section id="watch" class="tab-panel hidden">
+
+        <div class="g3-2" style="align-items:start">
+
+          <!-- Alerts -->
+          <div class="card">
+            <div class="cp">
+              <div class="sh">
+                <div>
+                  <div class="sh-title" data-i18n="watchTitle"></div>
+                  <div class="sh-sub"   data-i18n="watchText"></div>
+                </div>
+                <span class="bd bd-brand" data-i18n="watchBadge"></span>
+              </div>
+              <div class="alert-list">
+                <div class="alert-card hi">
+                  <div class="alert-header">
+                    <div class="alert-title" data-i18n="alert1Title"></div>
+                    <span class="bd bd-red"   data-i18n="alert1Tag"></span>
+                  </div>
+                  <div class="alert-text" data-i18n="alert1Text"></div>
+                </div>
+                <div class="alert-card mid">
+                  <div class="alert-header">
+                    <div class="alert-title" data-i18n="alert2Title"></div>
+                    <span class="bd bd-amber" data-i18n="alert2Tag"></span>
+                  </div>
+                  <div class="alert-text" data-i18n="alert2Text"></div>
+                </div>
+                <div class="alert-card lo">
+                  <div class="alert-header">
+                    <div class="alert-title" data-i18n="alert3Title"></div>
+                    <span class="bd bd-green" data-i18n="alert3Tag"></span>
+                  </div>
+                  <div class="alert-text" data-i18n="alert3Text"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Weekly brief -->
+          <div class="card">
+            <div class="cp">
+              <div class="sh">
+                <div>
+                  <div class="sh-title" data-i18n="weeklyTitle"></div>
+                  <div class="sh-sub"   data-i18n="weeklyText"></div>
+                </div>
+              </div>
+              <div class="brief-list">
+                <div class="brief-row">
+                  <div class="brief-eyebrow" data-i18n="weekly1Title"></div>
+                  <div class="brief-text"    data-i18n="weekly1Text"></div>
+                </div>
+                <div class="brief-row">
+                  <div class="brief-eyebrow" data-i18n="weekly2Title"></div>
+                  <div class="brief-text"    data-i18n="weekly2Text"></div>
+                </div>
+                <div class="brief-row">
+                  <div class="brief-eyebrow" data-i18n="weekly3Title"></div>
+                  <div class="brief-text"    data-i18n="weekly3Text"></div>
+                </div>
+                <div class="brief-row">
+                  <div class="brief-eyebrow" data-i18n="weekly4Title"></div>
+                  <div class="brief-text"    data-i18n="weekly4Text"></div>
+                </div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </section>
+
+      <!-- ══════════ DRAFTING ══════════ -->
+      <section id="drafting" class="tab-panel hidden">
+
+        <div class="g2-3" style="align-items:start">
+
+          <!-- Left: Config + Guardrails -->
+          <div style="display:grid;gap:14px">
+
+            <div class="card">
+              <div class="cp">
+                <div class="sh">
+                  <div>
+                    <div class="sh-title" data-i18n="draftingTitle"></div>
+                    <div class="sh-sub"   data-i18n="draftingText"></div>
+                  </div>
+                  <span class="bd bd-brand" data-i18n="draftingBadge"></span>
+                </div>
+                <div class="config-list">
+                  <div class="config-item">
+                    <div class="config-label" data-i18n="draftItem1Title"></div>
+                    <div class="config-value" data-i18n="draftItem1Text"></div>
+                  </div>
+                  <div class="config-item">
+                    <div class="config-label" data-i18n="draftItem2Title"></div>
+                    <div class="config-value" data-i18n="draftItem2Text"></div>
+                  </div>
+                  <div class="config-item">
+                    <div class="config-label" data-i18n="draftItem3Title"></div>
+                    <div class="config-value" data-i18n="draftItem3Text"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="cp">
+                <div class="sh">
+                  <div>
+                    <div class="sh-title" data-i18n="guardrailsTitle"></div>
+                    <div class="sh-sub"   data-i18n="guardrailsText"></div>
+                  </div>
+                </div>
+                <div class="num-list">
+                  <div class="num-row">
+                    <div class="num-n">1</div>
+                    <div>
+                      <div class="num-title" data-i18n="guard1Title"></div>
+                      <div class="num-text"  data-i18n="guard1Text"></div>
+                    </div>
+                  </div>
+                  <div class="num-row">
+                    <div class="num-n">2</div>
+                    <div>
+                      <div class="num-title" data-i18n="guard2Title"></div>
+                      <div class="num-text"  data-i18n="guard2Text"></div>
+                    </div>
+                  </div>
+                  <div class="num-row">
+                    <div class="num-n">3</div>
+                    <div>
+                      <div class="num-title" data-i18n="guard3Title"></div>
+                      <div class="num-text"  data-i18n="guard3Text"></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+          </div>
+
+          <!-- Right: Document editor -->
+          <div class="doc-editor">
+            <div class="doc-toolbar">
+              <div>
+                <div class="doc-toolbar-left" data-i18n="generatedTitle"></div>
+                <div class="doc-toolbar-sub"  data-i18n="generatedText"></div>
+              </div>
+              <div class="doc-actions">
+                <button class="doc-action-btn">PDF</button>
+                <button class="doc-action-btn">Word</button>
+              </div>
+            </div>
+            <div class="doc-body">
+              <div class="doc-section">
+                <div class="doc-section-label" data-i18n="generated1Title"></div>
+                <div class="doc-section-text"  data-i18n="generated1Text"></div>
+              </div>
+              <div class="doc-section">
+                <div class="doc-section-label" data-i18n="generated2Title"></div>
+                <div class="doc-section-text"  data-i18n="generated2Text"></div>
+              </div>
+              <div class="doc-section review-callout">
+                <div class="doc-section-label" data-i18n="generated3Title"></div>
+                <div class="doc-section-text"  data-i18n="generated3Text"></div>
+              </div>
+            </div>
+          </div>
+
+        </div>
+
+      </section>
+
+    </div><!-- /content -->
+  </main>
+</div><!-- /app -->
+
+<script>
+  const translations = {
+    fr: {
+      brandSubtitle: 'Espace connaissance & veille réglementaire',
+      navDashboard: 'Tableau de bord', navResearch: 'Recherche', navWatch: 'Veille', navDrafting: 'Rédaction',
+      practicesTitle: 'Pratiques', practice1: 'Corporate / M&A', practice2: 'Regulatory', practice3: 'Funds & Insurance', practice4: 'Data & Compliance',
+      shortcutsTitle: 'Raccourcis', shortcut1Title: 'Poser une question', shortcut1Text: 'retrouver un précédent, une clause, une note', shortcut2Title: 'Vérifier les sources', shortcut2Text: 'toujours visibles dans le panneau droit', shortcut3Title: 'Préparer un brouillon', shortcut3Text: 'avec validation humaine avant sortie',
+      headerEyebrow: 'Espace interne', headerTitle: 'Système de connaissance cabinet', pill1: 'Sources connectées', pill2: 'Revue humaine requise', pill3: 'FR / EN',
+      overviewTitle: 'Vue d\u2019ensemble', overviewText: 'Recherche documentaire, raisonnement sourc\u00e9, veille r\u00e9glementaire et r\u00e9daction assist\u00e9e dans une seule interface.', overviewBadge: 'Overview',
+      stat1Label: 'Documents index\u00e9s', stat1Text: 'notes, contrats, emails, alertes', stat2Label: 'Sources de veille', stat2Text: 'r\u00e9gulateurs, revues, newsletters', stat3Label: 'Pr\u00e9c\u00e9dents exploitables', stat3Text: 'clauses, m\u00e9mos, templates', stat4Label: 'Revues en attente', stat4Text: 'validation partner requise',
+      activityTitle: 'Activit\u00e9 r\u00e9cente', activityText: 'Ce qu\u2019un avocat verrait en arrivant.', activity1Title: 'Nouvelle alerte r\u00e9glementaire', activity1Text: 'Une \u00e9volution sur l\u2019externalisation ICT a \u00e9t\u00e9 signal\u00e9e aux \u00e9quipes Regulatory et Corporate.', activity2Title: 'Brouillon pr\u00e9par\u00e9', activity2Text: 'Une note client a \u00e9t\u00e9 pr\u00e9par\u00e9e \u00e0 partir de pr\u00e9c\u00e9dents et d\u2019extraits sourc\u00e9s.', activity3Title: 'Question r\u00e9solue', activity3Text: 'Les carve-outs de limitation de responsabilit\u00e9 ont \u00e9t\u00e9 retrouv\u00e9s dans les SPA comparables.',
+      libraryTitle: 'Biblioth\u00e8que vivante', libraryText: 'Le savoir-faire du cabinet reste consultable, filtrable et sour\u00e7able.', tagCorporate: 'Corporate / M&A', tagRegulatory: 'Regulatory', tagCompliance: 'Data & Compliance', library1: 'Biblioth\u00e8que de clauses, commentaires de n\u00e9gociation, annotations partner.', library2: 'Mise \u00e0 jour r\u00e9glementaire avec impact contractuel mis en \u00e9vidence.', library3: '\u00c9change interne r\u00e9sumant les points de risque et les formulations de repli.',
+      principlesTitle: 'Principes visibles', principlesText: 'Ce que le produit sugg\u00e8re sans jamais masquer la responsabilit\u00e9 humaine.', principle1Title: 'Recherche sourc\u00e9e', principle1Text: 'chaque r\u00e9ponse renvoie aux passages exacts utilis\u00e9s', principle2Title: 'Raisonnement structur\u00e9', principle2Text: 'les faits, la r\u00e8gle et la conclusion restent distincts', principle3Title: 'Validation avocat', principle3Text: 'aucune sortie finale sans revue',
+      researchTitle: 'Recherche et syllogisme', researchText: 'Question juridique pos\u00e9e sur le corpus interne.', researchBadge: 'Recherche', questionLabel: 'Question', questionText: 'Dans des op\u00e9rations SPA mid-market comparables, quels carve-outs sont le plus souvent conserv\u00e9s lors de la n\u00e9gociation d\u2019une clause de limitation de responsabilit\u00e9\u00a0?', answerLabel: 'Synth\u00e8se', answerSummary: 'Les pr\u00e9c\u00e9dents comparables font appara\u00eetre trois carve-outs r\u00e9currents\u00a0: le dol et la faute intentionnelle', answerSummary2: 'la violation des obligations de confidentialit\u00e9', answerSummary3: 'et certains risques fiscaux trait\u00e9s sous un plafond distinct', ruleLabel: 'R\u00e8gle', ruleText: 'Dans les pr\u00e9c\u00e9dents internes, le plafonnement de responsabilit\u00e9 n\u2019est pas absolu\u00a0; il pr\u00e9serve de mani\u00e8re r\u00e9p\u00e9t\u00e9e des exceptions sur les risques jug\u00e9s structurellement sensibles.', factsLabel: 'Faits', factsText: 'Dans les dossiers les plus proches, ces exceptions ont \u00e9t\u00e9 maintenues d\u00e8s lors qu\u2019il existait un acc\u00e8s \u00e0 des donn\u00e9es sensibles, un risque de divulgation ou une incertitude fiscale identifi\u00e9e.', conclusionLabel: 'Conclusion', conclusionText: 'Un premier brouillon peut proposer un plafond principal, mais il doit faire remonter explicitement ces carve-outs pour arbitrage partner avant transmission au client.',
+      sourcesTitle: 'Sources', sourcesText: 'Extraits affich\u00e9s \u00e0 droite, imm\u00e9diatement v\u00e9rifiables.', sourceTag1: 'pr\u00e9c\u00e9dent', sourceTag2: 'note interne', sourceTag3: 'playbook', source1: '\u00ab\u00a0The cap shall not apply in cases of fraud, wilful misconduct or deliberate non-disclosure.\u00a0\u00bb', source2: '\u00ab\u00a0Confidentiality should remain carved out whenever the seller retains post-closing access to sensitive information.\u00a0\u00bb', source3: '\u00ab\u00a0A distinct sub-cap is generally preferred for identified tax risks.\u00a0\u00bb', auditTitle: 'Trace d\u2019audit', auditText: '8 dossiers comparables retrouv\u00e9s \u2192 3 sources les plus pertinentes retenues \u2192 extraction des carve-outs r\u00e9currents \u2192 g\u00e9n\u00e9ration d\u2019une r\u00e9ponse structur\u00e9e \u2192 signalement d\u2019une revue partner obligatoire.',
+      watchTitle: 'Veille r\u00e9glementaire', watchText: 'Alertes hi\u00e9rarchis\u00e9es par impact et par pratique.', watchBadge: 'Veille', alert1Title: 'Priorit\u00e9 haute \u00b7 Externalisation ICT', alert1Tag: '\u00c0 revoir aujourd\u2019hui', alert1Text: 'Une nouvelle guidance de supervision peut affecter les droits d\u2019audit, les notifications d\u2019incident et les clauses de gouvernance prestataire.', alert2Title: 'Priorit\u00e9 moyenne \u00b7 Gouvernance produit', alert2Tag: 'Cette semaine', alert2Text: 'Note interpr\u00e9tative utile pour les dossiers Funds & Insurance et la communication client.', alert3Title: 'Surveillance \u00b7 Minimisation des donn\u00e9es', alert3Tag: 'Continu', alert3Text: 'Orientation op\u00e9rationnelle avec impact r\u00e9dactionnel limit\u00e9 \u00e0 court terme, mais utile pour les checklists conformit\u00e9.',
+      weeklyTitle: 'Brief hebdomadaire', weeklyText: 'Exemple de synth\u00e8se que le cabinet re\u00e7oit.', weekly1Title: 'Ce qui change', weekly1Text: 'Trois \u00e9l\u00e9ments ont \u00e9t\u00e9 signal\u00e9s cette semaine, dont un avec cons\u00e9quence contractuelle imm\u00e9diate.', weekly2Title: 'Pourquoi c\u2019est important', weekly2Text: 'Les \u00e9quipes Corporate et Regulatory pourraient devoir revoir certains mod\u00e8les de clauses li\u00e9s \u00e0 l\u2019externalisation et \u00e0 la gestion d\u2019incident.', weekly3Title: 'Qui doit le recevoir', weekly3Text: 'Partners, \u00e9quipe Regulatory, knowledge team, collaborateurs concern\u00e9s.', weekly4Title: 'Action sugg\u00e9r\u00e9e', weekly4Text: 'Pr\u00e9parer une note interne d\u2019une page et mettre \u00e0 jour deux banques de clauses avant usage externe.',
+      draftingTitle: 'R\u00e9daction assist\u00e9e', draftingText: 'Pr\u00e9paration d\u2019une note ou d\u2019un premier brouillon \u00e0 partir des pr\u00e9c\u00e9dents et de la veille.', draftingBadge: 'R\u00e9daction', draftItem1Title: 'Type de document', draftItem1Text: 'Note client sur l\u2019impact r\u00e9glementaire d\u2019un contrat d\u2019outsourcing.', draftItem2Title: 'R\u00e9f\u00e9rences utilis\u00e9es', draftItem2Text: '1 m\u00e9mo interne, 2 jeux de clauses ant\u00e9rieurs, 1 alerte r\u00e9glementaire.', draftItem3Title: 'Style retenu', draftItem3Text: 'Concis, partner-level, prudent et orient\u00e9 business.',
+      guardrailsTitle: 'Garde-fous', guardrailsText: 'Ce que le client voit comme ma\u00eetrise, pas comme gadget.', guard1Title: 'R\u00e9daction li\u00e9e aux sources', guard1Text: 'les formulations sensibles restent attach\u00e9es \u00e0 leur contexte source', guard2Title: 'Incertitudes visibles', guard2Text: 'les points ouverts remontent au lieu d\u2019\u00eatre masqu\u00e9s', guard3Title: 'Validation humaine finale', guard3Text: 'l\u2019avocat valide, corrige et signe',
+      generatedTitle: 'Extrait de brouillon g\u00e9n\u00e9r\u00e9', generatedText: 'Aper\u00e7u d\u2019un brouillon tel qu\u2019un utilisateur pourrait le lire dans l\u2019application.', generated1Title: 'Objet', generated1Text: 'Cette note r\u00e9sume les implications potentielles d\u2019une \u00e9volution r\u00e9cente de la doctrine de supervision sur certains contrats d\u2019externalisation et signale les clauses les plus susceptibles de devoir \u00eatre ajust\u00e9es avant usage client.', generated2Title: 'Point principal', generated2Text: 'Au regard des pr\u00e9c\u00e9dents internes et des derniers \u00e9l\u00e9ments r\u00e9glementaires, les droits d\u2019audit, obligations de notification d\u2019incident et r\u00e8gles de gouvernance devraient \u00eatre trait\u00e9s comme un bloc contractuel distinct plut\u00f4t que noy\u00e9s dans les engagements g\u00e9n\u00e9raux du prestataire.', generated3Title: 'Note de revue partner', generated3Text: 'Le niveau de d\u00e9tail sur le p\u00e9rim\u00e8tre d\u2019audit et les carve-outs au plafonnement devra \u00eatre ajust\u00e9 selon le profil de risque du client et la criticit\u00e9 op\u00e9rationnelle de la fonction externalis\u00e9e.'
+    },
+    en: {
+      brandSubtitle: 'Knowledge & regulatory workspace',
+      navDashboard: 'Dashboard', navResearch: 'Research', navWatch: 'Watch', navDrafting: 'Drafting',
+      practicesTitle: 'Practices', practice1: 'Corporate / M&A', practice2: 'Regulatory', practice3: 'Funds & Insurance', practice4: 'Data & Compliance',
+      shortcutsTitle: 'Shortcuts', shortcut1Title: 'Ask a question', shortcut1Text: 'retrieve a precedent, clause or memo', shortcut2Title: 'Check the sources', shortcut2Text: 'always visible in the right panel', shortcut3Title: 'Prepare a draft', shortcut3Text: 'with human validation before release',
+      headerEyebrow: 'Internal workspace', headerTitle: 'Law firm knowledge system', pill1: 'Sources connected', pill2: 'Human review required', pill3: 'FR / EN',
+      overviewTitle: 'Overview', overviewText: 'Document research, source-linked reasoning, regulatory watch and assisted drafting in a single interface.', overviewBadge: 'Overview',
+      stat1Label: 'Indexed documents', stat1Text: 'notes, contracts, emails, alerts', stat2Label: 'Watch sources', stat2Text: 'regulators, journals, newsletters', stat3Label: 'Reusable precedents', stat3Text: 'clauses, memos, templates', stat4Label: 'Pending reviews', stat4Text: 'partner validation required',
+      activityTitle: 'Recent activity', activityText: 'What a lawyer would see on arrival.', activity1Title: 'New regulatory alert', activity1Text: 'An ICT outsourcing development was flagged for the Regulatory and Corporate teams.', activity2Title: 'Draft prepared', activity2Text: 'A client note was prepared from prior precedents and sourced extracts.', activity3Title: 'Question resolved', activity3Text: 'Liability cap carve-outs were retrieved from comparable SPA matters.',
+      libraryTitle: 'Living library', libraryText: 'The firm\u2019s know-how remains searchable, filterable and source-linked.', tagCorporate: 'Corporate / M&A', tagRegulatory: 'Regulatory', tagCompliance: 'Data & Compliance', library1: 'Clause library, negotiation comments, partner annotations.', library2: 'Regulatory update with contractual impact highlighted.', library3: 'Internal exchange summarising risk points and fallback wording.',
+      principlesTitle: 'Visible principles', principlesText: 'What the product suggests without ever obscuring human responsibility.', principle1Title: 'Source-linked research', principle1Text: 'each answer points to the exact passages used', principle2Title: 'Structured reasoning', principle2Text: 'facts, rule and conclusion remain distinct', principle3Title: 'Lawyer validation', principle3Text: 'no final output without review',
+      researchTitle: 'Research and legal reasoning', researchText: 'A legal question asked against the internal corpus.', researchBadge: 'Research', questionLabel: 'Question', questionText: 'In comparable mid-market SPA transactions, which carve-outs are most frequently retained when negotiating a limitation of liability clause?', answerLabel: 'Summary', answerSummary: 'Comparable precedents show three recurring carve-outs: fraud and wilful misconduct', answerSummary2: 'breach of confidentiality obligations', answerSummary3: 'and certain tax risks treated under a separate cap', ruleLabel: 'Rule', ruleText: 'In internal precedents, liability caps are not absolute; they repeatedly preserve exceptions for risks considered structurally sensitive.', factsLabel: 'Facts', factsText: 'In the closest matters, those exceptions were retained whenever there was access to sensitive data, disclosure risk or identified tax uncertainty.', conclusionLabel: 'Conclusion', conclusionText: 'A first draft may propose a primary cap, but it should explicitly surface these carve-outs for partner review before client transmission.',
+      sourcesTitle: 'Sources', sourcesText: 'Extracts displayed on the right, immediately verifiable.', sourceTag1: 'precedent', sourceTag2: 'internal note', sourceTag3: 'playbook', source1: '\u201cThe cap shall not apply in cases of fraud, wilful misconduct or deliberate non-disclosure.\u201d', source2: '\u201cConfidentiality should remain carved out whenever the seller retains post-closing access to sensitive information.\u201d', source3: '\u201cA distinct sub-cap is generally preferred for identified tax risks.\u201d', auditTitle: 'Audit trail', auditText: '8 comparable matters retrieved \u2192 3 most relevant sources selected \u2192 recurring carve-outs extracted \u2192 structured answer generated \u2192 mandatory partner review flagged.',
+      watchTitle: 'Regulatory watch', watchText: 'Alerts prioritised by impact and by practice.', watchBadge: 'Watch', alert1Title: 'High priority \u00b7 ICT outsourcing', alert1Tag: 'Review today', alert1Text: 'New supervisory guidance may affect audit rights, incident notifications and supplier governance clauses.', alert2Title: 'Medium priority \u00b7 Product governance', alert2Tag: 'This week', alert2Text: 'Interpretative note relevant for Funds & Insurance matters and client communication.', alert3Title: 'Monitoring \u00b7 Data minimisation', alert3Tag: 'Ongoing', alert3Text: 'Operational guidance with limited short-term drafting impact, but useful for compliance checklists.',
+      weeklyTitle: 'Weekly brief', weeklyText: 'Example of the summary the firm receives.', weekly1Title: 'What changed', weekly1Text: 'Three items were flagged this week, one of which has immediate contractual consequences.', weekly2Title: 'Why it matters', weekly2Text: 'Corporate and Regulatory teams may need to revisit selected outsourcing and incident management clause templates.', weekly3Title: 'Who should receive it', weekly3Text: 'Partners, Regulatory team, knowledge team, relevant associates.', weekly4Title: 'Suggested action', weekly4Text: 'Prepare a one-page internal note and update two clause banks before external use.',
+      draftingTitle: 'Assisted drafting', draftingText: 'Preparation of a note or first draft from precedents and watch materials.', draftingBadge: 'Drafting', draftItem1Title: 'Document type', draftItem1Text: 'Client note on the regulatory impact of an outsourcing agreement.', draftItem2Title: 'Reference materials', draftItem2Text: '1 internal memo, 2 prior clause sets, 1 regulatory alert.', draftItem3Title: 'Style setting', draftItem3Text: 'Concise, partner-level, cautious and business-oriented.',
+      guardrailsTitle: 'Guardrails', guardrailsText: 'What the client experiences as control, not gimmick.', guard1Title: 'Source-linked drafting', guard1Text: 'sensitive wording remains attached to its source context', guard2Title: 'Visible uncertainties', guard2Text: 'open points are surfaced instead of hidden', guard3Title: 'Final human sign-off', guard3Text: 'the lawyer validates, edits and signs',
+      generatedTitle: 'Generated draft excerpt', generatedText: 'Preview of a draft as a user could read it in the application.', generated1Title: 'Subject', generated1Text: 'This note summarises the potential implications of a recent supervisory development on selected outsourcing agreements and highlights the clauses most likely to require adjustment before client-facing use.', generated2Title: 'Main point', generated2Text: 'Based on internal precedents and recent regulatory material, audit rights, incident notification obligations and governance wording should be treated as a distinct contractual block rather than left within general supplier undertakings.', generated3Title: 'Partner review note', generated3Text: 'The level of detail around audit scope and liability carve-outs should be tailored to the client\u2019s risk profile and the operational criticality of the outsourced function.'
+    }
+  };
+
+  /* ── Tab navigation ── */
+  const navBtns  = document.querySelectorAll('[data-tab]');
+  const panels   = document.querySelectorAll('.tab-panel');
+
+  navBtns.forEach((btn) => {
+    btn.addEventListener('click', () => {
+      navBtns.forEach((b) => b.classList.remove('active'));
+      panels.forEach((p) => p.classList.add('hidden'));
+      btn.classList.add('active');
+      document.getElementById(btn.dataset.tab).classList.remove('hidden');
+    });
+  });
+
+  /* ── Language toggle ── */
+  const frBtn = document.getElementById('lang-fr');
+  const enBtn = document.getElementById('lang-en');
+
+  function setLanguage(lang) {
+    document.documentElement.lang = lang;
+    document.querySelectorAll('[data-i18n]').forEach((el) => {
+      const key = el.getAttribute('data-i18n');
+      if (translations[lang][key] !== undefined) el.textContent = translations[lang][key];
+    });
+    frBtn.classList.toggle('active', lang === 'fr');
+    enBtn.classList.toggle('active', lang === 'en');
+  }
+
+  frBtn.addEventListener('click', () => setLanguage('fr'));
+  enBtn.addEventListener('click', () => setLanguage('en'));
+  setLanguage('fr');
+</script>
+</body>
+</html>

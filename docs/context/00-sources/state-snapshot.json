@@ -1,0 +1,152 @@
+{
+  "_meta": {
+    "owner": "Julian Talou",
+    "agency": "APX Advisory (freelance)",
+    "schema_version": "1.0.0",
+    "last_updated": "2026-04-28T14:00:00+02:00",
+    "last_updated_by": "cowork-session",
+    "doc_purpose": "Single source of truth for APX project state. Read by all agents (APX Telegram bot, James, Cowork sessions). Append-only philosophy on decisions/contacts; current-state on the rest."
+  },
+  "agency": {
+    "founders": [
+      { "name": "Maxime Durupt", "role": "Cofondateur · technique/projet", "email": "maxime@apx-advisory.com", "phone": "07 57 94 72 90" },
+      { "name": "Lucia Nakamoto", "role": "Cofondatrice · commercial", "email": "nakamoto@apx-advisory.com" }
+    ],
+    "positioning": "Conseil & ingénierie IA pour cabinets d'avocats. On-premise / EU. Sur-mesure, RGPD + AI Act compliant.",
+    "commercial_model": {
+      "type": "forfait par use case",
+      "no_tjm": true,
+      "no_licenses": true,
+      "no_subscription": true,
+      "milestones": ["M1 Cadrage (S1-S2)", "M2 Dev Core (S2-S3)", "M3 Intégration & Tests (S3-S4)", "M4 Livraison & Formation (S5-S6)"],
+      "payment_rule": "Mn payé à validation de M(n-1)"
+    }
+  },
+  "projects": [
+    {
+      "id": "rmt",
+      "name": "RMT",
+      "label": "Cabinet RMT — Triage de masse documentaire",
+      "domain": "Contentieux commercial et pénal",
+      "status": "discovery_done",
+      "discovery_date": "2026-04-27",
+      "validated_use_case": "Triage automatisé de masses documentaires (145 CPC, instruction pénale, contentieux commercial classique)",
+      "key_contacts": [
+        { "name": "Emmanuel", "role": "Avocat senior · lead atelier · auditeur", "exigence_clé": "Auditabilité non-négociable, échantillonnage aléatoire" },
+        { "name": "Éléonore", "role": "Avocate", "exigence_clé": "Édition cellule par cellule, pas de régénération destructive du tableau" },
+        { "name": "Pierre", "role": "Co-réflexion interne RMT" },
+        { "name": "Karine", "role": "Pénaliste · tableau de procédure" },
+        { "name": "Noémie", "role": "Contractuel · forme + fond" },
+        { "name": "Maître Sorlin", "role": "Contact direct · sorlin@rmt.fr" }
+      ],
+      "deliverables_attendus": [
+        "Tableau de synthèse (cote / date / nature / intervenants / contenu / thématique)",
+        "Q&A en langage naturel sur les pièces",
+        "Tri rebut / pertinent / à revoir avec justification réversible",
+        "Outil d'audit aléatoire pour Emmanuel"
+      ],
+      "volumes_typiques": "1700+ docs/dossier (cas extrême), majoritairement .msg",
+      "next_actions": [
+        "Recevoir échantillon anonymisé de 50-100 .msg",
+        "Recevoir une ordonnance 145 anonymisée",
+        "Recevoir un tableau gold-standard d'un dossier passé",
+        "Valider hébergement (infra cabinet vs cloud EU)"
+      ]
+    },
+    {
+      "id": "pp",
+      "name": "Philippe & Partners",
+      "label": "P&P Luxembourg — LexCore IA + Veille",
+      "domain": "Droit des assurances, arbitrage",
+      "status": "deck_sent",
+      "discovery_date": "2026-04-24",
+      "validated_use_cases": [
+        "UC01 — LexCore IA : RAG sur 15-20 ans CSIP + Outlook, recherche, génération d'actes au style maison",
+        "UC02 — Veille réglementaire : Legilux, EUR-Lex, CSSF, CNPD, monitoring 24/7"
+      ],
+      "key_contacts": [
+        { "name": "Maître Gouden", "role": "Partner · décideur" },
+        { "name": "Jérôme", "role": "Collaborateur IT interne · néerlandophone" }
+      ],
+      "stack_existant": ["CSIP (gestion dossiers + DocuSign)", "Microsoft 365", "SharePoint minimal", "DeepL"],
+      "specifics": [
+        "Bilingue FR/NL en double colonne",
+        "Templates 95% conformité",
+        "30 avocats, pas de licences supplémentaires",
+        "Apprentissage style par avocat depuis boîte mail"
+      ],
+      "blockers": [
+        "Documentation API CSIP — à obtenir via prestataire IT externe",
+        "Volume CSIP exact (Go ou nombre de dossiers)"
+      ],
+      "next_actions": [
+        "Obtenir contact prestataire IT externe",
+        "Liste des sources publiques retenues + discipline par avocat",
+        "20 templates Word représentatifs"
+      ]
+    }
+  ],
+  "shared_architecture": {
+    "approach": "Noyau commun legal-rag-core + connecteurs/config par client",
+    "rationale": "80% de plomberie partagée entre RMT et P&P — mutualisation = marge ou compétitivité prix",
+    "components": {
+      "ingestion": "Multi-format (.msg via extract-msg, PDF natif/OCR, .docx, .xlsx, .pptx, images)",
+      "indexation": "Qdrant auto-hébergé + BGE-M3 ou Mistral-embed, GraphRAG en option pour gros corpus",
+      "llm": "Mistral Large ou Claude Sonnet 4.6 via API zero-retention EU, ou Mistral 7B air-gapped",
+      "audit": "Append-only log immuable — chaque fragment, prompt, réponse, classification tracé",
+      "edit": "Tables éditables cellule par cellule (jamais de régénération), génération .docx 95% conformité"
+    },
+    "non_negotiables": [
+      "RGPD + AI Act + secret professionnel",
+      "EU only · zero retention",
+      "RAG strict, jamais de fine-tuning",
+      "Validation humaine systématique avant publication",
+      "Auditabilité totale (réponse à exigence Emmanuel)"
+    ]
+  },
+  "timeline": {
+    "approach": "Itératif sur 6 semaines, pas linéaire",
+    "iterations": [
+      { "id": "I1", "label": "POC visuel + cadrage", "weeks": "S1-S2", "status": "POC livré 2026-04-28, cadrage en cours" },
+      { "id": "I2", "label": "MVP fonctionnel sur échantillon", "weeks": "S3-S4", "status": "à venir" },
+      { "id": "I3", "label": "Déploiement infra client + audit", "weeks": "S5-S6", "status": "à venir" }
+    ],
+    "parallelization": "P&P démarre S1, RMT démarre S3 — les deux phases dev profondes ne se chevauchent pas"
+  },
+  "open_questions": [
+    "Hébergeur EU final : Scaleway sovereign vs OVH vs infra cabinet ?",
+    "Air-gapped Mistral 7B dès l'I2 ou phase ultérieure ?",
+    "Forfait Julian → APX : 50% de l'invoice client, ou TJM 900€/jour avec cap ?",
+    "POC visuel à pousser à Vercel public ou rester en partage privé ?"
+  ],
+  "deliverables_log": [
+    {
+      "date": "2026-04-28",
+      "type": "POC visuel",
+      "path": "Code/index.html",
+      "size_loc": 2014,
+      "url": "computer:///Users/juliantalou/Documents/PRO/01-CLIENTS/APX-Advisory/Code/index.html",
+      "summary": "Single-file React + Tailwind CDN. 5 écrans (Dashboard, Import, Tableau, Chat, Génération) + Audit drawer global. 15 pièces mockées scénario Affaire Tilburg / 145 CPC."
+    }
+  ],
+  "cadence": {
+    "internal_apx": {
+      "live_meeting": "Mercredi matin 30min (mardi saturé)",
+      "written_synthesis": "Vendredi ou samedi par email à Maxime+Lucia"
+    },
+    "client_meetings": "à la demande, post-POC visuel"
+  },
+  "agents_roles": {
+    "cowork": "Architecture, build, recaps, drafts emails complexes — session interactive sur demande",
+    "apx_kimi2": "Front-line Telegram, Q&A rapide, status checks, draft initial des messages",
+    "james_kimi2": "Personal admin (mails, calendar, brainstorming personnel)",
+    "luke_codex": "Code generation à grande échelle si besoin",
+    "sofia_deepseek": "Veille / recherche / analyse de docs"
+  },
+  "secrets_required": {
+    "TELEGRAM_BOT_TOKEN": "à obtenir via @BotFather pour APX_JTA_bot",
+    "TELEGRAM_CHAT_ID": "ID du chat Julian ↔ bot",
+    "OPENROUTER_API_KEY": "déjà en place dans OpenClaw",
+    "GITHUB_WEBHOOK_SECRET": "à générer si on active le bridge GitHub"
+  }
+}

@@ -1,0 +1,2214 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>APX Advisory · LexCore IA — Cabinet Lexis · Console v2</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Source+Serif+4:opsz,wght@8..60,400;8..60,500;8..60,600;8..60,700&family=JetBrains+Mono:wght@400;500;600&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            fontFamily: {
+              sans: ['Inter', 'ui-sans-serif', 'system-ui'],
+              serif: ['"Source Serif 4"', 'ui-serif', 'Georgia'],
+              mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace']
+            },
+            colors: {
+              // APX brand
+              forest: {
+                50:  '#F1F5F4',
+                100: '#DCE7E4',
+                200: '#B5CAC4',
+                300: '#7FA39A',
+                400: '#4F7A70',
+                500: '#2F5A53',
+                600: '#1B3B36',
+                700: '#143029',
+                800: '#0F2522',
+                900: '#0A1A18'
+              },
+              rose: {
+                50:  '#FBF1EE',
+                100: '#F5DDD7',
+                200: '#EFC6BC',
+                300: '#E8B4AC',
+                400: '#D29185',
+                500: '#B26F62'
+              },
+              cream: {
+                50:  '#FCFAF6',
+                100: '#FAF7F2',
+                200: '#F5F2EB',
+                300: '#EFEADD',
+                400: '#E5E0D5'
+              }
+            },
+            boxShadow: {
+              soft: '0 1px 2px rgba(15,37,34,.04), 0 4px 12px rgba(15,37,34,.05)',
+              lift: '0 8px 28px rgba(15,37,34,.10), 0 2px 6px rgba(15,37,34,.04)',
+              glow: '0 0 0 4px rgba(232,180,172,.18)'
+            }
+          }
+        }
+      };
+    </script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      html, body { background: #FAF7F2; color: #1A1A1A; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+      .font-serif { font-family: 'Source Serif 4', ui-serif, Georgia; font-feature-settings: "ss01"; }
+      .font-mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+      ::selection { background: #E8B4AC; color: #0F2522; }
+      .scroll-area::-webkit-scrollbar { width: 10px; height: 10px; }
+      .scroll-area::-webkit-scrollbar-track { background: transparent; }
+      .scroll-area::-webkit-scrollbar-thumb { background: #DCE7E4; border-radius: 999px; }
+      .scroll-area::-webkit-scrollbar-thumb:hover { background: #B5CAC4; }
+
+      /* Animations */
+      @keyframes fadeUp { from { opacity:0; transform: translateY(8px) } to { opacity:1; transform: translateY(0) } }
+      @keyframes fadeIn { from { opacity:0 } to { opacity:1 } }
+      @keyframes slideRight { from { opacity:0; transform: translateX(16px) } to { opacity:1; transform: translateX(0) } }
+      @keyframes pulseDot { 0%,100% { opacity:.45; transform: scale(1) } 50% { opacity:1; transform: scale(1.25) } }
+      @keyframes shimmer { 0% { background-position: -400px 0 } 100% { background-position: 400px 0 } }
+      @keyframes flowDot {
+        0% { offset-distance: 0%; opacity: 0 }
+        15% { opacity: 1 }
+        85% { opacity: 1 }
+        100% { offset-distance: 100%; opacity: 0 }
+      }
+      @keyframes rotateRing { to { transform: rotate(360deg) } }
+      @keyframes ringDraw { from { stroke-dashoffset: 999 } to { stroke-dashoffset: var(--dash-offset, 0) } }
+      @keyframes blinkCursor { 50% { opacity: 0 } }
+      @keyframes pop { 0%{ transform: scale(.92); opacity:0 } 60%{ transform: scale(1.04) } 100%{ transform: scale(1); opacity:1 } }
+      @keyframes splashFade { 0% { opacity: 1 } 100% { opacity: 0; visibility: hidden } }
+
+      .anim-in { animation: fadeUp .26s ease-out both }
+      .anim-fade { animation: fadeIn .35s ease-out both }
+      .anim-slide { animation: slideRight .26s ease-out both }
+      .anim-pop { animation: pop .28s cubic-bezier(.2,.9,.3,1.4) both }
+      .pulse-dot { animation: pulseDot 1.5s ease-in-out infinite }
+      .typing-cursor::after { content:'▍'; margin-left:2px; color:#1B3B36; animation: blinkCursor 1s steps(2) infinite }
+
+      .skeleton { background: linear-gradient(90deg, #EFEADD 0%, #F5F2EB 50%, #EFEADD 100%); background-size: 800px 100%; animation: shimmer 1.4s linear infinite; }
+
+      .glass { background: rgba(255,255,255,.72); backdrop-filter: saturate(140%) blur(10px); -webkit-backdrop-filter: saturate(140%) blur(10px); }
+
+      .grid-paper {
+        background-image:
+          linear-gradient(to right, rgba(27,59,54,.05) 1px, transparent 1px),
+          linear-gradient(to bottom, rgba(27,59,54,.05) 1px, transparent 1px);
+        background-size: 24px 24px;
+      }
+
+      .cell-edit:focus { outline: 2px solid #1B3B36; outline-offset: -2px; background: #F1F5F4; }
+      mark.cite { background: linear-gradient(180deg, transparent 55%, #E8B4AC 55%); color: #0F2522; padding: 0 2px; border-radius: 2px; }
+
+      /* Pipeline animation */
+      .flow-path { stroke-dasharray: 6 6; animation: dash 18s linear infinite; }
+      @keyframes dash { to { stroke-dashoffset: -200 } }
+
+      .ring-progress { transform: rotate(-90deg); transform-origin: center; }
+
+      /* Splash */
+      .splash-bg {
+        background:
+          radial-gradient(ellipse at top right, rgba(232,180,172,.18), transparent 40%),
+          radial-gradient(ellipse at bottom left, rgba(47,90,83,.55), transparent 50%),
+          linear-gradient(180deg, #0F2522 0%, #0A1A18 100%);
+      }
+
+      /* Document drop */
+      .drop-active { box-shadow: inset 0 0 0 2px #1B3B36, 0 0 0 6px rgba(27,59,54,.08); background: #F1F5F4; }
+
+      .badge-soft { background: #F1F5F4; color: #143029; border: 1px solid #DCE7E4; }
+      .chip-rose { background: #FBF1EE; color: #B26F62; border: 1px solid #F5DDD7; }
+
+      details > summary { list-style: none; }
+      details > summary::-webkit-details-marker { display: none; }
+
+      /* hover-card overlap fix */
+      .hover-source { pointer-events: none; }
+      .group:hover .hover-source { pointer-events: auto; }
+
+      .bar-grow { transform-origin: left center; animation: barGrow .9s cubic-bezier(.2,.8,.2,1) both }
+      @keyframes barGrow { from { transform: scaleX(0) } to { transform: scaleX(1) } }
+
+      /* Spinner ring */
+      .ring-spin { animation: rotateRing 1.6s linear infinite }
+
+      /* Shadows */
+      .ring-1-cream { box-shadow: 0 0 0 1px #E5E0D5 }
+
+      .step-line {
+        background-image: linear-gradient(to right, #B5CAC4 50%, transparent 0%);
+        background-size: 8px 1px;
+        background-repeat: repeat-x;
+        background-position: 0 50%;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="root"></div>
+
+    <script type="text/babel" data-presets="react">
+      const { useState, useMemo, useEffect, useRef, useCallback } = React;
+
+      // =============================================================
+      // LANG CONTEXT — FR / EN toggle
+      // =============================================================
+      const LangContext = React.createContext('fr');
+      const useT = () => {
+        const lang = React.useContext(LangContext);
+        return (key) => {
+          const d = DICT[key];
+          if (!d) return key;
+          return d[lang] || d['fr'] || key;
+        };
+      };
+
+      const DICT = {
+        // === SIDEBAR ===
+        'sidebar.legal_ai': { fr: 'Legal AI · Console v2', en: 'Legal AI · Console v2' },
+        'sidebar.cabinet_client': { fr: 'Cabinet client', en: 'Client firm' },
+        'sidebar.workflow': { fr: 'Workflow', en: 'Workflow' },
+        'sidebar.roadmap': { fr: 'Extensions roadmap', en: 'Extensions roadmap' },
+        'sidebar.fake_data': { fr: 'Données fictives · aucun corpus client n\'est mobilisé.', en: 'Fictitious data · no real client corpus is used.' },
+        'sidebar.tableau': { fr: 'Tableau de bord', en: 'Dashboard' },
+        'sidebar.pipeline': { fr: 'Pipeline live', en: 'Live pipeline' },
+        'sidebar.ingestion': { fr: 'Ingestion', en: 'Ingestion' },
+        'sidebar.bibliotheque': { fr: 'Bibliothèque', en: 'Library' },
+        'sidebar.recherche': { fr: 'Recherche sourcée', en: 'Sourced search' },
+        'sidebar.syllogisme': { fr: 'Syllogisme', en: 'Syllogism' },
+        'sidebar.generation': { fr: 'Génération', en: 'Generation' },
+        'sidebar.badge_live': { fr: 'Live', en: 'Live' },
+        'sidebar.badge_new': { fr: 'Nouveau', en: 'New' },
+        'sidebar.ext1': { fr: 'Veille réglementaire CSSF', en: 'CSSF Regulatory Watch' },
+        'sidebar.ext2': { fr: 'Due Diligence Accelerator', en: 'Due Diligence Accelerator' },
+        'sidebar.ext3': { fr: 'KYC / AML Onboarding', en: 'KYC / AML Onboarding' },
+        // === HEADER ===
+        'header.search_placeholder': { fr: 'Rechercher dans le corpus…', en: 'Search in corpus…' },
+        'header.trace': { fr: 'Trace démo', en: 'Demo trace' },
+        'header.illustrative': { fr: 'données illustratives', en: 'illustrative data' },
+        'header.title_dashboard': { fr: 'Tableau de bord', en: 'Dashboard' },
+        'header.title_pipeline': { fr: 'Pipeline live', en: 'Live pipeline' },
+        'header.title_import': { fr: 'Ingestion & indexation', en: 'Ingestion & indexing' },
+        'header.title_table': { fr: 'Bibliothèque annotée', en: 'Annotated library' },
+        'header.title_chat': { fr: 'Recherche sourcée', en: 'Sourced search' },
+        'header.title_syllogisme': { fr: 'Syllogisme juridique', en: 'Legal syllogism' },
+        'header.title_generate': { fr: 'Génération guidée', en: 'Guided generation' },
+        // === SPLASH ===
+        'splash.legal_ai_eng': { fr: 'Legal AI Engineering', en: 'Legal AI Engineering' },
+        'splash.confidential': { fr: 'CONFIDENTIEL · STRICTLY CONFIDENTIAL', en: 'CONFIDENTIEL · STRICTLY CONFIDENTIAL' },
+        'splash.demo_label': { fr: 'v2 · démo cabinet · 2026', en: 'v2 · firm demo · 2026' },
+        'splash.interactive': { fr: 'Console interactive — Cabinet Lexis', en: 'Interactive console — Cabinet Lexis' },
+        'splash.tagline': { fr: 'La mémoire vivante du cabinet.', en: 'The living memory of the firm.' },
+        'splash.mock': { fr: 'Maquette interactive · données illustratives · backend mocké', en: 'Interactive mockup · illustrative data · mocked backend' },
+        'splash.step1': { fr: 'Initialisation du noyau RAG…', en: 'Initialising RAG core…' },
+        'splash.step2': { fr: 'Chargement des embeddings BGE-M3…', en: 'Loading BGE-M3 embeddings…' },
+        'splash.step3': { fr: 'Connexion au vault d\'audit (PostgreSQL)…', en: 'Connecting to audit vault (PostgreSQL)…' },
+        'splash.step4': { fr: 'Vérification résidence des données — UE ✓', en: 'Verifying data residency — EU ✓' },
+        'splash.step5': { fr: 'Console prête.', en: 'Console ready.' },
+        'splash.enter_ready': { fr: 'Entrer dans la console', en: 'Enter the console' },
+        'splash.enter_loading': { fr: 'Initialisation…', en: 'Initialising…' },
+        // === AUDIT DRAWER ===
+        'audit.decision': { fr: 'Décision affichée', en: 'Displayed decision' },
+        'audit.no_cote': { fr: 'sans cote', en: 'no ref.' },
+        'audit.date': { fr: 'Date', en: 'Date' },
+        'audit.type': { fr: 'Type', en: 'Type' },
+        'audit.sender': { fr: 'Expéditeur · destinataire', en: 'Sender · recipient' },
+        'audit.participants': { fr: 'Intervenants identifiés', en: 'Identified participants' },
+        'audit.none': { fr: 'Aucun', en: 'None' },
+        'audit.extracts': { fr: 'Extraits retenus', en: 'Selected extracts' },
+        'audit.trace': { fr: 'Trace d\'audit proposée', en: 'Proposed audit trail' },
+        'audit.validate': { fr: 'Valider', en: 'Validate' },
+        'audit.reclassify': { fr: 'Reclasser', en: 'Reclassify' },
+        'audit.report': { fr: 'Signaler', en: 'Flag' },
+        'audit.to_syllogism': { fr: 'Verser au syllogisme', en: 'Send to syllogism' },
+        'audit.actions': { fr: 'Actions', en: 'Actions' },
+        // === DASHBOARD ===
+        'dash.memory_badge': { fr: 'Mémoire vivante du cabinet', en: 'Living memory of the firm' },
+        'dash.hero_title': { fr: 'Le savoir-faire de Cabinet Lexis,\ndevenu', en: 'The expertise of Cabinet Lexis,\nnow' },
+        'dash.hero_em': { fr: 'consultable, exploitable, sourcé', en: 'searchable, actionable, sourced' },
+        'dash.hero_p': { fr: 'Une console unique pour ingérer le patrimoine documentaire, retrouver une clause, raisonner sur un dossier et générer un brouillon dans le ton du cabinet — sous supervision partner permanente.', en: 'A single console to ingest the document heritage, retrieve a clause, reason about a matter and draft in the firm\'s voice — under permanent partner supervision.' },
+        'dash.start_ingestion': { fr: 'Démarrer l\'ingestion', en: 'Start ingestion' },
+        'dash.launch_syllogism': { fr: 'Lancer un syllogisme', en: 'Launch a syllogism' },
+        'dash.ask_question': { fr: 'Poser une question', en: 'Ask a question' },
+        'dash.themes_active': { fr: '5 thématiques actives', en: '5 active topics' },
+        'dash.practice_title': { fr: 'Volumétrie par practice', en: 'Volume by practice area' },
+        'dash.practice_sub': { fr: 'Subset mocké du patrimoine documentaire Cabinet Lexis', en: 'Mocked subset of Cabinet Lexis document heritage' },
+        'dash.see_library': { fr: 'Voir la bibliothèque →', en: 'View library →' },
+        'dash.compliance_title': { fr: 'Conformité by design', en: 'Compliance by design' },
+        'dash.compliance_sub': { fr: 'Cadre cible — secret professionnel, RGPD, AI Act', en: 'Target framework — professional secrecy, GDPR, AI Act' },
+        'dash.data_eu': { fr: 'Données EU · zero retention LLM', en: 'EU data · zero retention LLM' },
+        'dash.verified': { fr: 'Vérifié', en: 'Verified' },
+        'dash.recent_title': { fr: 'Dernières pièces indexées', en: 'Latest indexed documents' },
+        'dash.recent_sub': { fr: 'Échantillon représentatif · cliquer pour ouvrir l\'audit', en: 'Representative sample · click to open audit' },
+        // === PIPELINE ===
+        'pipe.realtime': { fr: 'Vue temps réel', en: 'Real-time view' },
+        'pipe.title': { fr: 'Pipeline d\'ingestion & traitement', en: 'Ingestion & processing pipeline' },
+        'pipe.files_in_progress': { fr: '7 fichiers en cours', en: '7 files in progress' },
+        'pipe.history': { fr: 'Historique', en: 'History' },
+        'pipe.inflight_title': { fr: 'Fichiers en cours', en: 'Files in progress' },
+        'pipe.latency': { fr: 'Latence moyenne : 2.4 s/doc', en: 'Avg. latency: 2.4 s/doc' },
+        'pipe.waiting': { fr: 'en attente…', en: 'pending…' },
+        'pipe.security': { fr: 'Sécurité réseau', en: 'Network security' },
+        'pipe.no_outbound': { fr: 'Aucun appel sortant non documenté', en: 'No undocumented outbound call' },
+        'pipe.counter_ingest': { fr: 'Ingérés', en: 'Ingested' },
+        'pipe.counter_ocr': { fr: 'OCRisés', en: 'OCR\'d' },
+        'pipe.counter_embed': { fr: 'Embeddings', en: 'Embeddings' },
+        'pipe.counter_classified': { fr: 'Classés', en: 'Classified' },
+        'pipe.counter_syllog': { fr: 'Syllogismes', en: 'Syllogisms' },
+        'pipe.counter_rebut': { fr: 'Rebut', en: 'Rejected' },
+        'pipe.stage_ingest': { fr: 'Ingestion', en: 'Ingestion' },
+        'pipe.stage_ocr': { fr: 'OCR / Parsing', en: 'OCR / Parsing' },
+        'pipe.stage_chunk': { fr: 'Chunking', en: 'Chunking' },
+        'pipe.stage_embed': { fr: 'Embeddings', en: 'Embeddings' },
+        'pipe.stage_classify': { fr: 'Triage LLM', en: 'LLM Triage' },
+        'pipe.stage_syllog': { fr: 'Syllogisme', en: 'Syllogism' },
+        'pipe.stage_index': { fr: 'Indexation', en: 'Indexing' },
+        // === IMPORT ===
+        'import.title': { fr: 'Indexer le patrimoine documentaire', en: 'Index the document heritage' },
+        'import.desc': { fr: 'Glissez vos pièces — notes, templates, emails, alerts, SPA annotés. Chaque document traverse 7 étapes traçables : upload → parsing → OCR → chunking → embeddings → classification → indexation.', en: 'Drop your documents — notes, templates, emails, alerts, annotated SPAs. Each document goes through 7 traceable steps: upload → parsing → OCR → chunking → embeddings → classification → indexing.' },
+        'import.simulate': { fr: 'Simuler 4 dépôts', en: 'Simulate 4 uploads' },
+        'import.choose': { fr: 'Choisir des fichiers', en: 'Choose files' },
+        'import.pipeline': { fr: 'Pipeline en cours', en: 'Pipeline in progress' },
+        'import.7steps': { fr: '7 étapes par document', en: '7 steps per document' },
+        'import.corpus_title': { fr: 'Corpus indexé', en: 'Indexed corpus' },
+        'import.pieces_shown': { fr: 'pièces affichées', en: 'documents shown' },
+        'import.filter_all': { fr: 'Tout', en: 'All' },
+        'import.filter_pertinent': { fr: 'Pertinent', en: 'Relevant' },
+        'import.filter_revoir': { fr: 'À revoir', en: 'To review' },
+        'import.filter_rebut': { fr: 'Rebut', en: 'Rejected' },
+        // === TABLE ===
+        'table.title': { fr: 'Bibliothèque annotée', en: 'Annotated library' },
+        'table.sub': { fr: 'Édition cellule par cellule · audit trail systématique · aucun écrasement destructif', en: 'Cell-by-cell editing · systematic audit trail · no destructive overwrite' },
+        'table.search': { fr: 'Rechercher dans la bibliothèque…', en: 'Search in library…' },
+        'table.all_themes': { fr: 'Toutes thématiques', en: 'All topics' },
+        'table.col_cote': { fr: 'Cote', en: 'Ref.' },
+        'table.col_date': { fr: 'Date', en: 'Date' },
+        'table.col_piece': { fr: 'Pièce', en: 'Document' },
+        'table.col_participants': { fr: 'Intervenants', en: 'Participants' },
+        'table.col_summary': { fr: 'Sommaire', en: 'Summary' },
+        'table.col_theme': { fr: 'Thématique', en: 'Topic' },
+        'table.col_confidence': { fr: 'Confiance', en: 'Confidence' },
+        'table.col_audit': { fr: 'Audit', en: 'Audit' },
+        'table.to_syllogism': { fr: 'Verser au syllogisme', en: 'Send to syllogism' },
+        'table.click_edit': { fr: 'Cliquez pour éditer', en: 'Click to edit' },
+        // === CHAT ===
+        'chat.banner_title': { fr: 'Recherche sourcée — corpus Cabinet Lexis · démonstration', en: 'Sourced search — Cabinet Lexis corpus · demo' },
+        'chat.banner_sub': { fr: 'Chaque réponse cite ses sources internes. Les fragments envoyés au LLM ne dépassent jamais 2 000 tokens. Aucune donnée client réelle.', en: 'Every answer cites internal sources. Fragments sent to the LLM never exceed 2,000 tokens. No real client data.' },
+        'chat.placeholder': { fr: 'Posez votre question juridique au cabinet…', en: 'Ask your legal question to the firm…' },
+        'chat.sources': { fr: 'Sources', en: 'Sources' },
+        'chat.source_preview': { fr: 'Aperçu source', en: 'Source preview' },
+        'chat.click_cite': { fr: 'Cliquez sur une citation [n] pour prévisualiser la pièce mockée correspondante.', en: 'Click a citation [n] to preview the corresponding mocked document.' },
+        'chat.full_audit': { fr: 'Voir la trace d\'audit complète', en: 'View full audit trail' },
+        'chat.cited': { fr: 'Extraits cités', en: 'Cited extracts' },
+        // === SYLLOGISME ===
+        'syl.question_label': { fr: 'Question juridique', en: 'Legal question' },
+        'syl.cases_title': { fr: 'Cas en mémoire', en: 'Cases in memory' },
+        'syl.submitted': { fr: 'Question soumise au moteur', en: 'Question submitted to engine' },
+        'syl.launch': { fr: 'Lancer le syllogisme', en: 'Launch syllogism' },
+        'syl.replay': { fr: 'Re-jouer', en: 'Replay' },
+        'syl.in_progress': { fr: 'En cours…', en: 'In progress…' },
+        'syl.step_in_progress': { fr: 'Étape', en: 'Step' },
+        'syl.complete': { fr: 'Raisonnement complet', en: 'Reasoning complete' },
+        'syl.actions_generated': { fr: 'actions générées', en: 'actions generated' },
+        'syl.click_to_launch': { fr: 'Cliquez sur', en: 'Click' },
+        'syl.to_see': { fr: 'pour voir le raisonnement se construire.', en: 'to see the reasoning unfold.' },
+        'syl.three_steps': { fr: 'Trois étapes : majeure (la règle) · mineure (les faits) · conclusion (l\'avis sourcé).', en: 'Three steps: major premise (the rule) · minor premise (the facts) · conclusion (the sourced opinion).' },
+        'syl.majeure_label': { fr: 'Majeure', en: 'Major premise' },
+        'syl.majeure_sub': { fr: 'La règle de droit ou la position du cabinet', en: 'The rule of law or the firm\'s position' },
+        'syl.mineure_label': { fr: 'Mineure', en: 'Minor premise' },
+        'syl.mineure_sub': { fr: 'La qualification des faits du dossier', en: 'The characterisation of the case facts' },
+        'syl.conclusion_label': { fr: 'Conclusion', en: 'Conclusion' },
+        'syl.conclusion_sub': { fr: 'L\'avis du cabinet et les actions à conduire', en: 'The firm\'s opinion and recommended actions' },
+        'syl.synthesis_label': { fr: 'Synthèse opérationnelle', en: 'Operational synthesis' },
+        'syl.actions_title': { fr: 'Actions proposées au partner', en: 'Actions proposed to partner' },
+        'syl.risk_low': { fr: 'Risque maîtrisé', en: 'Managed risk' },
+        'syl.risk_medium': { fr: 'Vigilance partner', en: 'Partner vigilance' },
+        'syl.risk_high': { fr: 'Risque élevé', en: 'High risk' },
+        'syl.export_memo': { fr: 'Exporter en mémo .docx', en: 'Export as memo .docx' },
+        'syl.to_audit': { fr: 'Verser à l\'audit', en: 'Send to audit' },
+        'syl.validate_send': { fr: 'Valider et envoyer au partner', en: 'Validate and send to partner' },
+        'syl.sources_label': { fr: 'Sources mobilisées', en: 'Sources used' },
+        'syl.corpus_pieces': { fr: 'Pièces du corpus', en: 'Corpus documents' },
+        'syl.guarantees': { fr: 'Garanties', en: 'Guarantees' },
+        'syl.guarantees_text': { fr: 'Les fragments envoyés au LLM ne dépassent jamais 2 000 tokens. Les embeddings restent locaux. Le raisonnement est journalisé dans l\'audit trail immuable.', en: 'Fragments sent to the LLM never exceed 2,000 tokens. Embeddings remain local. Reasoning is logged in the immutable audit trail.' },
+        'syl.assistive': { fr: 'Le moteur reste assistif. La validation partner est requise avant toute communication externe.', en: 'The engine remains assistive. Partner validation is required before any external communication.' },
+        // === GENERATE ===
+        'gen.model_label': { fr: 'Modèle d\'acte', en: 'Document template' },
+        'gen.style_label': { fr: 'Style cabinet', en: 'Firm style' },
+        'gen.draft_info_title': { fr: 'Brouillon assisté', en: 'Assisted draft' },
+        'gen.draft_info_text': { fr: 'L\'IA propose un premier draft à 75–80 % exploitable. La rédaction finale et la validation partner restent des actes humains.', en: 'AI proposes an initial draft that is 75–80% usable. Final drafting and partner validation remain human acts.' },
+        'gen.generate': { fr: 'Générer le brouillon', en: 'Generate draft' },
+        'gen.generating': { fr: 'Génération…', en: 'Generating…' },
+        'gen.nda_title': { fr: 'NDA bilingue — version de démonstration', en: 'Bilingual NDA — demonstration version' },
+        'gen.draft_date': { fr: 'Brouillon généré le', en: 'Draft generated on' },
+        'gen.citations_visible': { fr: '· citations visibles en marge', en: '· citations visible in margin' },
+        'gen.style': { fr: 'Style', en: 'Style' },
+        'gen.select_template': { fr: 'Sélectionnez un modèle et un style, puis cliquez sur', en: 'Select a template and a style, then click' },
+        'gen.generate_word': { fr: 'Générer', en: 'Generate' },
+        'gen.draft_appears': { fr: 'Le brouillon s\'affichera ici, avec ses sources internes et un footer de validation.', en: 'The draft will appear here, with its internal sources and a validation footer.' },
+        'gen.footer_note': { fr: 'Brouillon de démonstration · sources mockées · validation partner requise', en: 'Demonstration draft · mocked sources · partner validation required' },
+        'gen.validate': { fr: 'Valider', en: 'Validate' },
+        // === KPI labels ===
+        'kpi.docs': { fr: 'Documents indexés', en: 'Indexed documents' },
+        'kpi.extracts': { fr: 'Extraits réutilisables', en: 'Reusable extracts' },
+        'kpi.patterns': { fr: 'Patterns de style', en: 'Style patterns' },
+        'kpi.time': { fr: 'Temps moyen / dossier', en: 'Avg. time / matter' },
+        'kpi.docs_sub': { fr: 'patrimoine cabinet (subset)', en: 'firm heritage (subset)' },
+        'kpi.extracts_sub': { fr: 'clauses · synthèses · alerts', en: 'clauses · summaries · alerts' },
+        'kpi.patterns_sub': { fr: 'tournures cabinet identifiées', en: 'identified firm phrasings' },
+        'kpi.time_sub': { fr: 'avant LexCore : ~3h', en: 'before LexCore: ~3h' },
+        // === COMPLIANCE ITEMS ===
+        'comp.0': { fr: 'Corpus isolé par practice / matter / client', en: 'Corpus isolated by practice / matter / client' },
+        'comp.1': { fr: 'Embeddings et audit strictement on-premise', en: 'Embeddings and audit strictly on-premise' },
+        'comp.2': { fr: 'Chiffrement AES-256 au repos · TLS 1.3 en transit', en: 'AES-256 encryption at rest · TLS 1.3 in transit' },
+        'comp.3': { fr: 'Sources LLM zero-retention (Bedrock EU · Mistral EU)', en: 'Zero-retention LLM sources (Bedrock EU · Mistral EU)' },
+        'comp.4': { fr: 'Validation partner avant tout réemploi externe', en: 'Partner validation before any external reuse' },
+        'comp.5': { fr: 'Audit trail immuable — traçabilité par paragraphe', en: 'Immutable audit trail — paragraph-level traceability' },
+        // === THEMATIQUES ===
+        'th.knowhow': { fr: 'Know-how M&A', en: 'M&A know-how' },
+        'th.regulatory': { fr: 'Réglementaire CSSF', en: 'CSSF Regulatory' },
+        'th.clauses': { fr: 'Clauses sensibles', en: 'Sensitive clauses' },
+        'th.style': { fr: 'Style cabinet', en: 'Firm style' },
+        'th.a_revoir': { fr: 'À valider partner', en: 'Partner validation needed' },
+        'th.rebut': { fr: 'Hors périmètre', en: 'Out of scope' },
+        // === PRACTICE AREAS ===
+        'pa.corp': { fr: 'Corporate · M&A', en: 'Corporate · M&A' },
+        'pa.funds': { fr: 'Funds & AIFM', en: 'Funds & AIFM' },
+        'pa.reg': { fr: 'Réglementaire CSSF', en: 'CSSF Regulatory' },
+        'pa.tax': { fr: 'Tax', en: 'Tax' },
+        'pa.litig': { fr: 'Contentieux', en: 'Litigation' },
+        // === STATUS ===
+        'status.pertinent': { fr: 'Pertinent', en: 'Relevant' },
+        'status.a_revoir': { fr: 'À revoir', en: 'To review' },
+        'status.rebut': { fr: 'Rebut', en: 'Rejected' },
+        // === CHAT SUGGESTIONS ===
+        'chat.sug1': { fr: 'Quels précédents NDA bilingues évoquent une residual knowledge clause ?', en: 'Which bilingual NDA precedents mention a residual knowledge clause?' },
+        'chat.sug2': { fr: 'As-tu une note CSSF réutilisable sur l\'externalisation IT ?', en: 'Do you have a reusable CSSF note on IT outsourcing?' },
+        'chat.sug3': { fr: 'Quel ton emploie Me Martin dans les client alerts ?', en: 'What tone does Me Martin use in client alerts?' },
+        'chat.sug4': { fr: 'Position du cabinet sur la qualification UBO d\'une SOPARFI ?', en: 'Firm\'s position on UBO qualification of a SOPARFI?' },
+        // === TEMPLATES ===
+        'tpl.t1_label': { fr: 'NDA bilingue FR/EN', en: 'Bilingual NDA FR/EN' },
+        'tpl.t1_desc': { fr: 'Style cabinet · clauses sensibles en marge', en: 'Firm style · sensitive clauses in margin' },
+        'tpl.t2_label': { fr: 'Client alert CSSF', en: 'CSSF client alert' },
+        'tpl.t2_desc': { fr: 'Format publication client · ton partner', en: 'Client publication format · partner tone' },
+        'tpl.t3_label': { fr: 'Board minutes LuxCo', en: 'LuxCo board minutes' },
+        'tpl.t3_desc': { fr: 'Réemploi guidé des formulations internes', en: 'Guided reuse of internal phrasings' },
+        // === LAWYERS ===
+        'law.l1_style': { fr: 'Soutenu, compact, très structuré', en: 'Formal, concise, highly structured' },
+        'law.l2_style': { fr: 'Pédagogique, client-facing, prudentiel', en: 'Educational, client-facing, cautious' },
+        'law.l3_label': { fr: 'Knowledge team', en: 'Knowledge team' },
+        'law.l3_style': { fr: 'Neutre, réutilisable, peu personnalisé', en: 'Neutral, reusable, lightly personalised' },
+        // === MISC ===
+        'misc.sla': { fr: 'Maquette interactive · données illustratives · backend mocké', en: 'Interactive mockup · illustrative data · mocked backend' },
+        'misc.version': { fr: 'Console v2 · démonstration', en: 'Console v2 · demo' },
+        'misc.download_word': { fr: 'Word', en: 'Word' },
+        'misc.download_pdf': { fr: 'PDF', en: 'PDF' },
+        'misc.download_excel': { fr: 'Excel', en: 'Excel' },
+      };
+
+
+      // =============================================================
+      // ICONS — extended pack, hairline 1.6 stroke
+      // =============================================================
+      const I = {
+        dashboard: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>,
+        upload: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M12 16V4M12 4l-4 4M12 4l4 4" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 16v3a1 1 0 001 1h14a1 1 0 001-1v-3" strokeLinecap="round"/></svg>,
+        table: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><rect x="3" y="4" width="18" height="16" rx="1.5"/><path d="M3 10h18M3 16h18M9 4v16M15 4v16"/></svg>,
+        chat: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M4 5h16a1 1 0 011 1v10a1 1 0 01-1 1H9l-5 4V6a1 1 0 011-1Z" strokeLinejoin="round"/></svg>,
+        scale: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M12 3v18M5 7h14M5 7l-3 7a4 4 0 008 0l-3-7M19 7l-3 7a4 4 0 008 0l-3-7M8 21h8" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+        wand: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="m4 20 12-12M8 4l1 3 3 1-3 1-1 3-1-3-3-1 3-1 1-3ZM18 14l.7 2 2 .7-2 .7L18 19l-.7-1.6-2-.7 2-.7Z" strokeLinejoin="round"/></svg>,
+        shield: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6l-8-3Z" strokeLinejoin="round"/><path d="m9 12 2 2 4-4" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+        eye: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/></svg>,
+        close: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" {...p}><path d="m6 6 12 12M18 6 6 18" strokeLinecap="round"/></svg>,
+        info: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><circle cx="12" cy="12" r="9"/><path d="M12 8h.01M11 12h1v4h1" strokeLinecap="round"/></svg>,
+        check: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" {...p}><path d="m5 12 5 5L20 7" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+        send: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="m4 12 16-8-5 17-3-7-8-2Z" strokeLinejoin="round"/></svg>,
+        download: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M12 4v12M12 16l-4-4M12 16l4-4" strokeLinecap="round" strokeLinejoin="round"/><path d="M4 20h16" strokeLinecap="round"/></svg>,
+        history: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M3 12a9 9 0 103-6.7L3 8" strokeLinecap="round"/><path d="M3 4v4h4M12 7v5l3 2" strokeLinecap="round"/></svg>,
+        mail: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m4 7 8 6 8-6"/></svg>,
+        file: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M14 3H6a2 2 0 00-2 2v14a2 2 0 002 2h12a2 2 0 002-2V9l-6-6Z" strokeLinejoin="round"/><path d="M14 3v6h6"/></svg>,
+        image: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><rect x="3" y="4" width="18" height="16" rx="2"/><circle cx="8.5" cy="10" r="1.5"/><path d="m4 18 6-6 5 5 3-3 2 2"/></svg>,
+        sheet: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 10h18M9 4v16"/></svg>,
+        slides: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 21h8M12 17v4"/></svg>,
+        flow: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><circle cx="5" cy="12" r="2"/><circle cx="19" cy="6" r="2"/><circle cx="19" cy="18" r="2"/><path d="M7 12h10M7 12l10-6M7 12l10 6"/></svg>,
+        bolt: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M13 2 3 14h7l-1 8 11-13h-7l0-7Z" strokeLinejoin="round"/></svg>,
+        lock: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 018 0v4"/></svg>,
+        sparkles: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M12 3l1.7 4.3L18 9l-4.3 1.7L12 15l-1.7-4.3L6 9l4.3-1.7L12 3ZM19 14l.9 2.1L22 17l-2.1.9L19 20l-.9-2.1L16 17l2.1-.9L19 14ZM5 14l.9 2.1L8 17l-2.1.9L5 20l-.9-2.1L2 17l2.1-.9L5 14Z" strokeLinejoin="round"/></svg>,
+        chevron: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" {...p}><path d="m9 6 6 6-6 6" strokeLinecap="round" strokeLinejoin="round"/></svg>,
+        plus: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" {...p}><path d="M12 5v14M5 12h14" strokeLinecap="round"/></svg>,
+        search: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5" strokeLinecap="round"/></svg>,
+        star: p => <svg viewBox="0 0 24 24" fill="currentColor" {...p}><path d="m12 17.3-6.2 3.7 1.6-7L2 9.3l7.1-.6L12 2l2.9 6.7 7.1.6-5.4 4.7 1.6 7Z"/></svg>,
+        layers: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="m12 3-9 5 9 5 9-5-9-5ZM3 13l9 5 9-5M3 18l9 5 9-5"/></svg>,
+        spark: p => <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" {...p}><path d="M3 17l5-7 4 4 4-6 5 7" strokeLinecap="round" strokeLinejoin="round"/></svg>
+      };
+
+      // =============================================================
+      // DATA — Cabinet Lexis (richer dataset)
+      // =============================================================
+      const PROJECT = {
+        id: 'pp',
+        firm: 'Cabinet Lexis',
+        location: 'Luxembourg',
+        product: 'LexCore IA',
+        version: 'Console v2 · démonstration',
+        reviewer: { initials: 'AM', name: 'Me A. Martin', role: 'Partner · Funds & Corporate' },
+        sla: 'Maquette interactive · données illustratives · backend mocké',
+        practiceAreas: [
+          { id: 'corp', label: 'Corporate · M&A', count: 312, weight: 0.32 },
+          { id: 'funds', label: 'Funds & AIFM', count: 264, weight: 0.27 },
+          { id: 'reg', label: 'Réglementaire CSSF', count: 184, weight: 0.19 },
+          { id: 'tax', label: 'Tax', count: 124, weight: 0.13 },
+          { id: 'litig', label: 'Contentieux', count: 96, weight: 0.09 }
+        ],
+        thematiques: [
+          { id: 'knowhow', label: 'Know-how M&A', color: 'bg-forest-100 text-forest-700 border-forest-200', dot: '#1B3B36', count: 231 },
+          { id: 'regulatory', label: 'Réglementaire CSSF', color: 'bg-rose-100 text-rose-500 border-rose-200', dot: '#D29185', count: 184 },
+          { id: 'clauses', label: 'Clauses sensibles', color: 'bg-violet-100 text-violet-800 border-violet-200', dot: '#7C3AED', count: 96 },
+          { id: 'style', label: 'Style cabinet', color: 'bg-amber-100 text-amber-800 border-amber-200', dot: '#D97706', count: 54 },
+          { id: 'a_revoir', label: 'À valider partner', color: 'bg-orange-100 text-orange-800 border-orange-300', dot: '#EA580C', count: 12 },
+          { id: 'rebut', label: 'Hors périmètre', color: 'bg-slate-100 text-slate-600 border-slate-200', dot: '#94A3B8', count: 403 }
+        ],
+        kpis: [
+          { id: 'docs', labelKey: 'kpi.docs', value: 980, unit: '', spark: [120, 240, 360, 540, 720, 860, 980], tone: 'good', subKey: 'kpi.docs_sub' },
+          { id: 'extracts', labelKey: 'kpi.extracts', value: 312, unit: '', spark: [40,80,120,180,230,280,312], subKey: 'kpi.extracts_sub' },
+          { id: 'patterns', labelKey: 'kpi.patterns', value: 54, unit: '', spark: [4,10,18,28,36,46,54], subKey: 'kpi.patterns_sub' },
+          { id: 'time', labelKey: 'kpi.time', value: 47, unit: ' min', spark: [240,180,140,100,82,60,47], tone: 'good', subKey: 'kpi.time_sub' }
+        ],
+        complianceItems: [
+          'Corpus isolé par practice / matter / client',
+          'Embeddings et audit strictement on-premise',
+          'Chiffrement AES-256 au repos · TLS 1.3 en transit',
+          'Sources LLM zero-retention (Bedrock EU · Mistral EU)',
+          'Validation partner avant tout réemploi externe',
+          'Audit trail immuable — traçabilité par paragraphe'
+        ],
+        chatSuggestions: [
+          'Quels précédents NDA bilingues évoquent une residual knowledge clause ?',
+          'As-tu une note CSSF réutilisable sur l’externalisation IT ?',
+          'Quel ton emploie Me Martin dans les client alerts ?',
+          'Position du cabinet sur la qualification UBO d’une SOPARFI ?'
+        ],
+        templates: [
+          { id: 't1', labelKey: 'tpl.t1_label', descKey: 'tpl.t1_desc' },
+          { id: 't2', labelKey: 'tpl.t2_label', descKey: 'tpl.t2_desc' },
+          { id: 't3', labelKey: 'tpl.t3_label', descKey: 'tpl.t3_desc' }
+        ],
+        lawyers: [
+          { id: 'l1', label: 'Me Martin', styleKey: 'law.l1_style' },
+          { id: 'l2', label: 'Me Durand', styleKey: 'law.l2_style' },
+          { id: 'l3', label: 'Knowledge team', styleKey: 'law.l3_style' }
+        ],
+        pieces: [
+          { id: 'PP-001', cote: 'KC-12', nom: 'SPA_Annotated_LuxCo_2021.docx', date: '2021-10-12', type: 'file', intervenants: ['Corporate team'], thematique: 'knowhow', status: 'pertinent', confidence: 0.94, summary: 'Projet SPA annoté montrant la structure des définitions, des carve-outs et des baskets.', extracts: ['Commentaire marge : « garder cette tournure — plus protectrice pour le vendeur ».'], auditTrace: ['Document de know-how, pas document client à réutiliser tel quel.', 'Extraits marginaux utiles pour entraîner le style.', 'Taggé « réemploi partiel seulement ».'] },
+          { id: 'PP-002', cote: 'RG-04', nom: 'CSSF_Circular_24-856.pdf', date: '2024-02-02', type: 'pdf', intervenants: ['Knowledge team'], thematique: 'regulatory', status: 'pertinent', confidence: 0.90, summary: 'Synthèse réglementaire CSSF utilisée comme base d’alert client.', extracts: ['Section 3 : governance expectations for outsourced ICT arrangements.'], auditTrace: ['Source réglementaire identifiable.', 'Bonne candidate pour citation ou paraphrase contrôlée.', 'Doit rester distinguée du contenu cabinet.'] },
+          { id: 'PP-003', cote: 'CL-07', nom: 'Template_NDA_FR_EN.docx', date: '2023-06-19', type: 'file', intervenants: ['M&A team'], thematique: 'clauses', status: 'pertinent', confidence: 0.92, summary: 'Template NDA bilingue avec variantes de carve-out et option de residual knowledge clause.', extracts: ['Residual knowledge clause — optional only after partner sign-off.'], auditTrace: ['Template bien structuré.', 'Bon support pour génération assistée.', 'Variante sensible clairement balisée.'] },
+          { id: 'PP-004', cote: 'ST-03', nom: 'Email_Associate_StyleGuide.msg', date: '2024-01-08', type: 'email', from: 'knowledge@cabinetlexis.lu', to: 'associates@cabinetlexis.lu', intervenants: ['Knowledge team', 'Associates'], thematique: 'style', status: 'pertinent', confidence: 0.83, summary: 'Email interne rappelant les formulations à privilégier dans les alerts clients.', extracts: ['Éviter "we believe"; préférer "we note" ou "it appears".'], auditTrace: ['Source de style, pas source juridique.', 'Utile pour piloter la tonalité des brouillons.', 'Confiance plus basse car non normative.'] },
+          { id: 'PP-005', cote: 'KM-15', nom: 'Memo_UBO_2023.msg', date: '2023-11-03', type: 'email', from: 'partner@cabinetlexis.lu', to: 'knowledge@cabinetlexis.lu', intervenants: ['Partner', 'Knowledge team'], thematique: 'knowhow', status: 'pertinent', confidence: 0.86, summary: 'Note interne sur les points d’attention UBO à conserver dans la base de knowledge.', extracts: ['Keep the caveat on beneficial ownership thresholds — clients routinely misunderstand it.'], auditTrace: ['Bonne pièce pour capitaliser un caveat récurrent.', 'Marquer le contexte Luxembourg.', 'À réutiliser comme note interne plutôt que comme texte final.'] },
+          { id: 'PP-006', cote: 'AL-09', nom: 'Client_Alert_AIFM.pptx', date: '2024-03-21', type: 'slides', intervenants: ['Funds team'], thematique: 'regulatory', status: 'pertinent', confidence: 0.79, summary: 'Brouillon de slides pour un client alert AIFM, utile comme squelette mais incomplet.', extracts: ['Action points slide : « separate immediate obligations from monitoring items ».'], auditTrace: ['Support intermédiaire, pas texte final.', 'Utile pour structure de l’alert.', 'Demande une vraie réécriture partner-facing.'] },
+          { id: 'PP-007', cote: '?', nom: 'Board_Minutes_LuxCo_Draft.docx', date: '2024-04-04', type: 'file', intervenants: ['Corporate team'], thematique: 'a_revoir', status: 'a_revoir', confidence: 0.51, summary: 'Projet de minutes comportant des placeholders non arbitrés.', extracts: ['[TO BE CONFIRMED WITH CLIENT]'], auditTrace: ['Placeholders détectés.', 'Ne doit pas être promu en template sans revue.', 'Exemple utile de garde-fou produit.'] },
+          { id: 'PP-008', cote: '—', nom: 'Salon_Invitation_2022.jpg', date: '2022-09-10', type: 'image', intervenants: [], thematique: 'rebut', status: 'rebut', confidence: 0.98, summary: 'Invitation à un salon professionnel sans valeur documentaire pour LexCore.', extracts: [], auditTrace: ['Hors périmètre knowledge.', 'Aucun texte exploitable.', 'Classement rebut évident.'] },
+          { id: 'PP-009', cote: 'TX-22', nom: 'SOPARFI_Tax_Memo_2023.pdf', date: '2023-08-14', type: 'pdf', intervenants: ['Tax team'], thematique: 'knowhow', status: 'pertinent', confidence: 0.88, summary: 'Mémo fiscal SOPARFI : régime mère-fille, retenues à la source, dispositif anti-abus.', extracts: ['Le test d’activité économique substantielle reste central pour l’éligibilité au régime.'], auditTrace: ['Référence interne sérieuse.', 'À utiliser pour gabarits Tax memo.', 'Validation Tax partner conseillée.'] },
+          { id: 'PP-010', cote: 'CL-21', nom: 'Term_Sheet_Series_B.docx', date: '2024-04-29', type: 'file', intervenants: ['Corporate team', 'Funds team'], thematique: 'clauses', status: 'pertinent', confidence: 0.81, summary: 'Term sheet d’un Series B — formulations protectrices pour le lead investor.', extracts: ['Liquidation preference : 1x non-participating with broad-based weighted average.'], auditTrace: ['Bonne base de gabarit.', 'Caveat anti-dilution à expliciter.', 'Marquer "ne pas réutiliser sans contexte".'] }
+        ],
+        chatHistory: [
+          { role: 'user', content: 'Quels précédents NDA bilingues parlent d’une residual knowledge clause ?' },
+          { role: 'assistant', content: 'La source la plus claire est le **template NDA bilingue [1]**. Le point n’est pas seulement la clause elle-même, mais la règle métier associée : *optionnelle uniquement après sign-off partner*. Un email de knowledge interne [2] documente le niveau de prudence attendu côté cabinet.', citations: ['PP-003','PP-005'] },
+          { role: 'user', content: 'Et sur le ton d’un client alert réglementaire ?' },
+          { role: 'assistant', content: 'L’**email style guide [1]** fixe les préférences rédactionnelles ("we note" plutôt que "we believe"), tandis qu’un **brouillon d’alert AIFM [2]** montre comment séparer les obligations immédiates des points de veille. Le produit relie style, source et réemploi contrôlé.', citations: ['PP-004','PP-006'] }
+        ],
+        draftBlocks: [
+          { kind: 'h2', text: '1. Objet du brouillon', sources: [] },
+          { kind: 'p', text: 'Ce brouillon de démonstration montre comment un NDA bilingue peut être assemblé à partir de templates internes, de notes de style et de savoir-faire antérieur — sans prétendre que le texte produit est prêt à être envoyé à un client sans relecture partner.', sources: ['PP-003','PP-004'] },
+          { kind: 'h2', text: '2. Réutilisation encadrée du savoir-faire', sources: [] },
+          { kind: 'p', text: 'L’objectif n’est pas de cloner des documents antérieurs, mais de faire remonter des structures réutilisables, des mises en garde et des marqueurs de ton qu’un partner peut approuver, réécrire ou rejeter clause par clause.', sources: ['PP-001','PP-005'] },
+          { kind: 'h2', text: '3. Circuit de validation', sources: [] },
+          { kind: 'p', text: 'Toute optionalité sensible — comme une residual knowledge clause ou un libellé de board minutes non arbitré — reste visiblement balisée pour validation humaine avant tout envoi à un client.', sources: ['PP-003','PP-007'] }
+        ],
+        // SYLLOGISMES — exemples
+        syllogismes: [
+          {
+            id: 'syl-1',
+            question: 'Une clause de "residual knowledge" peut-elle être insérée dans un NDA standard du cabinet sans validation partner ?',
+            majeure: {
+              text: 'Le référentiel interne du cabinet conditionne l’usage de toute clause à effet asymétrique sur la confidentialité — incluant les "residual knowledge clauses" — à un sign-off explicite d’un partner habilité.',
+              sources: ['PP-003','PP-005']
+            },
+            mineure: {
+              text: 'La requête concerne l’insertion d’une "residual knowledge clause" dans un NDA bilingue produit à partir du template cabinet "Template_NDA_FR_EN.docx", sans mention d’une validation partner préalable.',
+              sources: ['PP-003']
+            },
+            conclusion: {
+              text: 'L’insertion de la clause ne peut donc pas être réalisée par le seul collaborateur. Le brouillon doit être balisé "À valider partner" et la clause maintenue en option commentée jusqu’à confirmation explicite.',
+              risk: 'low',
+              actions: [
+                'Activer le marqueur "À valider partner" dans le tableau de bord.',
+                'Conserver la clause en variante non-active dans le draft .docx.',
+                'Notifier Me Martin via le module de revue.'
+              ]
+            }
+          },
+          {
+            id: 'syl-2',
+            question: 'Le cabinet peut-il réutiliser un brouillon d’alert AIFM de mars 2024 pour une nouvelle alerte client ?',
+            majeure: {
+              text: 'Les supports intermédiaires (slides de travail, drafts d’alerts) ne sont jamais promus en livrable client sans une réécriture partner-facing et une distinction claire entre obligations immédiates et points de veille.',
+              sources: ['PP-006','PP-004']
+            },
+            mineure: {
+              text: 'Le document Client_Alert_AIFM.pptx du 21 mars 2024 est un brouillon de slides incomplet, structuré mais non arbitré, marqué "support intermédiaire" dans la base de knowledge.',
+              sources: ['PP-006']
+            },
+            conclusion: {
+              text: 'Le brouillon peut servir de squelette structurel, mais doit être réécrit selon le ton défini par le style guide (« we note », plutôt que « we believe »), et validé partner avant diffusion. La séparation obligations / monitoring est conservée comme matrice.',
+              risk: 'medium',
+              actions: [
+                'Charger le squelette dans le module Génération.',
+                'Appliquer le pack de style "Me Durand · client-facing".',
+                'Faire valider la version finale par le partner référent fonds.'
+              ]
+            }
+          }
+        ]
+      };
+
+      // =============================================================
+      // HELPERS
+      // =============================================================
+      const fmtDate = s => new Date(s).toLocaleDateString('fr-FR', { day: '2-digit', month: 'short', year: 'numeric' });
+      const fmtTime = () => new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+      const getTheme = id => PROJECT.thematiques.find(t => t.id === id) || PROJECT.thematiques[PROJECT.thematiques.length - 1];
+      const getPiece = id => PROJECT.pieces.find(p => p.id === id);
+
+      const TypeIcon = ({ type, className }) => {
+        const map = { email: I.mail, pdf: I.file, file: I.file, image: I.image, sheet: I.sheet, slides: I.slides };
+        const Comp = map[type] || I.file;
+        return <Comp className={className || 'h-4 w-4'} />;
+      };
+
+      // animated count-up
+      const useCountUp = (target, duration = 1100) => {
+        const [val, setVal] = useState(0);
+        useEffect(() => {
+          let raf, start;
+          const step = ts => {
+            if (!start) start = ts;
+            const p = Math.min(1, (ts - start) / duration);
+            const eased = 1 - Math.pow(1 - p, 3);
+            setVal(target * eased);
+            if (p < 1) raf = requestAnimationFrame(step);
+          };
+          raf = requestAnimationFrame(step);
+          return () => cancelAnimationFrame(raf);
+        }, [target]);
+        return val;
+      };
+
+      // streaming text simulator
+      const useStream = (text, speed = 14, start = true) => {
+        const [out, setOut] = useState('');
+        useEffect(() => {
+          if (!start) { setOut(''); return; }
+          let i = 0;
+          const id = setInterval(() => {
+            i += 1;
+            if (i > text.length) { clearInterval(id); return; }
+            setOut(text.slice(0, i));
+          }, speed);
+          return () => clearInterval(id);
+        }, [text, speed, start]);
+        return out;
+      };
+
+      // =============================================================
+      // SHARED COMPONENTS
+      // =============================================================
+      const Pill = ({ children, tone = 'forest' }) => {
+        const tones = {
+          forest: 'bg-forest-50 text-forest-700 border-forest-100',
+          rose: 'bg-rose-50 text-rose-500 border-rose-100',
+          amber: 'bg-amber-50 text-amber-800 border-amber-200',
+          slate: 'bg-slate-100 text-slate-600 border-slate-200'
+        };
+        return <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium uppercase tracking-wider ${tones[tone]}`}>{children}</span>;
+      };
+
+      const StatusPill = ({ status }) => {
+        const map = {
+          pertinent: { label: 'Pertinent', cls: 'bg-forest-50 text-forest-700 ring-forest-200' },
+          rebut: { label: 'Rebut', cls: 'bg-slate-100 text-slate-600 ring-slate-200' },
+          a_revoir: { label: 'À revoir', cls: 'bg-rose-50 text-rose-500 ring-rose-200' }
+        };
+        const m = map[status] || map.pertinent;
+        return <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium ring-1 ring-inset ${m.cls}`}><span className="h-1.5 w-1.5 rounded-full bg-current opacity-70"/>{m.label}</span>;
+      };
+
+      const ConfidenceBar = ({ value }) => {
+        const pct = Math.round(value * 100);
+        const color = value >= 0.85 ? 'bg-forest-600' : value >= 0.6 ? 'bg-amber-500' : 'bg-rose-400';
+        return (
+          <div className="flex items-center gap-2">
+            <div className="h-1.5 w-16 overflow-hidden rounded-full bg-cream-300">
+              <div className={`h-full ${color} bar-grow`} style={{ width: `${pct}%` }}/>
+            </div>
+            <span className="font-mono text-[10px] tabular-nums text-slate-500">{pct}%</span>
+          </div>
+        );
+      };
+
+      const Btn = ({ children, variant = 'primary', onClick, icon: Icon, title, type = 'button', size = 'md' }) => {
+        const sizes = { sm: 'px-2.5 py-1 text-[11px]', md: 'px-3 py-1.5 text-xs', lg: 'px-4 py-2 text-sm' };
+        const variants = {
+          primary: 'bg-forest-600 text-white hover:bg-forest-700 shadow-soft',
+          ghost: 'border border-cream-400 bg-white text-forest-700 hover:bg-cream-100',
+          rose: 'bg-rose-300 text-forest-800 hover:bg-rose-400 shadow-soft',
+          outline: 'border border-forest-600 text-forest-700 hover:bg-forest-50',
+          dark: 'bg-forest-800 text-cream-100 hover:bg-forest-900 shadow-soft'
+        };
+        return (
+          <button type={type} onClick={onClick} title={title} className={`inline-flex items-center gap-1.5 rounded-lg font-medium transition active:scale-[.98] ${sizes[size]} ${variants[variant]}`}>
+            {Icon ? <Icon className="h-3.5 w-3.5"/> : null}
+            {children}
+          </button>
+        );
+      };
+
+      const Sparkline = ({ data, w = 80, h = 22, color = '#1B3B36' }) => {
+        const min = Math.min(...data), max = Math.max(...data);
+        const norm = v => h - 2 - ((v - min) / (max - min || 1)) * (h - 4);
+        const step = w / (data.length - 1);
+        const d = data.map((v, i) => `${i === 0 ? 'M' : 'L'} ${i * step} ${norm(v)}`).join(' ');
+        const area = `${d} L ${w} ${h} L 0 ${h} Z`;
+        return (
+          <svg viewBox={`0 0 ${w} ${h}`} width={w} height={h}>
+            <defs>
+              <linearGradient id={`sg-${color}`} x1="0" x2="0" y1="0" y2="1">
+                <stop offset="0%" stopColor={color} stopOpacity=".25"/>
+                <stop offset="100%" stopColor={color} stopOpacity="0"/>
+              </linearGradient>
+            </defs>
+            <path d={area} fill={`url(#sg-${color})`}/>
+            <path d={d} fill="none" stroke={color} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+            <circle cx={w} cy={norm(data[data.length-1])} r="2.5" fill={color}/>
+          </svg>
+        );
+      };
+
+      const Donut = ({ data, size = 200 }) => {
+        const total = data.reduce((s, d) => s + d.value, 0);
+        const r = size / 2 - 12;
+        const cx = size / 2, cy = size / 2;
+        const C = 2 * Math.PI * r;
+        let acc = 0;
+        return (
+          <svg viewBox={`0 0 ${size} ${size}`} width={size} height={size}>
+            <circle cx={cx} cy={cy} r={r} fill="none" stroke="#EFEADD" strokeWidth="14"/>
+            {data.map((d, i) => {
+              const len = (d.value / total) * C;
+              const dash = `${len} ${C}`;
+              const offset = -acc;
+              acc += len;
+              return (
+                <circle key={i} cx={cx} cy={cy} r={r} fill="none" stroke={d.color} strokeWidth="14"
+                  strokeDasharray={dash} strokeDashoffset={offset} className="ring-progress"
+                  style={{ transition: 'stroke-dasharray .9s cubic-bezier(.2,.8,.2,1)' }}/>
+              );
+            })}
+            <text x={cx} y={cy - 4} textAnchor="middle" fontSize="22" fontFamily="'Source Serif 4'" fontWeight="600" fill="#0F2522">{total}</text>
+            <text x={cx} y={cy + 14} textAnchor="middle" fontSize="9" fill="#6B6B6B" letterSpacing="1">DOCUMENTS</text>
+          </svg>
+        );
+      };
+
+      // =============================================================
+      // SPLASH SCREEN
+      // =============================================================
+      const Splash = ({ onEnter, lang, setLang }) => {
+        const t = useT();
+        const [ready, setReady] = useState(false);
+        const [step, setStep] = useState(0);
+        const steps = [
+          'Initialisation du noyau RAG…',
+          'Chargement des embeddings BGE-M3…',
+          'Connexion au vault d’audit (PostgreSQL)…',
+          'Vérification résidence des données — UE ✓',
+          'Console prête.'
+        ];
+        useEffect(() => {
+          const ids = steps.map((_, i) => setTimeout(() => setStep(i + 1), 380 * (i + 1)));
+          const t = setTimeout(() => setReady(true), 380 * steps.length + 200);
+          return () => { ids.forEach(clearTimeout); clearTimeout(t); };
+        }, []);
+        return (
+          <div className="splash-bg fixed inset-0 z-[100] flex items-center justify-center anim-fade">
+            {/* corner identity */}
+            <div className="absolute left-8 top-8 flex items-center gap-3 text-cream-100">
+              <div className="grid h-10 w-10 place-items-center rounded-md bg-rose-300 text-forest-800 font-serif text-base font-bold">A</div>
+              <div>
+                <div className="text-sm font-semibold tracking-wide">APX ADVISORY</div>
+                <div className="text-[10px] uppercase tracking-[.18em] text-cream-300/70">Legal AI Engineering</div>
+              </div>
+            </div>
+            <div className="absolute right-8 top-8 flex items-center gap-4">
+              <div className="flex items-center gap-0.5 rounded-lg border border-cream-300/20 bg-white/10 p-0.5">{['fr','en'].map(l => <button key={l} onClick={() => setLang(l)} className={`rounded-md px-3 py-1 text-xs font-semibold uppercase tracking-wider transition ${lang === l ? 'bg-rose-300 text-forest-800' : 'text-cream-300/70 hover:text-cream-100'}`}>{l}</button>)}</div>
+              <div className="text-[10px] uppercase tracking-[.2em] text-cream-300/60">CONFIDENTIEL · STRICTLY CONFIDENTIAL</div>
+            </div>
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 text-[10px] uppercase tracking-[.2em] text-cream-300/40">{t('splash.demo_label')}</div>
+
+            <div className="max-w-2xl px-8 text-center">
+              <div className="mb-6 inline-flex items-center gap-2 rounded-full border border-cream-300/20 bg-white/5 px-3 py-1 text-[10px] font-medium uppercase tracking-[.18em] text-cream-300">
+                <span className="h-1.5 w-1.5 rounded-full bg-rose-300 pulse-dot"/>{t('splash.interactive')}
+              </div>
+              <h1 className="font-serif text-[64px] leading-[1.04] font-semibold text-cream-50">
+                LexCore <span className="italic text-rose-300">IA</span>
+              </h1>
+              <div className="mt-3 font-serif text-2xl text-cream-100/85 italic">{t('splash.tagline')}</div>
+              <div className="mt-2 text-sm text-cream-300/70">{t('splash.mock')}</div>
+
+              <div className="mx-auto mt-10 max-w-md text-left font-mono text-[12px] text-cream-100/85">
+                {steps.slice(0, step).map((s, i) => (
+                  <div key={i} className="anim-in flex items-center gap-2 py-0.5">
+                    <I.check className="h-3.5 w-3.5 text-rose-300"/>
+                    <span>{s}</span>
+                  </div>
+                ))}
+                {step < steps.length && (
+                  <div className="flex items-center gap-2 py-0.5">
+                    <span className="inline-block h-3.5 w-3.5 rounded-full border-2 border-cream-300/30 border-t-rose-300 ring-spin"/>
+                    <span>{steps[step]}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-10">
+                <button
+                  onClick={onEnter}
+                  disabled={!ready}
+                  className={`group inline-flex items-center gap-3 rounded-full px-7 py-3 text-sm font-semibold transition ${ready ? 'bg-rose-300 text-forest-800 hover:bg-rose-400 shadow-lift' : 'cursor-not-allowed bg-white/10 text-cream-300/40'}`}>
+                  {ready ? t('splash.enter_ready') : t('splash.enter_loading')}
+                  {ready && <I.chevron className="h-4 w-4 transition group-hover:translate-x-1"/>}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // =============================================================
+      // SIDEBAR
+      // =============================================================
+      const Sidebar = ({ view, setView }) => {
+        const t = useT();
+        const items = [
+          { id: 'dashboard', label: t('sidebar.tableau'), icon: I.dashboard },
+          { id: 'pipeline', label: t('sidebar.pipeline'), icon: I.flow, badge: t('sidebar.badge_live') },
+          { id: 'import', label: t('sidebar.ingestion'), icon: I.upload },
+          { id: 'table', label: t('sidebar.bibliotheque'), icon: I.table },
+          { id: 'chat', label: t('sidebar.recherche'), icon: I.chat },
+          { id: 'syllogisme', label: t('sidebar.syllogisme'), icon: I.scale, badge: t('sidebar.badge_new') },
+          { id: 'generate', label: t('sidebar.generation'), icon: I.wand }
+        ];
+        return (
+          <aside className="flex h-screen w-[260px] flex-shrink-0 flex-col border-r border-cream-400 bg-cream-50">
+            <div className="flex items-center gap-3 px-5 pt-5 pb-4">
+              <div className="grid h-9 w-9 place-items-center rounded-md bg-forest-600 text-cream-100 font-serif text-sm font-bold">APX</div>
+              <div>
+                <div className="text-sm font-semibold text-forest-800">APX Advisory</div>
+                <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">{t('sidebar.legal_ai')}</div>
+              </div>
+            </div>
+
+            <div className="px-3 pt-1 pb-3">
+              <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-[.18em] text-slate-500">{t('sidebar.cabinet_client')}</div>
+              <div className="rounded-lg border border-forest-100 bg-white px-3 py-2">
+                <div className="flex items-start gap-2">
+                  <div className="mt-1 h-2 w-2 rounded-full bg-forest-600"/>
+                  <div className="min-w-0">
+                    <div className="text-sm font-semibold text-forest-800">{PROJECT.firm}</div>
+                    <div className="text-[11px] text-slate-500">{PROJECT.product} · {PROJECT.location}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <nav className="flex-1 space-y-0.5 overflow-y-auto px-3 scroll-area">
+              <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-[.18em] text-slate-500">{t('sidebar.workflow')}</div>
+              {items.map(item => {
+                const Icon = item.icon;
+                const active = view === item.id;
+                return (
+                  <button key={item.id} onClick={() => setView(item.id)}
+                    className={`relative flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-sm transition ${active ? 'bg-forest-600 text-cream-50 shadow-soft' : 'text-forest-800 hover:bg-cream-200'}`}>
+                    <Icon className="h-[18px] w-[18px]"/>
+                    <span className="font-medium">{item.label}</span>
+                    {item.badge && (
+                      <span className={`ml-auto rounded-full px-1.5 py-0.5 text-[9px] font-bold uppercase tracking-wider ${active ? 'bg-rose-300 text-forest-800' : 'bg-rose-100 text-rose-500'}`}>
+                        {item.badge}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+              <div className="mt-4 px-2 py-1 text-[10px] font-medium uppercase tracking-[.18em] text-slate-500">{t('sidebar.roadmap')}</div>
+              {[t('sidebar.ext1'), t('sidebar.ext2'), t('sidebar.ext3')].map(label => (
+                <div key={label} className="flex w-full cursor-not-allowed items-center gap-2.5 rounded-lg px-3 py-2 text-sm text-slate-400">
+                  <I.shield className="h-[18px] w-[18px]"/>
+                  <span className="font-medium">{label}</span>
+                  <span className="ml-auto rounded-full bg-cream-300 px-1.5 py-0.5 text-[9px] font-medium uppercase tracking-wider text-slate-500">M2+</span>
+                </div>
+              ))}
+            </nav>
+
+            <div className="border-t border-cream-400 p-3 text-[11px] leading-relaxed text-slate-500">
+              <div className="mb-1 flex items-center gap-2">
+                <span className="h-1.5 w-1.5 rounded-full bg-forest-500 pulse-dot"/>
+                <span className="font-medium text-forest-800">{t('misc.sla')}</span>
+              </div>
+              <div>Données fictives · aucun corpus client n’est mobilisé.</div>
+            </div>
+          </aside>
+        );
+      };
+
+      // =============================================================
+      // HEADER
+      // =============================================================
+      const TitleMap = {
+        dashboard: 'Tableau de bord',
+        pipeline: 'Pipeline live',
+        import: 'Ingestion & indexation',
+        table: 'Bibliothèque annotée',
+        chat: 'Recherche sourcée',
+        syllogisme: 'Syllogisme juridique',
+        generate: 'Génération guidée'
+      };
+
+      const TitleMapFn = (view, t) => ({
+        dashboard: t('header.title_dashboard'),
+        pipeline: t('header.title_pipeline'),
+        import: t('header.title_import'),
+        table: t('header.title_table'),
+        chat: t('header.title_chat'),
+        syllogisme: t('header.title_syllogisme'),
+        generate: t('header.title_generate')
+      })[view];
+
+      const LangToggle = ({ lang, setLang }) => (
+        <div className="flex items-center gap-0.5 rounded-lg border border-cream-400 bg-white p-0.5">
+          {['fr','en'].map(l => (
+            <button key={l} onClick={() => setLang(l)}
+              className={`rounded-md px-3 py-1 text-xs font-semibold uppercase tracking-wider transition ${lang === l ? 'bg-forest-600 text-cream-50 shadow-soft' : 'text-slate-500 hover:bg-cream-100'}`}>
+              {l}
+            </button>
+          ))}
+        </div>
+      );
+
+      const HeaderBar = ({ view, lang, setLang }) => {
+        const t = useT();
+        return (
+        <header className="flex items-center justify-between border-b border-cream-400 bg-cream-50/85 px-8 py-4 backdrop-blur">
+          <div>
+            <div className="text-[10px] font-medium uppercase tracking-[.2em] text-slate-500">{PROJECT.firm} · {PROJECT.location}</div>
+            <h1 className="font-serif text-[26px] font-semibold tracking-tight text-forest-800">{TitleMapFn(view, t)}</h1>
+          </div>
+          <div className="flex items-center gap-3">
+            <LangToggle lang={lang} setLang={setLang}/>
+            <div className="hidden md:flex items-center gap-2 rounded-lg border border-cream-400 bg-white px-3 py-1.5">
+              <I.search className="h-3.5 w-3.5 text-slate-400"/>
+              <input placeholder={t('header.search_placeholder')} className="w-64 bg-transparent text-xs placeholder:text-slate-400 focus:outline-none"/>
+              <kbd className="rounded border border-cream-400 px-1 font-mono text-[9px] text-slate-500">⌘K</kbd>
+            </div>
+            <div className="rounded-lg border border-cream-400 bg-white px-3 py-1.5 text-[11px]">
+              <div className="text-slate-500">{t('header.trace')}</div>
+              <div className="font-medium text-forest-800">{t('header.illustrative')}</div>
+            </div>
+            <div className="flex items-center gap-2 rounded-lg border border-cream-400 bg-white px-3 py-1.5">
+              <div className="grid h-7 w-7 place-items-center rounded-full bg-forest-600 text-[10px] font-semibold text-cream-100">{PROJECT.reviewer.initials}</div>
+              <div className="text-[11px]">
+                <div className="font-medium text-forest-800">{PROJECT.reviewer.name}</div>
+                <div className="text-slate-500">{PROJECT.reviewer.role}</div>
+              </div>
+            </div>
+          </div>
+        </header>
+        );
+      };
+
+      // =============================================================
+      // AUDIT DRAWER
+      // =============================================================
+      const AuditDrawer = ({ piece, onClose }) => {
+        const t = useT();
+        if (!piece) return null;
+        const theme = getTheme(piece.thematique);
+        return (
+          <div className="fixed inset-0 z-50">
+            <div className="absolute inset-0 bg-forest-900/40 backdrop-blur-sm anim-fade" onClick={onClose}/>
+            <div className="anim-slide absolute right-0 top-0 h-full w-full max-w-xl overflow-y-auto bg-cream-50 shadow-2xl scroll-area">
+              <div className="sticky top-0 z-10 flex items-center justify-between border-b border-cream-400 bg-cream-50/95 px-6 py-4 backdrop-blur">
+                <div>
+                  <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">Audit · {piece.cote === '—' || piece.cote === '?' ? 'sans cote' : `cote ${piece.cote}`} · <span className="font-mono">{piece.id}</span></div>
+                  <div className="font-serif text-lg font-semibold text-forest-800">{piece.nom}</div>
+                </div>
+                <button onClick={onClose} className="grid h-8 w-8 place-items-center rounded-lg text-slate-500 hover:bg-cream-200">
+                  <I.close className="h-4 w-4"/>
+                </button>
+              </div>
+              <div className="space-y-6 p-6">
+                <div className="rounded-xl border border-cream-400 bg-white p-4">
+                  <div className="flex items-center justify-between">
+                    <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">{t('audit.decision')}</div>
+                    <ConfidenceBar value={piece.confidence}/>
+                  </div>
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className={`rounded-md border px-2 py-0.5 text-xs font-medium ${theme.color}`}>{theme.label}</span>
+                    <StatusPill status={piece.status}/>
+                  </div>
+                  <p className="mt-3 text-sm text-slate-700 leading-relaxed">{piece.summary}</p>
+                </div>
+
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">{t('audit.date')}</div>
+                    <div className="font-medium text-forest-800">{fmtDate(piece.date)}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">{t('audit.type')}</div>
+                    <div className="flex items-center gap-1.5 font-medium text-forest-800"><TypeIcon type={piece.type}/>{piece.type}</div>
+                  </div>
+                  {piece.from && (
+                    <div className="col-span-2">
+                      <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">{t('audit.sender')}</div>
+                      <div className="text-sm text-forest-800">{piece.from} <span className="text-slate-400">→</span> {piece.to}</div>
+                    </div>
+                  )}
+                  <div className="col-span-2">
+                    <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">{t('audit.participants')}</div>
+                    <div className="flex flex-wrap gap-1.5 pt-1">
+                      {piece.intervenants.length ? piece.intervenants.map(i => <span key={i} className="rounded-md bg-cream-200 px-2 py-0.5 text-xs text-forest-700">{i}</span>) : <span className="text-sm text-slate-400">{t('audit.none')}</span>}
+                    </div>
+                  </div>
+                </div>
+
+                {piece.extracts.length > 0 && (
+                  <div>
+                    <div className="mb-2 text-[10px] uppercase tracking-[.18em] text-slate-500">{t('audit.extracts')}</div>
+                    <div className="space-y-2">
+                      {piece.extracts.map((ex, i) => <blockquote key={i} className="border-l-2 border-rose-300 bg-rose-50/40 px-3 py-2 font-serif text-sm italic text-forest-800">« {ex} »</blockquote>)}
+                    </div>
+                  </div>
+                )}
+
+                <div>
+                  <div className="mb-2 text-[10px] uppercase tracking-[.18em] text-slate-500">Trace d’audit proposée</div>
+                  <ol className="space-y-2 text-sm">
+                    {piece.auditTrace.map((r, i) => (
+                      <li key={i} className="flex gap-3">
+                        <span className="grid h-5 w-5 flex-shrink-0 place-items-center rounded-full bg-forest-100 text-[11px] font-semibold text-forest-700">{i+1}</span>
+                        <span className="leading-relaxed text-slate-700">{r}</span>
+                      </li>
+                    ))}
+                  </ol>
+                </div>
+
+                <div className="rounded-lg border border-cream-400 bg-white p-3">
+                  <div className="mb-2 text-[10px] uppercase tracking-[.18em] text-slate-500">{t('audit.actions')}</div>
+                  <div className="flex flex-wrap gap-2">
+                    <Btn variant="primary" icon={I.check}>{t('audit.validate')}</Btn>
+                    <Btn variant="ghost">{t('audit.reclassify')}</Btn>
+                    <Btn variant="ghost">{t('audit.report')}</Btn>
+                    <Btn variant="rose" icon={I.scale}>{t('audit.to_syllogism')}</Btn>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // =============================================================
+      // DASHBOARD
+      // =============================================================
+      const Dashboard = ({ setView, openPiece }) => {
+        const t = useT();
+        const recent = PROJECT.pieces.slice(0, 6);
+        const donutData = PROJECT.thematiques.filter(t => t.id !== 'rebut').map(t => ({ value: t.count, color: t.dot, label: t.label }));
+        return (
+          <div className="space-y-6 p-8 anim-in">
+            {/* Hero band */}
+            <div className="overflow-hidden rounded-2xl border border-forest-100 bg-gradient-to-br from-forest-800 via-forest-700 to-forest-600 p-7 text-cream-50 shadow-lift">
+              <div className="grid grid-cols-12 gap-6">
+                <div className="col-span-7">
+                  <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-cream-300/20 bg-white/5 px-2.5 py-0.5 text-[10px] font-medium uppercase tracking-[.18em] text-rose-300">
+                    <I.sparkles className="h-3 w-3"/>{t('dash.memory_badge')}
+                  </div>
+                  <h2 className="font-serif text-3xl font-semibold leading-snug">
+                    {t('dash.hero_title').split('\n')[0]}<br/>{t('dash.hero_title').split('\n')[1]} <span className="italic text-rose-300">{t('dash.hero_em')}</span>.
+                  </h2>
+                  <p className="mt-3 max-w-xl text-sm leading-relaxed text-cream-100/80">
+                    {t('dash.hero_p')}
+                  </p>
+                  <div className="mt-5 flex flex-wrap items-center gap-2">
+                    <Btn variant="rose" icon={I.flow} onClick={() => setView('pipeline')}>Démarrer l’ingestion</Btn>
+                    <Btn variant="ghost" icon={I.scale} onClick={() => setView('syllogisme')}>{t('dash.launch_syllogism')}</Btn>
+                    <Btn variant="ghost" icon={I.chat} onClick={() => setView('chat')}>{t('dash.ask_question')}</Btn>
+                  </div>
+                </div>
+                <div className="col-span-5 grid place-items-center">
+                  <div className="relative">
+                    <Donut data={donutData} size={180}/>
+                    <div className="absolute -bottom-1 left-1/2 -translate-x-1/2 text-[10px] uppercase tracking-[.18em] text-cream-300/70">{t('dash.themes_active')}</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            {/* KPI cards */}
+            <div className="grid grid-cols-4 gap-4">
+              {PROJECT.kpis.map((s, i) => {
+                const v = useCountUp(s.value);
+                const display = s.id === 'time' ? Math.round(v) : Math.round(v);
+                return (
+                  <div key={s.id} className="rounded-xl border border-cream-400 bg-white p-5 shadow-soft transition hover:shadow-lift">
+                    <div className="flex items-start justify-between">
+                      <div>
+                        <div className="text-[10px] font-medium uppercase tracking-[.18em] text-slate-500">{t(s.labelKey)}</div>
+                        <div className="mt-1 font-serif text-3xl font-semibold tabular-nums text-forest-800">{display}{s.unit}</div>
+                      </div>
+                      <Sparkline data={s.spark} color={s.tone === 'good' ? '#1B3B36' : '#D29185'}/>
+                    </div>
+                    <div className="mt-2 text-[11px] text-slate-500">{t(s.subKey)}</div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Practice areas + compliance */}
+            <div className="grid grid-cols-3 gap-4">
+              <div className="col-span-2 rounded-xl border border-cream-400 bg-white p-6 shadow-soft">
+                <div className="mb-4 flex items-center justify-between">
+                  <div>
+                    <div className="font-serif text-lg font-semibold text-forest-800">{t('dash.practice_title')}</div>
+                    <div className="text-xs text-slate-500">Subset mocké du patrimoine documentaire CL</div>
+                  </div>
+                  <button onClick={() => setView('table')} className="text-xs font-medium text-forest-700 hover:text-forest-900">{t('dash.see_library')}</button>
+                </div>
+                <div className="space-y-3">
+                  {PROJECT.practiceAreas.map(p => (
+                    <div key={p.id}>
+                      <div className="flex items-center justify-between text-sm">
+                        <div className="flex items-center gap-2">
+                          <span className="h-2 w-2 rounded-full bg-forest-600" style={{ opacity: 0.4 + p.weight }}/>
+                          <span className="text-forest-800">{p.label}</span>
+                        </div>
+                        <span className="font-mono tabular-nums text-slate-500">{p.count}</span>
+                      </div>
+                      <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-cream-300">
+                        <div className="h-full bg-forest-600 bar-grow" style={{ width: `${p.weight * 100 * 1.4}%` }}/>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              <div className="rounded-xl border border-cream-400 bg-white p-6 shadow-soft">
+                <div className="flex items-center gap-2">
+                  <I.shield className="h-4 w-4 text-forest-700"/>
+                  <div className="font-serif text-lg font-semibold text-forest-800">{t('dash.compliance_title')}</div>
+                </div>
+                <div className="mt-1 text-xs text-slate-500">{t('dash.compliance_sub')}</div>
+                <ul className="mt-4 space-y-3 text-sm">
+                  {[0,1,2,3,4,5].map((i) => (
+                    <li key={i} className="flex items-start gap-2">
+                      <I.check className="mt-0.5 h-4 w-4 flex-shrink-0 text-forest-600"/>
+                      <span className="text-slate-700">{t(`comp.${i}`)}</span>
+                    </li>
+                  ))}
+                </ul>
+                <div className="mt-4 flex items-center justify-between rounded-lg border border-rose-200 bg-rose-50 px-3 py-2">
+                  <div className="flex items-center gap-2 text-rose-500">
+                    <I.lock className="h-3.5 w-3.5"/>
+                    <span className="text-[11px] font-semibold uppercase tracking-wider">{t('dash.data_eu')}</span>
+                  </div>
+                  <Pill tone="rose">{t('dash.verified')}</Pill>
+                </div>
+              </div>
+            </div>
+
+            {/* Recent pieces */}
+            <div className="rounded-xl border border-cream-400 bg-white shadow-soft">
+              <div className="flex items-center justify-between border-b border-cream-400 px-6 py-4">
+                <div>
+                  <div className="font-serif text-lg font-semibold text-forest-800">{t('dash.recent_title')}</div>
+                  <div className="text-xs text-slate-500">Échantillon représentatif · cliquer pour ouvrir l’audit</div>
+                </div>
+                <button onClick={() => setView('table')} className="text-xs font-medium text-forest-700 hover:text-forest-900">{t('dash.see_library')}</button>
+              </div>
+              <div className="divide-y divide-cream-300">
+                {recent.map(p => (
+                  <button key={p.id} onClick={() => openPiece(p)} className="grid w-full grid-cols-12 items-center gap-3 px-6 py-3 text-left text-sm transition hover:bg-cream-100">
+                    <div className="col-span-1 font-mono text-[11px] tabular-nums text-slate-500">{p.cote}</div>
+                    <div className="col-span-5 flex min-w-0 items-center gap-2">
+                      <TypeIcon type={p.type} className="h-4 w-4 flex-shrink-0 text-slate-500"/>
+                      <span className="truncate font-medium text-forest-800">{p.nom}</span>
+                    </div>
+                    <div className="col-span-2 font-mono tabular-nums text-[11px] text-slate-500">{fmtDate(p.date)}</div>
+                    <div className="col-span-2"><span className={`rounded-md border px-2 py-0.5 text-xs ${getTheme(p.thematique).color}`}>{getTheme(p.thematique).label}</span></div>
+                    <div className="col-span-1"><StatusPill status={p.status}/></div>
+                    <div className="col-span-1 flex justify-end"><I.eye className="h-4 w-4 text-slate-400"/></div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // =============================================================
+      // PIPELINE LIVE — animated workflow visualization
+      // =============================================================
+      const PipelineLive = () => {
+        const t = useT();
+        const stages = [
+          { id: 'ingest', label: t('pipe.stage_ingest'), sub: 'PDF · .docx · .msg · img', icon: I.upload },
+          { id: 'ocr', label: t('pipe.stage_ocr'), sub: 'Tesseract · pdfminer', icon: I.layers },
+          { id: 'chunk', label: t('pipe.stage_chunk'), sub: 'sémantique · 512–1024 tk', icon: I.flow },
+          { id: 'embed', label: t('pipe.stage_embed'), sub: 'BGE-M3 · local CPU', icon: I.spark },
+          { id: 'classify', label: t('pipe.stage_classify'), sub: 'Claude · Mistral', icon: I.bolt },
+          { id: 'syllog', label: t('pipe.stage_syllog'), sub: 'majeure · mineure · concl.', icon: I.scale },
+          { id: 'index', label: t('pipe.stage_index'), sub: 'Qdrant · audit PG', icon: I.shield }
+        ];
+        const sample = [
+          { name: 'SPA_LuxCo_2024.docx', stage: 6, conf: 0.94, theme: 'Know-how M&A', tone: 'forest' },
+          { name: 'Email_AIFM_Update.msg', stage: 5, conf: 0.78, theme: 'Réglementaire', tone: 'rose' },
+          { name: 'CSSF_Circular_24-857.pdf', stage: 4, conf: 0.91, theme: 'Réglementaire', tone: 'forest' },
+          { name: 'Term_Sheet_SeriesC.docx', stage: 3, conf: 0.84, theme: 'Clauses', tone: 'forest' },
+          { name: 'Photo_Salon_2024.jpg', stage: 2, conf: 0.97, theme: 'Rebut', tone: 'slate' },
+          { name: 'Memo_Tax_SOPARFI.pdf', stage: 1, conf: null, theme: '—', tone: 'slate' },
+          { name: 'Board_Minutes_2024.docx', stage: 0, conf: null, theme: '—', tone: 'slate' }
+        ];
+
+        const [tick, setTick] = useState(0);
+        useEffect(() => {
+          const id = setInterval(() => setTick(t => t + 1), 1100);
+          return () => clearInterval(id);
+        }, []);
+
+        const counters = useMemo(() => ({
+          ingest: 980 + (tick % 5),
+          ocr: 412 + (tick % 7),
+          embed: 980,
+          classify: 968,
+          syllog: 124 + (tick % 3),
+          rejected: 403
+        }), [tick]);
+
+        return (
+          <div className="space-y-5 p-8 anim-in">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-[10px] font-medium uppercase tracking-[.18em] text-slate-500">Vue temps réel</div>
+                <div className="font-serif text-2xl font-semibold text-forest-800">Pipeline d’ingestion & traitement</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 rounded-full border border-forest-200 bg-white px-3 py-1.5 text-xs">
+                  <span className="h-2 w-2 rounded-full bg-forest-600 pulse-dot"/>
+                  <span className="font-medium text-forest-800">{t('pipe.files_in_progress')}</span>
+                  <span className="text-slate-400">·</span>
+                  <span className="font-mono text-slate-500">{fmtTime()}</span>
+                </div>
+                <Btn variant="ghost" icon={I.history}>{t('pipe.history')}</Btn>
+              </div>
+            </div>
+
+            {/* Big diagram */}
+            <div className="relative overflow-hidden rounded-2xl border border-cream-400 bg-white p-8 shadow-soft grid-paper">
+              <svg className="absolute inset-0 h-full w-full" preserveAspectRatio="none">
+                {/* connecting line */}
+                <line x1="6%" y1="42%" x2="94%" y2="42%" stroke="#B5CAC4" strokeWidth="1.6" strokeLinecap="round" className="flow-path"/>
+              </svg>
+              <div className="relative grid grid-cols-7 gap-2">
+                {stages.map((st, i) => {
+                  const Icon = st.icon;
+                  const active = (tick % stages.length) === i;
+                  return (
+                    <div key={st.id} className="flex flex-col items-center text-center">
+                      <div className={`relative grid h-16 w-16 place-items-center rounded-2xl border transition-all ${active ? 'border-forest-600 bg-forest-600 text-cream-50 shadow-lift scale-105' : 'border-cream-400 bg-cream-50 text-forest-700'}`}>
+                        <Icon className="h-7 w-7"/>
+                        {active && <span className="absolute -right-1 -top-1 h-3 w-3 rounded-full bg-rose-300 ring-4 ring-white pulse-dot"/>}
+                      </div>
+                      <div className="mt-3 font-serif text-sm font-semibold text-forest-800">{st.label}</div>
+                      <div className="text-[10px] leading-tight text-slate-500">{st.sub}</div>
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* live counters */}
+              <div className="mt-8 grid grid-cols-6 gap-3">
+                {[
+                  { lbl: t('pipe.counter_ingest'), val: counters.ingest, accent: 'forest' },
+                  { lbl: t('pipe.counter_ocr'), val: counters.ocr, accent: 'forest' },
+                  { lbl: t('pipe.counter_embed'), val: counters.embed, accent: 'forest' },
+                  { lbl: t('pipe.counter_classified'), val: counters.classify, accent: 'forest' },
+                  { lbl: t('pipe.counter_syllog'), val: counters.syllog, accent: 'rose' },
+                  { lbl: t('pipe.counter_rebut'), val: counters.rejected, accent: 'slate' }
+                ].map((c, i) => (
+                  <div key={i} className={`rounded-xl border px-4 py-3 ${c.accent === 'rose' ? 'border-rose-200 bg-rose-50' : c.accent === 'slate' ? 'border-cream-400 bg-cream-100' : 'border-forest-100 bg-cream-50'}`}>
+                    <div className="text-[10px] font-medium uppercase tracking-[.16em] text-slate-500">{c.lbl}</div>
+                    <div className="font-serif text-2xl font-semibold tabular-nums text-forest-800">{c.val}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* In-flight files */}
+            <div className="rounded-2xl border border-cream-400 bg-white shadow-soft">
+              <div className="flex items-center justify-between border-b border-cream-400 px-6 py-3">
+                <div className="text-sm font-medium text-forest-800">Fichiers en cours · {sample.length}</div>
+                <div className="font-mono text-[11px] text-slate-500">{t('pipe.latency')}</div>
+              </div>
+              <div className="divide-y divide-cream-300">
+                {sample.map((f, i) => {
+                  const pct = ((f.stage + 1) / stages.length) * 100;
+                  return (
+                    <div key={i} className="grid grid-cols-12 items-center gap-3 px-6 py-3 text-sm">
+                      <div className="col-span-4 flex min-w-0 items-center gap-2">
+                        <TypeIcon type={f.name.endsWith('.pdf') ? 'pdf' : f.name.endsWith('.msg') ? 'email' : f.name.endsWith('.jpg') ? 'image' : 'file'} className="h-4 w-4 text-slate-500 flex-shrink-0"/>
+                        <span className="truncate font-medium text-forest-800">{f.name}</span>
+                      </div>
+                      <div className="col-span-5">
+                        <div className="flex items-center justify-between text-[10px] uppercase tracking-wider text-slate-500">
+                          <span>{stages[f.stage].label}</span>
+                          <span>{f.stage + 1}/{stages.length}</span>
+                        </div>
+                        <div className="mt-1 h-2 overflow-hidden rounded-full bg-cream-300">
+                          <div className="h-full bg-forest-600 transition-all duration-500" style={{ width: `${pct}%` }}/>
+                        </div>
+                      </div>
+                      <div className="col-span-2">
+                        {f.theme === '—' ? (
+                          <span className="text-xs text-slate-400">{t('pipe.waiting')}</span>
+                        ) : (
+                          <span className={`rounded-md border px-2 py-0.5 text-xs ${f.tone === 'rose' ? 'bg-rose-50 text-rose-500 border-rose-200' : f.tone === 'slate' ? 'bg-cream-200 text-slate-500 border-cream-400' : 'bg-forest-50 text-forest-700 border-forest-100'}`}>{f.theme}</span>
+                        )}
+                      </div>
+                      <div className="col-span-1 text-right">
+                        {f.conf != null ? <ConfidenceBar value={f.conf}/> : <span className="text-xs text-slate-400">—</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-3 gap-4">
+              <div className="rounded-2xl border border-cream-400 bg-white p-5 shadow-soft">
+                <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">Sécurité réseau</div>
+                <div className="mt-1 font-serif text-base font-semibold text-forest-800">Aucun appel sortant non documenté</div>
+                <div className="mt-3 space-y-1 font-mono text-[11px] text-slate-600">
+                  <div>✓ api.mistral.ai (EU)</div>
+                  <div>✓ bedrock.eu-west-1.amazonaws.com</div>
+                  <div className="text-slate-400">… aucune autre destination</div>
+                </div>
+              </div>
+              <div className="rounded-2xl border border-cream-400 bg-white p-5 shadow-soft">
+                <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">Audit trail</div>
+                <div className="mt-1 font-serif text-base font-semibold text-forest-800">Événements immuables</div>
+                <div className="mt-3 text-2xl font-mono tabular-nums text-forest-800">14 027</div>
+                <div className="text-[11px] text-slate-500">depuis le démarrage de la session</div>
+              </div>
+              <div className="rounded-2xl border border-rose-200 bg-rose-50/50 p-5 shadow-soft">
+                <div className="text-[10px] uppercase tracking-[.18em] text-rose-500">Coût LLM (depuis lundi)</div>
+                <div className="mt-1 font-serif text-base font-semibold text-forest-800">Cumul tokens API</div>
+                <div className="mt-3 text-2xl font-mono tabular-nums text-forest-800">3,42 €</div>
+                <div className="text-[11px] text-slate-500">~0,015 € par dossier moyen</div>
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // =============================================================
+      // IMPORT — drag & drop + per-file simulated stages
+      // =============================================================
+      const ImportPage = () => {
+        const [files, setFiles] = useState([]);
+        const [drag, setDrag] = useState(false);
+        const inputRef = useRef(null);
+        const stages = ['Upload', 'Parsing', 'OCR', 'Chunking', 'Embeddings', 'Classification', 'Indexé'];
+
+        const addMock = () => {
+          const mocks = [
+            { name: 'SPA_NewLuxCo_2026.docx', size: 482, type: 'file' },
+            { name: 'CSSF_Circular_25-901.pdf', size: 1240, type: 'pdf' },
+            { name: 'Email_KYC_Trust.msg', size: 88, type: 'email' },
+            { name: 'Slide_AIFMD_II.pptx', size: 2210, type: 'slides' }
+          ];
+          const items = mocks.map((m, i) => ({ ...m, id: Date.now() + i, stage: 0, conf: null, theme: null }));
+          setFiles(items);
+          // animate stages
+          items.forEach((it, idx) => {
+            stages.forEach((_, sIdx) => {
+              setTimeout(() => {
+                setFiles(fs => fs.map(f => {
+                  if (f.id !== it.id) return f;
+                  const isLast = sIdx === stages.length - 1;
+                  return {
+                    ...f,
+                    stage: sIdx,
+                    conf: isLast ? 0.78 + Math.random() * 0.2 : null,
+                    theme: isLast ? (it.name.includes('CSSF') || it.name.includes('AIFMD') ? 'regulatory' : it.name.includes('SPA') || it.name.includes('Term') ? 'knowhow' : it.name.includes('KYC') ? 'a_revoir' : 'style') : null
+                  };
+                }));
+              }, 220 * sIdx + 180 * idx);
+            });
+          });
+        };
+
+        const onDrop = e => {
+          e.preventDefault(); setDrag(false);
+          if (e.dataTransfer.files.length) addMock();
+          else addMock();
+        };
+
+        return (
+          <div className="space-y-5 p-8 anim-in">
+            <div
+              onDragOver={e => { e.preventDefault(); setDrag(true); }}
+              onDragLeave={() => setDrag(false)}
+              onDrop={onDrop}
+              className={`rounded-2xl border-2 border-dashed border-forest-200 bg-cream-100 p-10 text-center transition ${drag ? 'drop-active' : ''}`}>
+              <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-forest-600 text-cream-50 shadow-lift">
+                <I.upload className="h-7 w-7"/>
+              </div>
+              <div className="font-serif text-xl font-semibold text-forest-800">{t('import.title')}</div>
+              <div className="mx-auto mt-2 max-w-2xl text-sm text-slate-600">{t('import.desc')}</div>
+              <div className="mt-5 flex items-center justify-center gap-3">
+                <Btn variant="primary" icon={I.plus} onClick={addMock} size="lg">{t('import.simulate')}</Btn>
+                <Btn variant="ghost" icon={I.upload} onClick={() => inputRef.current?.click()}>{t('import.choose')}</Btn>
+                <input ref={inputRef} type="file" multiple className="hidden" onChange={addMock}/>
+              </div>
+              <div className="mt-3 flex items-center justify-center gap-4 text-[11px] text-slate-500">
+                <span>PDF · DOCX · XLSX · PPTX</span>
+                <span>·</span>
+                <span>MSG · EML</span>
+                <span>·</span>
+                <span>JPG · PNG (OCR)</span>
+                <span>·</span>
+                <span>ZIP (auto-extract)</span>
+              </div>
+            </div>
+
+            {files.length > 0 && (
+              <div className="rounded-2xl border border-cream-400 bg-white shadow-soft">
+                <div className="flex items-center justify-between border-b border-cream-400 px-6 py-3">
+                  <div className="text-sm font-medium text-forest-800">{t('import.pipeline')}</div>
+                  <Pill tone="forest">{t('import.7steps')}</Pill>
+                </div>
+                <div className="divide-y divide-cream-300">
+                  {files.map(f => {
+                    const pct = ((f.stage + 1) / stages.length) * 100;
+                    return (
+                      <div key={f.id} className="px-6 py-4">
+                        <div className="flex items-center justify-between">
+                          <div className="flex min-w-0 items-center gap-3">
+                            <TypeIcon type={f.type} className="h-5 w-5 text-forest-600 flex-shrink-0"/>
+                            <div className="min-w-0">
+                              <div className="truncate font-medium text-forest-800">{f.name}</div>
+                              <div className="font-mono text-[11px] text-slate-500">{f.size} ko</div>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {f.theme && <span className={`rounded-md border px-2 py-0.5 text-xs ${getTheme(f.theme).color}`}>{getTheme(f.theme).label}</span>}
+                            {f.conf != null && <ConfidenceBar value={f.conf}/>}
+                          </div>
+                        </div>
+                        <div className="mt-3 grid grid-cols-7 gap-1.5">
+                          {stages.map((s, i) => {
+                            const done = i < f.stage;
+                            const cur = i === f.stage;
+                            return (
+                              <div key={s} className="flex flex-col items-center text-center">
+                                <div className={`grid h-5 w-5 place-items-center rounded-full text-[9px] font-bold ${done ? 'bg-forest-600 text-cream-50' : cur ? 'bg-rose-300 text-forest-800 ring-4 ring-rose-100' : 'bg-cream-300 text-slate-400'}`}>
+                                  {done ? <I.check className="h-3 w-3"/> : i + 1}
+                                </div>
+                                <div className={`mt-1 text-[9px] uppercase tracking-wider ${done || cur ? 'text-forest-700' : 'text-slate-400'}`}>{s}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                        <div className="mt-2 h-1 overflow-hidden rounded-full bg-cream-300">
+                          <div className="h-full bg-forest-600 transition-all duration-500" style={{ width: `${pct}%` }}/>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* corpus existant */}
+            <CorpusList/>
+          </div>
+        );
+      };
+
+      const CorpusList = () => {
+        const t = useT();
+        const [filter, setFilter] = useState('all');
+        const filtered = filter === 'all' ? PROJECT.pieces : PROJECT.pieces.filter(p => p.status === filter);
+        const counts = ['all','pertinent','a_revoir','rebut'].map(k => ({ k, n: k==='all' ? PROJECT.pieces.length : PROJECT.pieces.filter(p => p.status === k).length }));
+        return (
+          <div className="space-y-3">
+            <div className="grid grid-cols-4 gap-3 text-sm">
+              {counts.map(f => (
+                <button key={f.k} onClick={() => setFilter(f.k)}
+                  className={`rounded-xl border px-4 py-3 text-left transition ${filter === f.k ? 'border-forest-600 bg-white shadow-soft' : 'border-cream-400 bg-white/60 hover:bg-white'}`}>
+                  <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">{ {all:t('import.filter_all'), pertinent:t('import.filter_pertinent'), a_revoir:t('import.filter_revoir'), rebut:t('import.filter_rebut')}[f.k] }</div>
+                  <div className="font-serif text-2xl font-semibold tabular-nums text-forest-800">{f.n}</div>
+                </button>
+              ))}
+            </div>
+            <div className="rounded-2xl border border-cream-400 bg-white shadow-soft">
+              <div className="flex items-center justify-between border-b border-cream-400 px-6 py-3">
+                <div className="text-sm font-medium text-forest-800">{t('import.corpus_title')}</div>
+                <div className="text-xs text-slate-500">{filtered.length} {t('import.pieces_shown')}</div>
+              </div>
+              <div className="max-h-[420px] divide-y divide-cream-300 overflow-y-auto scroll-area">
+                {filtered.map(p => (
+                  <div key={p.id} className="grid grid-cols-12 items-center gap-3 px-6 py-3 text-sm">
+                    <div className="col-span-1 font-mono text-[11px] tabular-nums text-slate-500">{p.cote}</div>
+                    <div className="col-span-4 flex min-w-0 items-center gap-2"><TypeIcon type={p.type} className="h-4 w-4 flex-shrink-0 text-slate-500"/><span className="truncate font-medium text-forest-800">{p.nom}</span></div>
+                    <div className="col-span-2 font-mono tabular-nums text-[11px] text-slate-500">{fmtDate(p.date)}</div>
+                    <div className="col-span-2"><span className={`rounded-md border px-2 py-0.5 text-xs ${getTheme(p.thematique).color}`}>{getTheme(p.thematique).label}</span></div>
+                    <div className="col-span-1"><StatusPill status={p.status}/></div>
+                    <div className="col-span-2 flex items-center justify-end gap-2"><ConfidenceBar value={p.confidence}/></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // =============================================================
+      // TABLE — bibliothèque éditable
+      // =============================================================
+      const EditableCell = ({ value, onSave, multiline }) => {
+        const [editing, setEditing] = useState(false);
+        const [draft, setDraft] = useState(value);
+        const [flash, setFlash] = useState(false);
+        const ref = useRef(null);
+
+        useEffect(() => setDraft(value), [value]);
+        useEffect(() => { if (editing && ref.current) { ref.current.focus(); ref.current.select?.(); } }, [editing]);
+
+        const commit = () => {
+          if (draft !== value) { onSave(draft); setFlash(true); setTimeout(() => setFlash(false), 800); }
+          setEditing(false);
+        };
+
+        if (editing) {
+          if (multiline) return <textarea ref={ref} className="cell-edit w-full resize-none bg-transparent text-sm text-forest-800" rows="2" value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) commit(); if (e.key === 'Escape') { setDraft(value); setEditing(false); } }}/>;
+          return <input ref={ref} className="cell-edit w-full bg-transparent text-sm text-forest-800" value={draft} onChange={e => setDraft(e.target.value)} onBlur={commit} onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') { setDraft(value); setEditing(false); } }}/>;
+        }
+        return <div onClick={() => setEditing(true)} className={`-mx-1 cursor-text rounded px-1 transition hover:bg-rose-50/50 ${flash ? 'ring-2 ring-forest-300 ring-offset-1' : ''}`} title="Cliquez pour éditer">{value || <span className="text-slate-300">—</span>}</div>;
+      };
+
+      const TablePage = ({ openPiece }) => {
+        const t = useT();
+        const [rows, setRows] = useState(() => PROJECT.pieces.filter(p => p.status !== 'rebut').map(p => ({ ...p, contenuShort: p.summary })));
+        const [history, setHistory] = useState([]);
+        const [thFilter, setThFilter] = useState('all');
+        const [search, setSearch] = useState('');
+
+        const filtered = useMemo(() => rows.filter(r => (thFilter === 'all' || r.thematique === thFilter) && (!search || r.nom.toLowerCase().includes(search.toLowerCase()) || r.contenuShort.toLowerCase().includes(search.toLowerCase()))), [rows, thFilter, search]);
+
+        const updateRow = (id, key, value) => {
+          setRows(rs => rs.map(r => {
+            if (r.id !== id) return r;
+            setHistory(h => [{ ts: new Date().toLocaleTimeString('fr-FR'), rowId: id, cote: r.cote, key, prev: r[key], next: value }, ...h].slice(0, 8));
+            return { ...r, [key]: value };
+          }));
+        };
+
+        return (
+          <div className="space-y-4 p-8 anim-in">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <div className="font-serif text-lg font-semibold text-forest-800">{t('table.title')}</div>
+                <div className="text-xs text-slate-500">{t('table.sub')}</div>
+              </div>
+              <div className="flex items-center gap-2">
+                <input type="search" placeholder={t('table.search')} value={search} onChange={e => setSearch(e.target.value)} className="w-64 rounded-lg border border-cream-400 bg-white px-3 py-1.5 text-sm placeholder:text-slate-400 focus:border-forest-300 focus:outline-none focus:ring-2 focus:ring-forest-100"/>
+                <Btn variant="ghost" icon={I.download}>Excel</Btn>
+                <Btn variant="ghost" icon={I.download}>Word</Btn>
+                <Btn variant="primary" icon={I.scale}>{t('table.to_syllogism')}</Btn>
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button onClick={() => setThFilter('all')} className={`rounded-full border px-3 py-1 text-xs font-medium transition ${thFilter === 'all' ? 'border-forest-600 bg-forest-600 text-cream-50' : 'border-cream-400 bg-white text-forest-800 hover:bg-cream-100'}`}>{t('table.all_themes')}</button>
+              {PROJECT.thematiques.filter(t => t.id !== 'rebut').map(t => (
+                <button key={t.id} onClick={() => setThFilter(t.id)} className={`rounded-full border px-3 py-1 text-xs font-medium transition ${thFilter === t.id ? `${t.color} border-current` : 'border-cream-400 bg-white text-forest-800 hover:bg-cream-100'}`}>
+                  {t.label}<span className="ml-1.5 tabular-nums opacity-60">{rows.filter(r => r.thematique === t.id).length}</span>
+                </button>
+              ))}
+            </div>
+
+            <div className="overflow-hidden rounded-2xl border border-cream-400 bg-white shadow-soft">
+              <div className="overflow-x-auto scroll-area">
+                <table className="w-full text-sm">
+                  <thead className="bg-cream-100 text-[10px] uppercase tracking-[.16em] text-slate-600">
+                    <tr>
+                      <th className="w-16 px-4 py-3 text-left font-medium">Cote</th>
+                      <th className="w-28 px-4 py-3 text-left font-medium">Date</th>
+                      <th className="px-4 py-3 text-left font-medium">Pièce</th>
+                      <th className="w-44 px-4 py-3 text-left font-medium">Intervenants</th>
+                      <th className="px-4 py-3 text-left font-medium">Sommaire</th>
+                      <th className="w-44 px-4 py-3 text-left font-medium">Thématique</th>
+                      <th className="w-28 px-4 py-3 text-left font-medium">Confiance</th>
+                      <th className="w-20 px-4 py-3 text-right font-medium">Audit</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-cream-300">
+                    {filtered.map(r => {
+                      const theme = getTheme(r.thematique);
+                      return (
+                        <tr key={r.id} className="hover:bg-cream-100/60">
+                          <td className="px-4 py-3 align-top font-mono text-[11px] text-slate-600"><EditableCell value={r.cote} onSave={v => updateRow(r.id, 'cote', v)}/></td>
+                          <td className="px-4 py-3 align-top font-mono tabular-nums text-[11px] text-slate-600">{fmtDate(r.date)}</td>
+                          <td className="px-4 py-3 align-top">
+                            <div className="flex items-center gap-2">
+                              <TypeIcon type={r.type} className="h-4 w-4 flex-shrink-0 text-slate-400"/>
+                              <span className="font-medium text-forest-800">{r.nom}</span>
+                            </div>
+                          </td>
+                          <td className="px-4 py-3 align-top">
+                            <div className="flex flex-wrap gap-1">{r.intervenants.slice(0,3).map(i => <span key={i} className="rounded bg-cream-200 px-1.5 py-0.5 text-xs text-forest-700">{i}</span>)}</div>
+                          </td>
+                          <td className="max-w-md px-4 py-3 align-top"><EditableCell value={r.contenuShort} onSave={v => updateRow(r.id, 'contenuShort', v)} multiline/></td>
+                          <td className="px-4 py-3 align-top">
+                            <select value={r.thematique} onChange={e => updateRow(r.id, 'thematique', e.target.value)} className={`rounded-md border px-2 py-1 text-xs font-medium ${theme.color} focus:outline-none`}>
+                              {PROJECT.thematiques.map(t => <option key={t.id} value={t.id}>{t.label}</option>)}
+                            </select>
+                          </td>
+                          <td className="px-4 py-3 align-top"><ConfidenceBar value={r.confidence}/></td>
+                          <td className="px-4 py-3 align-top text-right">
+                            <button onClick={() => openPiece(r)} className="inline-flex items-center gap-1 rounded-md border border-cream-400 px-2 py-1 text-xs text-forest-700 hover:bg-cream-100">
+                              <I.eye className="h-3.5 w-3.5"/>Voir
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="border-t border-cream-400 bg-cream-100/60 px-4 py-2 text-xs text-slate-600">
+                {filtered.length} lignes affichées · edits persistés en mémoire de session · audit trail conservé
+              </div>
+            </div>
+
+            {history.length > 0 && (
+              <div className="rounded-2xl border border-cream-400 bg-white p-4 shadow-soft">
+                <div className="mb-2 flex items-center gap-2">
+                  <I.history className="h-4 w-4 text-slate-500"/>
+                  <div className="text-sm font-medium text-forest-800">Historique des modifications (session)</div>
+                </div>
+                <ul className="space-y-1 text-xs text-slate-600">
+                  {history.map((h, i) => (
+                    <li key={i} className="flex items-baseline gap-2 font-mono">
+                      <span className="tabular-nums text-slate-400">{h.ts}</span>
+                      <span className="font-medium text-forest-800">{h.cote} · {h.key}</span>
+                      <span className="text-slate-400">{(h.prev || '—').toString().slice(0, 36)}</span>
+                      <span className="text-slate-400">→</span>
+                      <span className="text-forest-700">{(h.next || '—').toString().slice(0, 56)}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      // =============================================================
+      // CHAT — streaming responses
+      // =============================================================
+      const formatChatBody = text => text.split('\n').map((line, i) => {
+        const parts = []; let lastIdx = 0;
+        const re = /\[(\d+)\]|\*\*(.+?)\*\*|\*(.+?)\*/g; let m;
+        while ((m = re.exec(line)) !== null) {
+          if (m.index > lastIdx) parts.push(line.slice(lastIdx, m.index));
+          if (m[1] !== undefined) parts.push({ cite: parseInt(m[1], 10) });
+          else if (m[2] !== undefined) parts.push({ bold: m[2] });
+          else parts.push({ italic: m[3] });
+          lastIdx = re.lastIndex;
+        }
+        if (lastIdx < line.length) parts.push(line.slice(lastIdx));
+        return { key: i, parts };
+      });
+
+      const ChatPage = ({ openPiece }) => {
+        const t = useT();
+        const [history, setHistory] = useState(PROJECT.chatHistory);
+        const [draft, setDraft] = useState('');
+        const [activePiece, setActivePiece] = useState(null);
+        const [streaming, setStreaming] = useState(false);
+        const [streamText, setStreamText] = useState('');
+        const [streamCitations, setStreamCitations] = useState([]);
+        const scrollRef = useRef(null);
+
+        const responses = {
+          default: { text: 'D’après la **base mockée CL**, l’élément le plus utile est *l’email style guide* [1] qui fixe la préférence pour "we note" plutôt que "we believe", complété par le **brouillon d’alert AIFM** [2] qui structure la séparation obligations / monitoring.', citations: ['PP-004','PP-006'] },
+          ubo: { text: 'Le mémo UBO interne [1] identifie un caveat récurrent : *les seuils de propriété effective sont systématiquement mal compris côté client*. Le SPA annoté [2] illustre une formulation prudente sur les déclarations de bénéficiaires.', citations: ['PP-005','PP-001'] }
+        };
+
+        useEffect(() => {
+          if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }, [history, streamText]);
+
+        const send = () => {
+          if (!draft || streaming) return;
+          const userMsg = { role: 'user', content: draft };
+          setHistory(h => [...h, userMsg]);
+          const txt = draft;
+          setDraft('');
+          setStreaming(true);
+          const resp = txt.toLowerCase().includes('ubo') ? responses.ubo : responses.default;
+          setStreamCitations(resp.citations);
+          let i = 0;
+          const id = setInterval(() => {
+            i += 2;
+            if (i > resp.text.length) {
+              clearInterval(id);
+              setHistory(h => [...h, { role: 'assistant', content: resp.text, citations: resp.citations }]);
+              setStreamText(''); setStreamCitations([]); setStreaming(false);
+              return;
+            }
+            setStreamText(resp.text.slice(0, i));
+          }, 18);
+        };
+
+        return (
+          <div className="grid h-[calc(100vh-78px)] grid-cols-3 gap-0 anim-in">
+            <div className="col-span-2 flex flex-col border-r border-cream-400 bg-cream-50">
+              <div ref={scrollRef} className="flex-1 overflow-y-auto px-8 py-6 scroll-area">
+                <div className="mx-auto max-w-3xl space-y-6">
+                  <div className="rounded-xl border border-rose-200 bg-rose-50/50 px-4 py-3 text-sm text-forest-800">
+                    <div className="flex items-center gap-2 font-medium">
+                      <I.shield className="h-4 w-4 text-rose-500"/>
+  {t('chat.banner_title')}
+                    </div>
+                    <div className="mt-1 text-xs text-slate-600">{t('chat.banner_sub')}</div>
+                  </div>
+
+                  {history.map((m, idx) => (
+                    <div key={idx} className={`flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                      <div className={`max-w-[85%] rounded-2xl px-5 py-3 ${m.role === 'user' ? 'bg-forest-700 text-cream-50 shadow-soft' : 'border border-cream-400 bg-white text-forest-800 shadow-soft'}`}>
+                        <div className="whitespace-pre-wrap text-sm leading-relaxed">
+                          {formatChatBody(m.content).map(row => (
+                            <div key={row.key}>
+                              {row.parts.map((p, i) => {
+                                if (typeof p === 'string') return <span key={i}>{p}</span>;
+                                if (p.bold) return <strong key={i} className="font-semibold">{p.bold}</strong>;
+                                if (p.italic) return <em key={i} className="italic">{p.italic}</em>;
+                                if (p.cite !== undefined) {
+                                  const cid = m.citations?.[p.cite - 1];
+                                  const piece = cid ? getPiece(cid) : null;
+                                  return <button key={i} onClick={() => piece && setActivePiece(piece)} className={`mx-0.5 inline-flex items-baseline rounded px-1 py-0 text-xs font-semibold ${m.role === 'user' ? 'bg-white/20' : 'bg-rose-100 text-rose-500 hover:bg-rose-200'}`}>[{p.cite}]</button>;
+                                }
+                                return null;
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                        {m.role === 'assistant' && m.citations && (
+                          <div className="mt-3 flex flex-wrap items-center gap-2 border-t border-cream-300 pt-2">
+                            <span className="text-[10px] uppercase tracking-[.18em] text-slate-500">{t('chat.sources')}</span>
+                            {m.citations.map((cid, i) => {
+                              const p = getPiece(cid);
+                              if (!p) return null;
+                              return (
+                                <button key={cid} onClick={() => setActivePiece(p)} className="inline-flex items-center gap-1 rounded-md border border-cream-400 px-2 py-0.5 text-xs hover:bg-cream-100">
+                                  <span className="font-semibold text-rose-500">[{i+1}]</span>
+                                  <span className="text-forest-800">{p.cote}</span>
+                                  <span className="text-slate-400">·</span>
+                                  <span className="max-w-[140px] truncate text-slate-600">{p.nom}</span>
+                                </button>
+                              );
+                            })}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+
+                  {/* streaming response */}
+                  {streaming && (
+                    <div className="flex justify-start anim-in">
+                      <div className="max-w-[85%] rounded-2xl border border-cream-400 bg-white px-5 py-3 text-forest-800 shadow-soft">
+                        <div className="text-sm leading-relaxed typing-cursor">
+                          {formatChatBody(streamText).map(row => (
+                            <div key={row.key}>
+                              {row.parts.map((p, i) => {
+                                if (typeof p === 'string') return <span key={i}>{p}</span>;
+                                if (p.bold) return <strong key={i} className="font-semibold">{p.bold}</strong>;
+                                if (p.italic) return <em key={i} className="italic">{p.italic}</em>;
+                                if (p.cite !== undefined) return <span key={i} className="mx-0.5 rounded bg-rose-100 px-1 text-xs font-semibold text-rose-500">[{p.cite}]</span>;
+                                return null;
+                              })}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="border-t border-cream-400 bg-cream-50 px-8 py-4">
+                <div className="mx-auto max-w-3xl">
+                  <div className="flex items-end gap-2 rounded-xl border border-cream-400 bg-white px-3 py-2 shadow-soft focus-within:border-forest-300 focus-within:ring-2 focus-within:ring-forest-100">
+                    <textarea rows="1" placeholder="Posez votre question juridique au cabinet…"
+                      value={draft}
+                      onChange={e => setDraft(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); } }}
+                      className="flex-1 resize-none bg-transparent text-sm text-forest-800 placeholder:text-slate-400 focus:outline-none"/>
+                    <button onClick={send} disabled={!draft || streaming} className="grid h-8 w-8 place-items-center rounded-lg bg-forest-700 text-cream-50 transition disabled:bg-cream-300 disabled:text-slate-400 hover:bg-forest-800">
+                      <I.send className="h-4 w-4"/>
+                    </button>
+                  </div>
+                  <div className="mt-2 flex flex-wrap gap-2">{PROJECT.chatSuggestions.map((s, i) => <button key={i} onClick={() => setDraft(t(`chat.${s}`))} className="rounded-full border border-cream-400 bg-cream-50 px-3 py-1 text-xs text-forest-800 hover:bg-white">{t(`chat.${s}`)}</button>)}</div>
+                </div>
+              </div>
+            </div>
+            <div className="col-span-1 flex h-full flex-col bg-cream-100">
+              {activePiece ? (
+                <div className="flex h-full flex-col">
+                  <div className="border-b border-cream-400 bg-white px-5 py-4">
+                    <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">Source · {activePiece.cote}</div>
+                    <div className="mt-1 font-serif text-base font-semibold text-forest-800">{activePiece.nom}</div>
+                    <div className="mt-1 text-xs text-slate-500">{fmtDate(activePiece.date)} · {activePiece.intervenants.join(', ') || '—'}</div>
+                  </div>
+                  <div className="flex-1 space-y-4 overflow-y-auto p-5 text-sm scroll-area">
+                    <p className="leading-relaxed text-forest-800">{activePiece.summary}</p>
+                    {activePiece.extracts.length ? (
+                      <div>
+                        <div className="mb-2 text-[10px] uppercase tracking-[.18em] text-slate-500">{t('chat.cited')}</div>
+                        {activePiece.extracts.map((e, i) => (
+                          <blockquote key={i} className="mb-2 border-l-2 border-rose-300 bg-rose-50/40 px-3 py-2 font-serif text-sm italic text-forest-800">
+                            <mark className="cite">{e}</mark>
+                          </blockquote>
+                        ))}
+                      </div>
+                    ) : null}
+                  </div>
+                  <div className="border-t border-cream-400 bg-white p-3">
+                    <button onClick={() => openPiece(activePiece)} className="w-full rounded-lg border border-cream-400 px-3 py-2 text-xs font-medium text-forest-800 hover:bg-cream-100">
+                      Voir la trace d’audit complète
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                <div className="flex h-full flex-col items-center justify-center px-6 text-center">
+                  <div className="mb-3 grid h-12 w-12 place-items-center rounded-full bg-white text-slate-400 shadow-soft"><I.eye className="h-5 w-5"/></div>
+                  <div className="font-serif text-lg font-semibold text-forest-800">{t('chat.source_preview')}</div>
+                  <div className="mt-1 max-w-xs text-sm text-slate-500">{t('chat.click_cite')}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      };
+
+      // =============================================================
+      // SYLLOGISME JURIDIQUE — THE WOW PAGE
+      // =============================================================
+      const SyllogismeStep = ({ idx, label, latin, sub, sources, body, color = 'forest', running, done }) => {
+        const tones = {
+          forest: { ring: 'ring-forest-200', icon: 'bg-forest-600 text-cream-50', label: 'text-forest-700', card: 'bg-white border-forest-100' },
+          rose: { ring: 'ring-rose-200', icon: 'bg-rose-300 text-forest-800', label: 'text-rose-500', card: 'bg-white border-rose-100' },
+          dark: { ring: 'ring-forest-300', icon: 'bg-forest-800 text-cream-50', label: 'text-forest-800', card: 'bg-cream-50 border-forest-200' }
+        };
+        const t = tones[color];
+        return (
+          <div className={`relative rounded-2xl border p-6 shadow-soft ${t.card} ${running ? 'ring-4 ' + t.ring : ''} ${done ? 'opacity-100' : !running ? 'opacity-40' : 'opacity-100'}`}>
+            <div className="flex items-start gap-4">
+              <div className="flex flex-col items-center gap-2">
+                <div className={`grid h-10 w-10 place-items-center rounded-full font-serif text-sm font-bold ${t.icon}`}>{idx}</div>
+                {running && <div className="h-3 w-3 rounded-full bg-rose-300 pulse-dot"/>}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-baseline justify-between">
+                  <div>
+                    <div className={`text-[10px] uppercase tracking-[.2em] ${t.label}`}>{label}</div>
+                    <div className="font-serif text-xl font-semibold italic text-forest-800">{latin}</div>
+                    <div className="text-xs text-slate-500">{sub}</div>
+                  </div>
+                  {sources && sources.length > 0 && (
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {sources.map((sid, i) => {
+                        const p = getPiece(sid);
+                        if (!p) return null;
+                        return (
+                          <span key={sid} className="inline-flex items-center gap-1 rounded-md border border-cream-400 bg-white px-2 py-0.5 text-[11px]">
+                            <span className="font-semibold text-rose-500">[{i+1}]</span>
+                            <span className="font-mono text-forest-800">{p.cote}</span>
+                          </span>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+                {body && <p className="mt-3 font-serif text-[15px] leading-7 text-forest-800">{body}</p>}
+                {running && !body && (
+                  <div className="mt-3 space-y-2">
+                    <div className="skeleton h-3 w-11/12 rounded"/>
+                    <div className="skeleton h-3 w-9/12 rounded"/>
+                    <div className="skeleton h-3 w-10/12 rounded"/>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      const SyllogismePage = ({ openPiece }) => {
+        const t = useT();
+        const cases = PROJECT.syllogismes;
+        const [activeId, setActiveId] = useState(cases[0].id);
+        const [phase, setPhase] = useState(0); // 0=idle, 1=majeure running, 2=majeure done+mineure, 3=conclusion, 4=done
+        const cur = cases.find(c => c.id === activeId);
+
+        const run = () => {
+          setPhase(1);
+          setTimeout(() => setPhase(2), 1300);
+          setTimeout(() => setPhase(3), 2700);
+          setTimeout(() => setPhase(4), 4100);
+        };
+
+        useEffect(() => { setPhase(0); }, [activeId]);
+
+        const riskTone = cur?.conclusion.risk === 'low' ? 'bg-forest-50 text-forest-700 border-forest-200' : cur?.conclusion.risk === 'medium' ? 'bg-amber-50 text-amber-800 border-amber-200' : 'bg-rose-50 text-rose-500 border-rose-200';
+        const riskLabel = { low: t('syl.risk_low'), medium: t('syl.risk_medium'), high: t('syl.risk_high') }[cur?.conclusion.risk || 'low'];
+
+        return (
+          <div className="grid h-[calc(100vh-78px)] grid-cols-12 gap-0 anim-in">
+            {/* left rail — case selector */}
+            <div className="col-span-3 flex flex-col gap-3 overflow-y-auto border-r border-cream-400 bg-cream-100 p-5 scroll-area">
+              <div>
+                <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">{t('syl.question_label')}</div>
+                <div className="font-serif text-lg font-semibold text-forest-800">{t('syl.cases_title')}</div>
+              </div>
+              {cases.map((c, i) => (
+                <button key={c.id} onClick={() => setActiveId(c.id)}
+                  className={`rounded-xl border px-4 py-3 text-left transition ${activeId === c.id ? 'border-forest-600 bg-white shadow-soft' : 'border-cream-400 bg-white/60 hover:bg-white'}`}>
+                  <div className="text-[10px] uppercase tracking-[.16em] text-slate-500">Cas {i+1}</div>
+                  <div className="mt-1 font-serif text-sm leading-snug text-forest-800">{c.question}</div>
+                </button>
+              ))}
+              <div className="mt-3 rounded-xl border border-rose-200 bg-rose-50/50 p-4">
+                <div className="flex items-center gap-2">
+                  <I.sparkles className="h-4 w-4 text-rose-500"/>
+                  <div className="text-[10px] uppercase tracking-[.18em] text-rose-500 font-semibold">Comment ça marche</div>
+                </div>
+                <ul className="mt-2 space-y-1.5 text-xs text-forest-800 leading-relaxed">
+                  <li>1. Récupération des règles applicables (RAG sur le corpus interne).</li>
+                  <li>2. Qualification des faits du dossier.</li>
+                  <li>3. Conclusion juridique sourcée + actions concrètes.</li>
+                </ul>
+                <div className="mt-3 text-[11px] text-slate-600 italic">{t('syl.assistive')}</div>
+              </div>
+            </div>
+
+            {/* center — syllogism */}
+            <div className="col-span-6 overflow-y-auto bg-cream-50 p-8 scroll-area">
+              {/* Question hero */}
+              <div className="rounded-2xl border border-forest-200 bg-gradient-to-br from-forest-700 via-forest-600 to-forest-500 p-6 text-cream-50 shadow-lift">
+                <div className="flex items-start justify-between gap-4">
+                  <div>
+                    <div className="text-[10px] uppercase tracking-[.2em] text-rose-300">{t('syl.submitted')}</div>
+                    <div className="mt-2 font-serif text-2xl leading-snug">{cur.question}</div>
+                  </div>
+                  <Btn variant="rose" icon={I.scale} onClick={run}>{phase === 0 ? t('syl.launch') : phase === 4 ? t('syl.replay') : t('syl.in_progress')}</Btn>
+                </div>
+                {phase > 0 && (
+                  <div className="mt-4 flex items-center gap-2 text-[11px] text-cream-200/80">
+                    <span className={`h-1.5 w-1.5 rounded-full ${phase < 4 ? 'bg-rose-300 pulse-dot' : 'bg-forest-200'}`}/>
+                    {phase < 4 ? `${t('syl.step_in_progress')} ${phase}/3…` : `${t('syl.complete')} · ${cur.conclusion.actions.length} ${t('syl.actions_generated')}`}
+                  </div>
+                )}
+              </div>
+
+              {phase === 0 ? (
+                <div className="mt-6 rounded-2xl border-2 border-dashed border-cream-400 bg-white/60 p-12 text-center">
+                  <div className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-full bg-white text-forest-600 shadow-soft"><I.scale className="h-6 w-6"/></div>
+                  <div className="font-serif text-lg text-forest-800">{t('syl.click_to_launch')} <strong>{t('syl.launch')}</strong> {t('syl.to_see')}</div>
+                  <div className="mt-1 text-sm text-slate-500">Trois étapes : majeure (la règle) · mineure (les faits) · conclusion (l’avis sourcé).</div>
+                </div>
+              ) : (
+                <div className="mt-6 space-y-4">
+                  <SyllogismeStep
+                    idx="I"
+                    label={t('syl.majeure_label')}
+                    latin="Praemissa major"
+                    sub={t('syl.majeure_sub')}
+                    color="forest"
+                    sources={phase >= 2 ? cur.majeure.sources : null}
+                    body={phase >= 2 ? cur.majeure.text : null}
+                    running={phase === 1}
+                    done={phase >= 2}
+                  />
+                  <SyllogismeStep
+                    idx="II"
+                    label={t('syl.mineure_label')}
+                    latin="Praemissa minor"
+                    sub={t('syl.mineure_sub')}
+                    color="rose"
+                    sources={phase >= 3 ? cur.mineure.sources : null}
+                    body={phase >= 3 ? cur.mineure.text : null}
+                    running={phase === 2}
+                    done={phase >= 3}
+                  />
+                  <SyllogismeStep
+                    idx="III"
+                    label="Conclusion"
+                    latin="Conclusio"
+                    sub="L’avis du cabinet et les actions à conduire"
+                    color="dark"
+                    sources={null}
+                    body={phase >= 4 ? cur.conclusion.text : null}
+                    running={phase === 3}
+                    done={phase >= 4}
+                  />
+
+                  {phase >= 4 && (
+                    <div className="anim-pop rounded-2xl border-2 border-rose-300 bg-rose-50/40 p-6">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <div className="text-[10px] uppercase tracking-[.18em] text-rose-500 font-semibold">{t('syl.synthesis_label')}</div>
+                          <div className="font-serif text-xl text-forest-800">{t('syl.actions_title')}</div>
+                        </div>
+                        <span className={`rounded-full border px-3 py-1 text-[11px] font-semibold ${riskTone}`}>{riskLabel}</span>
+                      </div>
+                      <ol className="mt-4 space-y-2.5">
+                        {cur.conclusion.actions.map((a, i) => (
+                          <li key={i} className="flex items-start gap-3">
+                            <span className="grid h-6 w-6 flex-shrink-0 place-items-center rounded-full bg-forest-600 text-[11px] font-semibold text-cream-50">{i+1}</span>
+                            <span className="font-serif text-[15px] text-forest-800">{a}</span>
+                          </li>
+                        ))}
+                      </ol>
+                      <div className="mt-5 flex flex-wrap items-center justify-end gap-2">
+                        <Btn variant="ghost" icon={I.download}>{t('syl.export_memo')}</Btn>
+                        <Btn variant="ghost" icon={I.history}>Verser à l’audit</Btn>
+                        <Btn variant="primary" icon={I.check}>{t('syl.validate_send')}</Btn>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* right — sources panel */}
+            <div className="col-span-3 flex flex-col gap-3 overflow-y-auto border-l border-cream-400 bg-white p-5 scroll-area">
+              <div>
+                <div className="text-[10px] uppercase tracking-[.18em] text-slate-500">{t('syl.sources_label')}</div>
+                <div className="font-serif text-lg font-semibold text-forest-800">{t('syl.corpus_pieces')}</div>
+              </div>
+              {[...new Set([...(cur.majeure.sources || []), ...(cur.mineure.sources || [])])].map(sid => {
+                const p = getPiece(sid);
+                if (!p) return null;
+                return (
+                  <button key={sid} onClick={() => openPiece(p)} className="rounded-xl border border-cream-400 bg-cream-50 p-3 text-left hover:bg-white">
+                    <div className="flex items-center gap-2">
+                      <TypeIcon type={p.type} className="h-4 w-4 text-slate-500"/>
+                      <span className="font-mono text-[11px] text-slate-500">{p.cote}</span>
+                      <span className={`ml-auto rounded-md border px-2 py-0.5 text-[10px] ${getTheme(p.thematique).color}`}>{getTheme(p.thematique).label}</span>
+                    </div>
+                    <div className="mt-1 font-medium text-sm text-forest-800">{p.nom}</div>
+                    <div className="mt-1 text-[11px] text-slate-500 line-clamp-2">{p.summary}</div>
+                    <ConfidenceBar value={p.confidence}/>
+                  </button>
+                );
+              })}
+              <div className="mt-2 rounded-xl border border-cream-400 bg-cream-100 p-3 text-[11px] leading-relaxed text-slate-600">
+                <div className="mb-1 flex items-center gap-1.5 font-semibold text-forest-800">
+                  <I.shield className="h-3.5 w-3.5"/>Garanties
+                </div>
+                Les fragments envoyés au LLM ne dépassent jamais 2 000 tokens. Les embeddings restent locaux. Le raisonnement est journalisé dans l’audit trail immuable.
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // =============================================================
+      // GENERATE — drafting page (improved)
+      // =============================================================
+      const GeneratePage = () => {
+        const t = useT();
+        const [tplId, setTplId] = useState(PROJECT.templates[0].id);
+        const [authorId, setAuthorId] = useState(PROJECT.lawyers[0].id);
+        const [generated, setGenerated] = useState(false);
+        const [generating, setGenerating] = useState(false);
+        const tpl = PROJECT.templates.find(tp => tp.id === tplId);
+        const lawyer = PROJECT.lawyers.find(l => l.id === authorId);
+
+        const launch = () => {
+          setGenerating(true);
+          setGenerated(false);
+          setTimeout(() => { setGenerating(false); setGenerated(true); }, 1600);
+        };
+
+        return (
+          <div className="grid h-[calc(100vh-78px)] grid-cols-12 gap-0 anim-in">
+            <div className="col-span-3 space-y-5 overflow-y-auto border-r border-cream-400 bg-cream-50 p-5 scroll-area">
+              <div>
+                <div className="mb-1.5 text-[10px] font-medium uppercase tracking-[.18em] text-slate-500">Modèle d’acte</div>
+                <div className="space-y-1.5">{PROJECT.templates.map(t => (
+                  <button key={t.id} onClick={() => setTplId(t.id)} className={`w-full rounded-lg border px-3 py-2 text-left transition ${tplId === t.id ? 'border-forest-600 bg-white shadow-soft' : 'border-cream-400 hover:bg-white'}`}>
+                    <div className="text-sm font-medium text-forest-800">{t(tpl2.labelKey)}</div>
+                    <div className="mt-0.5 text-[11px] leading-snug text-slate-500">{t(tpl2.descKey)}</div>
+                  </button>
+                ))}</div>
+              </div>
+              <div>
+                <div className="mb-1.5 text-[10px] font-medium uppercase tracking-[.18em] text-slate-500">{t('gen.style_label')}</div>
+                <div className="space-y-1.5">{PROJECT.lawyers.map(l => (
+                  <button key={l.id} onClick={() => setAuthorId(l.id)} className={`w-full rounded-lg border px-3 py-2 text-left transition ${authorId === l.id ? 'border-forest-600 bg-white shadow-soft' : 'border-cream-400 hover:bg-white'}`}>
+                    <div className="text-sm font-medium text-forest-800">{l.label}</div>
+                    <div className="mt-0.5 text-[11px] leading-snug text-slate-500">{t(l.styleKey)}</div>
+                  </button>
+                ))}</div>
+              </div>
+              <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-xs leading-relaxed text-forest-800">
+                <div className="mb-1 flex items-center gap-1.5 font-medium text-rose-500">
+                  <I.info className="h-3.5 w-3.5"/>Brouillon assisté
+                </div>
+                L’IA propose un premier draft à 75–80 % exploitable. La rédaction finale et la validation partner restent des actes humains.
+              </div>
+              <Btn variant="primary" icon={I.wand} onClick={launch}>{generating ? t('gen.generating') : t('gen.generate')}</Btn>
+            </div>
+            <div className="col-span-9 overflow-y-auto bg-cream-100 scroll-area">
+              <div className="mx-auto my-8 max-w-3xl rounded-2xl border border-cream-400 bg-white shadow-lift">
+                <div className="border-b border-cream-400 px-10 py-6">
+                  <div className="text-[10px] font-medium uppercase tracking-[.18em] text-slate-500">{tpl?.label} · {t('gen.style')} {lawyer?.label}</div>
+                  <h2 className="mt-1 font-serif text-2xl font-semibold text-forest-800">{t('gen.nda_title')}</h2>
+                  <div className="mt-2 text-xs text-slate-500">{t('gen.draft_date')} {new Date().toLocaleDateString()} {t('gen.citations_visible')}</div>
+                </div>
+                <div className="px-10 py-8 font-serif text-[15px] leading-7 text-forest-800">
+                  {generating ? (
+                    <div className="space-y-3">
+                      <div className="skeleton h-5 w-7/12 rounded"/>
+                      <div className="skeleton h-3 w-11/12 rounded"/>
+                      <div className="skeleton h-3 w-10/12 rounded"/>
+                      <div className="skeleton h-3 w-9/12 rounded"/>
+                      <div className="mt-6 skeleton h-5 w-6/12 rounded"/>
+                      <div className="skeleton h-3 w-11/12 rounded"/>
+                      <div className="skeleton h-3 w-9/12 rounded"/>
+                    </div>
+                  ) : !generated ? (
+                    <div className="rounded-lg border-2 border-dashed border-cream-400 bg-cream-50 px-6 py-12 text-center">
+                      <div className="mx-auto mb-2 grid h-10 w-10 place-items-center rounded-full bg-white text-slate-400 shadow-soft"><I.wand className="h-5 w-5"/></div>
+                      <div className="text-sm text-slate-600">{t('gen.select_template')} <strong>{t('gen.generate_word')}</strong>.</div>
+                      <div className="mt-1 text-xs text-slate-500">Le brouillon s’affichera ici, avec ses sources internes et un footer de validation.</div>
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {PROJECT.draftBlocks.map((b, i) => b.kind === 'h2' ? (
+                        <h3 key={i} className="mt-6 font-serif text-lg font-semibold text-forest-800">{b.text}</h3>
+                      ) : (
+                        <div key={i} className="group relative">
+                          <p className="text-justify">
+                            {b.text}
+                            {b.sources.map((s, j) => (
+                              <sup key={s} className="ml-0.5 rounded bg-rose-100 px-1 text-xs font-semibold text-rose-500" title={getPiece(s)?.nom}>{j+1}</sup>
+                            ))}
+                          </p>
+                          {b.sources.length > 0 && (
+                            <div className="hover-source pointer-events-none absolute -right-44 top-0 w-40 opacity-0 transition group-hover:opacity-100">
+                              {b.sources.map((s, j) => {
+                                const p = getPiece(s);
+                                return (
+                                  <div key={s} className="mb-1 rounded-md border border-cream-400 bg-white p-2 text-[11px] shadow-soft">
+                                    <div className="font-sans font-medium text-rose-500">[{j+1}] {p?.cote}</div>
+                                    <div className="truncate font-sans text-slate-600">{p?.nom}</div>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                {generated && (
+                  <div className="flex items-center justify-between border-t border-cream-400 bg-cream-50/60 px-10 py-4 text-xs">
+                    <div className="text-slate-600">{t('gen.footer_note')}</div>
+                    <div className="flex gap-2">
+                      <Btn variant="ghost" icon={I.download}>Word</Btn>
+                      <Btn variant="ghost" icon={I.download}>PDF</Btn>
+                      <Btn variant="primary" icon={I.check}>{t('gen.validate')}</Btn>
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        );
+      };
+
+      // =============================================================
+      // APP
+      // =============================================================
+      const App = () => {
+        const [splash, setSplash] = useState(true);
+        const [view, setView] = useState('dashboard');
+        const [auditPiece, setAuditPiece] = useState(null);
+        const [lang, setLang] = useState('fr');
+
+        const page = {
+          dashboard: <Dashboard setView={setView} openPiece={setAuditPiece}/>,
+          pipeline: <PipelineLive/>,
+          import: <ImportPage/>,
+          table: <TablePage openPiece={setAuditPiece}/>,
+          chat: <ChatPage openPiece={setAuditPiece}/>,
+          syllogisme: <SyllogismePage openPiece={setAuditPiece}/>,
+          generate: <GeneratePage/>
+        }[view];
+
+        return (
+          <LangContext.Provider value={lang}>
+            {splash && <Splash onEnter={() => setSplash(false)} lang={lang} setLang={setLang}/>}
+            <div className="flex h-screen overflow-hidden">
+              <Sidebar view={view} setView={setView}/>
+              <div className="flex flex-1 flex-col overflow-hidden">
+                <HeaderBar view={view} lang={lang} setLang={setLang}/>
+                <div className="flex-1 overflow-y-auto scroll-area bg-cream-100">{page}</div>
+              </div>
+              <AuditDrawer piece={auditPiece} onClose={() => setAuditPiece(null)}/>
+            </div>
+          </LangContext.Provider>
+        );
+      };
+
+      ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+    </script>
+  </body>
+</html>
