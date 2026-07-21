@@ -1,0 +1,27 @@
+.DS_Store
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+.next/
+dist/
+build/
+*.tsbuildinfo
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# BMAD — personal, machine-local
+_bmad/custom/config.user.toml
+_bmad/_memory/
