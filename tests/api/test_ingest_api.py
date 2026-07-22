@@ -50,7 +50,7 @@ def test_ingest_without_a_db_computes_but_does_not_persist(tmp_path: Path, monke
 def test_read_back_without_a_database_is_503(monkeypatch) -> None:
     monkeypatch.delenv("DATABASE_URL", raising=False)
     with TestClient(app) as c:
-        r = c.get("/api/matters/m/inventory", params={"tenant": "t"})
+        r = c.get("/api/matters/m/inventory", params={"tenant": "t", "scopes": "m"})
     assert r.status_code == 503
 
 
@@ -66,7 +66,7 @@ def test_ingest_persists_and_reads_back(tmp_path: Path, monkeypatch) -> None:
     with TestClient(app) as c:
         r = c.post("/api/ingest", json={"folder": str(matter_dir), "matter": "m", "tenant": "t"})
         assert r.json()["persisted"] is True
-        back = c.get("/api/matters/m/inventory", params={"tenant": "t"}).json()
+        back = c.get("/api/matters/m/inventory", params={"tenant": "t", "scopes": "m"}).json()
 
     # Durable inventory = corpus + failures (exclusions are a per-run detail).
     assert back["in_corpus"] == 1
@@ -91,3 +91,35 @@ def test_ingest_upload_reconstructs_the_tree_and_counts(monkeypatch) -> None:
     assert inv["consistent"] and inv["submitted"] == 3
     assert inv["in_corpus"] == 1  # letter.txt
     assert inv["failures"] == 2  # empty.txt (extracted-empty), photo.jpg (unsupported)
+
+
+def test_chinese_wall_over_http(tmp_path: Path, monkeypatch) -> None:
+    url = f"sqlite:///{tmp_path / 'apx.db'}"
+    Base.metadata.create_all(create_engine(url))
+    monkeypatch.setenv("DATABASE_URL", url)
+    da, db = tmp_path / "a", tmp_path / "b"
+    da.mkdir()
+    db.mkdir()
+    (da / "x.txt").write_text("dossier A", encoding="utf-8")
+    (db / "y.txt").write_text("dossier B", encoding="utf-8")
+
+    def _read(c, matter, scope):
+        return c.get(f"/api/matters/{matter}/inventory", params={"tenant": "t", "scopes": scope})
+
+    def _ingest(c, folder, matter, scope):
+        return c.post(
+            "/api/ingest",
+            json={"folder": str(folder), "matter": matter, "tenant": "t", "scope": scope},
+        )
+
+    with TestClient(app) as c:
+        _ingest(c, da, "m-a", "wall-A")
+        _ingest(c, db, "m-b", "wall-B")
+
+        # A user holding wall-A sees only m-a.
+        listed = c.get("/api/matters", params={"tenant": "t", "scopes": "wall-A"}).json()
+        assert {m["matter"] for m in listed} == {"m-a"}
+
+        # Reading m-b with the wrong wall is refused (403); with the right wall, 200.
+        assert _read(c, "m-b", "wall-A").status_code == 403
+        assert _read(c, "m-b", "wall-B").status_code == 200

@@ -1,6 +1,5 @@
-"""Store writer tests against in-memory SQLite (the writer LOGIC; Postgres DDL is
-verified in CI). Real SQL, real constraints — not a fixture: the store is a real
-adapter, SQLite is only the test substrate for its behaviour.
+"""Store tests against in-memory SQLite: persistence, idempotency, and the
+Chinese-wall scope PRE-filter. Real SQL, real constraints — not a fixture.
 """
 
 from __future__ import annotations
@@ -14,7 +13,7 @@ from sqlalchemy.pool import StaticPool
 
 from apx.adapters.extraction.files import FileExtractor
 from apx.adapters.store_postgres.models import Base
-from apx.adapters.store_postgres.store import SqlStore
+from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
 from apx.core.app.ingest import ingest_folder
 
 
@@ -33,36 +32,44 @@ def _matter(root: Path) -> None:
     (root / "bad.jpg").write_bytes(b"nope")  # unsupported-format -> failure
 
 
+def _ingest(root: Path, matter: str):
+    return ingest_folder(root, matter=matter, tenant="t", extractor=FileExtractor())
+
+
 def test_save_then_read_durable_inventory(tmp_path: Path, store: SqlStore) -> None:
     _matter(tmp_path)
-    result = ingest_folder(tmp_path, matter="m", tenant="t", extractor=FileExtractor())
-    outcome = store.save(result)
-    assert outcome.pieces_written == 2
-    assert outcome.failures_written == 1
-
-    inv = store.inventory(matter="m", tenant="t")
-    assert inv.in_corpus == 2
-    assert inv.failures == 1
-    assert inv.is_consistent()
+    out = store.save(_ingest(tmp_path, "m"), scope="wall-1")
+    assert out.pieces_written == 2 and out.failures_written == 1
+    inv = store.inventory("m", "t", {"wall-1"})
+    assert inv.in_corpus == 2 and inv.failures == 1 and inv.is_consistent()
 
 
-def test_re_ingesting_the_same_folder_does_not_duplicate(tmp_path: Path, store: SqlStore) -> None:
+def test_re_ingesting_does_not_duplicate(tmp_path: Path, store: SqlStore) -> None:
     _matter(tmp_path)
-    result = ingest_folder(tmp_path, matter="m", tenant="t", extractor=FileExtractor())
-    store.save(result)
-    store.save(result)  # same content, same matter -> same ids -> no duplication (AD-40)
-
-    inv = store.inventory(matter="m", tenant="t")
-    assert inv.in_corpus == 2  # not 4
-    assert inv.failures == 1  # not 2
+    r = _ingest(tmp_path, "m")
+    store.save(r, scope="wall-1")
+    store.save(r, scope="wall-1")
+    inv = store.inventory("m", "t", {"wall-1"})
+    assert inv.in_corpus == 2 and inv.failures == 1  # not doubled (AD-40)
 
 
-def test_matters_are_isolated_in_read_back(tmp_path: Path, store: SqlStore) -> None:
+def test_scope_prefilter_hides_matters_outside_the_wall(tmp_path: Path, store: SqlStore) -> None:
     _matter(tmp_path)
-    r1 = ingest_folder(tmp_path, matter="m1", tenant="t", extractor=FileExtractor())
-    r2 = ingest_folder(tmp_path, matter="m2", tenant="t", extractor=FileExtractor())
-    store.save(r1)
-    store.save(r2)
-    # Same files, two matters -> two separate pieces each (confidentiality follows the matter).
-    assert store.inventory("m1", "t").in_corpus == 2
-    assert store.inventory("m2", "t").in_corpus == 2
+    store.save(_ingest(tmp_path, "m-a"), scope="wall-A")
+    store.save(_ingest(tmp_path, "m-b"), scope="wall-B")
+
+    # A user holding only wall-A sees m-a and NOT m-b.
+    assert {m.matter for m in store.matters("t", {"wall-A"})} == {"m-a"}
+    # Holding both walls sees both.
+    assert {m.matter for m in store.matters("t", {"wall-A", "wall-B"})} == {"m-a", "m-b"}
+    # No scope -> nothing (fail closed).
+    assert store.matters("t", set()) == []
+
+
+def test_reading_a_matter_outside_scope_is_refused(tmp_path: Path, store: SqlStore) -> None:
+    _matter(tmp_path)
+    store.save(_ingest(tmp_path, "m-b"), scope="wall-B")
+    with pytest.raises(ScopeDenied):
+        store.inventory("m-b", "t", {"wall-A"})  # holds the wrong wall
+    with pytest.raises(ScopeDenied):
+        store.inventory("does-not-exist", "t", {"wall-A"})  # existence not disclosed

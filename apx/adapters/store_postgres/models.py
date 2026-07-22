@@ -59,3 +59,18 @@ class Failure(Base):
     resolution_state: Mapped[str] = mapped_column(String, nullable=False)  # open|resolved
     detail: Mapped[str | None] = mapped_column(Text, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class MatterScope(Base):
+    """The authoritative matter -> scope mapping (AD-13). Scope is resolved from
+    here at query time and pre-filters every read — it is NEVER denormalised onto
+    piece/chunk rows, so a re-scope takes effect at the next query with nothing to
+    propagate. One scope per matter here (the Chinese-wall unit); the grant
+    mechanics (which users hold which scope) are story 1.6.
+    """
+
+    __tablename__ = "matter_scope"
+
+    matter: Mapped[str] = mapped_column(String, primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    scope: Mapped[str] = mapped_column(String, nullable=False)

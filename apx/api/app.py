@@ -23,8 +23,8 @@ from pydantic import BaseModel
 
 from apx.adapters.extraction.files import FileExtractor
 from apx.adapters.store_postgres.engine import make_session_factory
-from apx.adapters.store_postgres.store import SqlStore
-from apx.core.app.ingest import ingest_folder
+from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
+from apx.core.app.ingest import IngestionResult, ingest_folder
 
 app = FastAPI(title="APX", version="0.0.0")
 
@@ -45,6 +45,7 @@ class IngestRequest(BaseModel):
     folder: str
     matter: str
     tenant: str
+    scope: str = ""  # the Chinese-wall scope; defaults to the matter itself (its own wall)
     custodian: str = "custodian-undeclared"
 
 
@@ -70,11 +71,30 @@ class IngestResponse(BaseModel):
     persisted: bool  # transparent: whether the result was written to the durable store
 
 
+class MatterOut(BaseModel):
+    matter: str
+    scope: str
+    inventory: InventoryOut
+
+
 def _inventory_out(inv) -> InventoryOut:  # noqa: ANN001
     return InventoryOut(
         submitted=inv.submitted, in_corpus=inv.in_corpus, failures=inv.failures,
         exclusions=inv.exclusions, consistent=inv.is_consistent(),
     )
+
+
+def _persist(result: IngestionResult, scope: str) -> bool:
+    """Persist under the given Chinese-wall scope, if a database is configured."""
+    store = _store()
+    if store is None:
+        return False
+    store.save(result, scope)
+    return True
+
+
+def _parse_scopes(scopes: str) -> set[str]:
+    return {s.strip() for s in scopes.split(",") if s.strip()}
 
 
 @app.get("/api/health")
@@ -91,11 +111,7 @@ def ingest(req: IngestRequest) -> IngestResponse:
         folder, matter=req.matter, tenant=req.tenant,
         extractor=FileExtractor(), custodian=req.custodian,
     )
-    store = _store()
-    persisted = False
-    if store is not None:
-        store.save(result)
-        persisted = True
+    persisted = _persist(result, req.scope or req.matter)
     return IngestResponse(
         matter=req.matter,
         inventory=_inventory_out(result.inventory),
@@ -112,6 +128,7 @@ def ingest(req: IngestRequest) -> IngestResponse:
 async def ingest_upload(
     matter: str = Form(...),
     tenant: str = Form(...),
+    scope: str = Form(""),
     files: list[UploadFile] = Form(...),
 ) -> IngestResponse:
     """The browser path: a lawyer drops files (or a folder) and sees the inventory.
@@ -130,11 +147,7 @@ async def ingest_upload(
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(await f.read())
         result = ingest_folder(root, matter=matter, tenant=tenant, extractor=FileExtractor())
-    store = _store()
-    persisted = False
-    if store is not None:
-        store.save(result)
-        persisted = True
+    persisted = _persist(result, scope or matter)
     return IngestResponse(
         matter=matter,
         inventory=_inventory_out(result.inventory),
@@ -147,11 +160,28 @@ async def ingest_upload(
     )
 
 
-@app.get("/api/matters/{matter}/inventory", response_model=InventoryOut)
-def read_inventory(matter: str, tenant: str) -> InventoryOut:
-    """The durable inventory for a matter (corpus + open failures). Requires a
-    database — a read-back has nowhere to read from otherwise."""
+@app.get("/api/matters", response_model=list[MatterOut])
+def list_matters(tenant: str, scopes: str) -> list[MatterOut]:
+    """Every matter the caller may see — pre-filtered by their RBAC scope (the
+    Chinese wall, AD-13/AD-14). `scopes` is comma-separated; empty means none."""
     store = _store()
     if store is None:
         raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
-    return _inventory_out(store.inventory(matter, tenant))
+    return [
+        MatterOut(matter=m.matter, scope=m.scope, inventory=_inventory_out(m.inventory))
+        for m in store.matters(tenant, _parse_scopes(scopes))
+    ]
+
+
+@app.get("/api/matters/{matter}/inventory", response_model=InventoryOut)
+def read_inventory(matter: str, tenant: str, scopes: str) -> InventoryOut:
+    """The durable inventory for a matter — 403 if its scope is not held (fail
+    closed, and the matter's existence is not disclosed)."""
+    store = _store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    try:
+        inv = store.inventory(matter, tenant, _parse_scopes(scopes))
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    return _inventory_out(inv)

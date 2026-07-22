@@ -43,8 +43,8 @@ def _piece(pid: str) -> IngestedPiece:
 
 
 def test_save_and_read_back_on_postgres(pg_store: SqlStore) -> None:
-    pg_store.save(IngestionResult(pieces=[_piece("a"), _piece("b")]))
-    inv = pg_store.inventory("m", "t")
+    pg_store.save(IngestionResult(pieces=[_piece("a"), _piece("b")]), scope="w")
+    inv = pg_store.inventory("m", "t", {"w"})
     assert inv.in_corpus == 2 and inv.is_consistent()
 
 

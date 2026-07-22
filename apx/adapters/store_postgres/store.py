@@ -1,12 +1,14 @@
-"""The store writer — persist an ingestion result and read back the durable inventory.
+"""The store — persist an ingestion result, read back the durable inventory, and
+enforce the Chinese wall (RBAC scope) as a query PRE-filter (AD-13, AD-14).
 
 Idempotent by construction: a piece is keyed by its deterministic id
 (content, matter), a failure by (matter, submitted_path), so re-ingesting the same
-folder does not duplicate (the v1 defect was ids from a restarting counter). The
-writer maps app/domain values onto the SQLAlchemy models; the core never imports
-this adapter (adapter → core is the allowed direction). The frozen-schema rigor —
-the ONE-writer static check, the RBAC scope write-time reconciliation — lands in
-story 1.3; this slice persists what "drop a folder, see the inventory" needs.
+folder does not duplicate. Scope is resolved from the authoritative `matter_scope`
+table at query time and constrains every read — it is never denormalised onto
+piece/chunk rows, so a re-scope takes effect at the next query with nothing to
+propagate. The adapter imports app/domain types (adapter -> core is allowed); the
+core imports no adapter. The frozen-schema rigor and the single-read-path static
+check are stories 1.3 / 3.3; this slice carries the working pre-filter.
 """
 
 from __future__ import annotations
@@ -18,15 +20,26 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from apx.adapters.store_postgres.models import Failure, Piece
+from apx.adapters.store_postgres.models import Failure, MatterScope, Piece
 from apx.core.app.ingest import IngestionResult
 from apx.core.domain.inventory import Inventory
+
+
+class ScopeDenied(Exception):
+    """A read touched a matter outside the caller's RBAC scope. Fail closed."""
 
 
 @dataclass(frozen=True)
 class SaveOutcome:
     pieces_written: int
     failures_written: int
+
+
+@dataclass(frozen=True)
+class MatterSummary:
+    matter: str
+    scope: str
+    inventory: Inventory
 
 
 def _failure_id(matter: str, submitted_path: str) -> str:
@@ -37,13 +50,17 @@ class SqlStore:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._sf = session_factory
 
-    def save(self, result: IngestionResult) -> SaveOutcome:
-        now = (
-            result.pieces[0].ingestion_timestamp
-            if result.pieces
-            else datetime.now(UTC)
+    def save(self, result: IngestionResult, scope: str) -> SaveOutcome:
+        now = result.pieces[0].ingestion_timestamp if result.pieces else datetime.now(UTC)
+        matter = result.pieces[0].matter if result.pieces else (
+            result.failures[0].matter if result.failures else None
+        )
+        tenant = result.pieces[0].tenant if result.pieces else (
+            result.failures[0].tenant if result.failures else None
         )
         with self._sf() as session, session.begin():
+            if matter is not None and tenant is not None:
+                session.merge(MatterScope(matter=matter, tenant=tenant, scope=scope))
             for p in result.pieces:
                 session.merge(
                     Piece(
@@ -68,21 +85,50 @@ class SqlStore:
                 )
         return SaveOutcome(len(result.pieces), len(result.failures))
 
-    def inventory(self, matter: str, tenant: str) -> Inventory:
-        """The DURABLE inventory: corpus + open failures. Exclusions are a per-run
-        detail (not persisted), so submitted here = corpus + failures."""
+    def _counts(self, session: Session, matter: str, tenant: str) -> tuple[int, int]:
+        in_corpus = session.scalar(
+            select(func.count()).select_from(Piece).where(
+                Piece.matter == matter, Piece.tenant == tenant
+            )
+        ) or 0
+        failures = session.scalar(
+            select(func.count()).select_from(Failure).where(
+                Failure.matter == matter, Failure.tenant == tenant,
+                Failure.resolution_state == "open",
+            )
+        ) or 0
+        return in_corpus, failures
+
+    def matters(self, tenant: str, scopes: set[str]) -> list[MatterSummary]:
+        """Every matter the caller may see — pre-filtered by scope IN the query."""
+        if not scopes:
+            return []  # fail closed: no scope, no matters
         with self._sf() as session:
-            in_corpus = session.scalar(
-                select(func.count()).select_from(Piece).where(
-                    Piece.matter == matter, Piece.tenant == tenant
+            rows = session.execute(
+                select(MatterScope.matter, MatterScope.scope).where(
+                    MatterScope.tenant == tenant, MatterScope.scope.in_(scopes)
                 )
-            ) or 0
-            failures = session.scalar(
-                select(func.count()).select_from(Failure).where(
-                    Failure.matter == matter, Failure.tenant == tenant,
-                    Failure.resolution_state == "open",
+            ).all()
+            out = []
+            for matter, scope in rows:
+                in_corpus, failures = self._counts(session, matter, tenant)
+                out.append(
+                    MatterSummary(
+                        matter, scope,
+                        Inventory(in_corpus + failures, in_corpus, failures, 0),
+                    )
                 )
-            ) or 0
-        return Inventory(
-            submitted=in_corpus + failures, in_corpus=in_corpus, failures=failures, exclusions=0
-        )
+        return sorted(out, key=lambda m: m.matter)
+
+    def inventory(self, matter: str, tenant: str, scopes: set[str]) -> Inventory:
+        """The durable inventory for one matter — refused if its scope is not held."""
+        with self._sf() as session:
+            scope = session.scalar(
+                select(MatterScope.scope).where(
+                    MatterScope.matter == matter, MatterScope.tenant == tenant
+                )
+            )
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)  # fail closed, and never disclose existence
+            in_corpus, failures = self._counts(session, matter, tenant)
+        return Inventory(in_corpus + failures, in_corpus, failures, 0)
