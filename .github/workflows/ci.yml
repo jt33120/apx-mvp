@@ -52,6 +52,41 @@ jobs:
       - name: Offline-boot and driver tests (no outbound network)
         run: uv run pytest tests/fitness -q
 
+  # The real database: run the migration up AND down (reversibility), then the
+  # store's PostgreSQL integration tests (the DDL + CHECK constraint the SQLite
+  # unit tests cannot cover). This is where the first migration meets a real DB.
+  db:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg18
+        env:
+          POSTGRES_USER: apx
+          POSTGRES_PASSWORD: apxci
+          POSTGRES_DB: apx
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U apx -d apx"
+          --health-interval 10s --health-timeout 5s --health-retries 5
+    env:
+      DATABASE_URL: postgresql+psycopg://apx:apxci@localhost:5432/apx
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Pin Python
+        run: uv python install 3.13.14
+      - name: Sync (runtime + dev)
+        run: uv sync --group dev
+      - name: Migration up
+        run: uv run alembic upgrade head
+      - name: Migration down (reversibility)
+        run: uv run alembic downgrade base
+      - name: Migration up again
+        run: uv run alembic upgrade head
+      - name: Store integration tests (real PostgreSQL)
+        run: uv run pytest tests/adapters -q
+
   web:
     runs-on: ubuntu-latest
     defaults:
