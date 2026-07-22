@@ -13,6 +13,17 @@ The contracts themselves are declared in ``pyproject.toml``'s
 and KEPT, and none may be BROKEN. Deleting a required contract is therefore a
 failure, not a silent pass — the lesson from the story 1.1 review, generalised
 from one rule to the set.
+
+**Known limitation (by design, not a gap to paper over).** This is a *static*
+import-graph check: it catches ``import boto3`` and ``from google import cloud``
+in source, but NOT a dynamic import (``importlib.import_module("boto3")``) whose
+target is a runtime string. Static analysis cannot see a string. The egress guard
+therefore prevents *code reaching for* a hosted SDK in source; the **network
+isolation** (the offline boot here, and container ``--network none`` as the
+pipeline grows) is what prevents *actual* egress at runtime. The two are
+complementary — neither alone is complete, and neither is presented as if it were.
+A determined insider can always exfiltrate; this guard raises the bar against the
+casual or accidental hosted-SDK dependency, which is its real job.
 """
 
 from __future__ import annotations
