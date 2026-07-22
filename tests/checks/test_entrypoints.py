@@ -9,17 +9,15 @@ ships — the FastAPI app and the Procrastinate worker app — and nothing more.
 from __future__ import annotations
 
 
-def test_api_app_imports_and_has_no_routes() -> None:
+def test_api_app_imports_and_exposes_the_slice_routes() -> None:
     from apx.api.app import app
 
-    # 1.1 ships the boundary only: zero routes. FastAPI mounts a couple of internal
-    # routes (docs/openapi); assert no *user* route was added.
-    user_paths = [
-        r.path
-        for r in app.routes
-        if getattr(r, "path", "").startswith("/api")
-    ]
-    assert user_paths == [], f"story 1.1 ships no routes; found {user_paths}"
+    # Slice A adds the inventory path. (Story 1.1 shipped the empty boundary; the
+    # slice legitimately wires routes onto it.) Assert the app imports and the
+    # expected routes are present — an import regression or a dropped route fails.
+    paths = {getattr(r, "path", "") for r in app.routes}
+    assert "/api/health" in paths
+    assert "/api/ingest" in paths
 
 
 def test_worker_app_imports_with_no_apx_tasks() -> None:

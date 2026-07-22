@@ -1,10 +1,11 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Static SPA build (AD-29): emits static assets to dist/, no Node runtime ships.
-// All data access goes to the one API over HTTP; no server-rendering layer exists,
-// so matter scope has exactly one place it can be wrong (the API), not two.
+// Static SPA (AD-29): all data access is HTTP to the one API (AD-14). In dev,
+// proxy /api to the backend; in production the SPA is served as static files and
+// talks to the same-origin API.
 export default defineConfig({
   plugins: [react()],
   build: { outDir: "dist" },
+  server: { proxy: { "/api": "http://localhost:8000" } },
 });
