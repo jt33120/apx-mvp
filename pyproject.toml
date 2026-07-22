@@ -36,6 +36,7 @@ dev = [
     "import-linter>=2.0",  # the layering rule (AD-4); AD-33 names "import-graph rule", not the tool
     "pytest>=8.0",         # test runner (unnamed by the spine; the Python convention, and the salvaged v1 suite used it)
     "ruff>=0.6",           # lint (AD-33 "lint")
+    "httpx2>=2.0",         # starlette TestClient transport, for the offline-boot fitness test
 ]
 
 [build-system]
@@ -57,12 +58,33 @@ exclude = ["apx/web"]
 # ─────────────────────────────────────────────────────────────────────────────
 [tool.importlinter]
 root_package = "apx"
+# Required because the egress deny-list forbids EXTERNAL packages (boto3, supabase, …).
+include_external_packages = true
 
 [[tool.importlinter.contracts]]
 name = "core imports no adapter (AD-4)"
 type = "forbidden"
 source_modules = ["apx.core"]
 forbidden_modules = ["apx.adapters"]
+
+# ── Egress deny-list (AD-45, AD-3): "only code travels" / runs air-gapped. ──
+# No apx runtime module may import a hosted-provider SDK. Enforced as a
+# structural property; a dropped rule is a build failure (see apx/checks/import_contracts.py).
+[[tool.importlinter.contracts]]
+name = "apx imports no hosted SDK (AD-45)"
+type = "forbidden"
+source_modules = ["apx"]
+forbidden_modules = ["supabase", "boto3", "botocore", "google", "vercel"]
+allow_indirect_imports = true
+
+# The OpenAI-compatible client is legitimate inside apx.adapters.llm_openai_compat
+# (it talks to a LOCAL vLLM/Ollama endpoint, AD-27) but must never reach the core.
+[[tool.importlinter.contracts]]
+name = "core imports no hosted LLM SDK (AD-27)"
+type = "forbidden"
+source_modules = ["apx.core"]
+forbidden_modules = ["openai"]
+allow_indirect_imports = true
 
 # [[tool.importlinter.contracts]]  # tightened in 1.12
 # name = "domain imports nothing outside itself (AD-4)"

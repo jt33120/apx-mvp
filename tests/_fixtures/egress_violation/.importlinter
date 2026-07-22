@@ -1,0 +1,12 @@
+[importlinter]
+root_packages =
+    bad_egress
+include_external_packages = True
+
+[importlinter:contract:no-hosted-sdk]
+name = bad_egress imports no hosted SDK (fixture of AD-45)
+type = forbidden
+source_modules =
+    bad_egress
+forbidden_modules =
+    boto3

@@ -27,6 +27,31 @@ jobs:
       - name: Tests (incl. the layering failure-path regression, AC5)
         run: uv run pytest -q
 
+  # The offline fitness frame (AD-2): the app boots and the checks hold with the
+  # offline env set and no outbound network. The end-to-end coverage grows as the
+  # pipeline is built (the driver marks unbuilt stages PENDING; it never fakes one).
+  fitness:
+    runs-on: ubuntu-latest
+    env:
+      HF_HUB_OFFLINE: "1"
+      TRANSFORMERS_OFFLINE: "1"
+      DO_NOT_TRACK: "1"
+      SCARF_NO_ANALYTICS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Pin Python
+        run: uv python install 3.13.14
+      - name: Sync (runtime + dev)
+        run: uv sync --group dev
+      - name: Structural checks (layering AD-4 + egress deny-list AD-45/AD-27)
+        run: uv run python -m apx.checks
+      - name: End-to-end fitness driver (start + checks; the rest grows)
+        run: uv run python -m apx.fitness
+      - name: Offline-boot and driver tests (no outbound network)
+        run: uv run pytest tests/fitness -q
+
   web:
     runs-on: ubuntu-latest
     defaults:

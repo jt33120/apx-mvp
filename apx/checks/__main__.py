@@ -7,8 +7,8 @@ checks without editing the runner — the deny-list (AD-3), the egress check
 no-secret-in-source (AD-51), and the rest land here, not elsewhere, so a cut
 cannot drop them.
 
-Story 1.1 registers exactly one check: the layering rule (core imports no
-adapter, AD-4), green on the empty tree.
+Registered: the import-contracts check (layering AD-4 + egress deny-list AD-45/AD-27).
+Green on the empty tree; a dropped or broken contract fails the build.
 """
 
 from __future__ import annotations
@@ -16,13 +16,13 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 
-from apx.checks import layering
-from apx.checks.layering import CheckResult
+from apx.checks import import_contracts
+from apx.checks.import_contracts import CheckResult
 
 # The registry. Each entry names its pattern and the AD it enforces (AD-33).
 # Later stories append here; they do not rewrite the runner.
 CHECKS: list[Callable[[], CheckResult]] = [
-    layering.run,
+    import_contracts.run,
 ]
 
 

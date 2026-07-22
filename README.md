@@ -60,6 +60,24 @@ tests/             # unreachable from any runtime module (AD-16)
 deploy/            # docker-compose (the single service); upgrade/backup land later
 ```
 
+## Offline fitness (AD-2)
+
+"Can this run, unmodified, on one machine inside a firm with no internet?" is
+measured in CI from week one, not discovered in front of a client.
+
+```bash
+uv run python -m apx.fitness   # the end-to-end driver (asserts what exists, marks the rest PENDING)
+uv run pytest tests/fitness -q # offline boot (no outbound network) + driver honesty
+```
+
+The frame guarantees today: the app boots with the offline env set and makes no
+outbound network call, and the **egress deny-list** fails the build if any `apx`
+runtime module imports a hosted-provider SDK (`supabase`, `boto3`, `google`, …;
+`openai` is forbidden in the core — it belongs behind the local-LLM adapter). The
+driver enumerates the full FR-55 pipeline; stages that do not exist yet are printed
+`PENDING (story N)` and are **never** faked green. Coverage grows as the pipeline
+is built.
+
 ## The layering rule (AD-4)
 
 The core imports no adapter, and the dependency direction is one-way. This is
