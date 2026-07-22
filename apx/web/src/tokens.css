@@ -1,0 +1,12 @@
+/* The single design-token set (AD-29). Every colour, spacing and type value
+   lives here; no literal value belongs outside it. The ENFORCING check (no value
+   outside the token set) is FR-59 / story 1.12 — this file establishes the
+   convention that check will guard. Values below are placeholders for 1.1. */
+:root {
+  --apx-color-bg: #ffffff;
+  --apx-color-fg: #14181f;
+  --apx-space-1: 0.5rem;
+  --apx-space-2: 1rem;
+  --apx-font-sans: system-ui, sans-serif;
+}
+body { margin: 0; background: var(--apx-color-bg); color: var(--apx-color-fg); font-family: var(--apx-font-sans); }

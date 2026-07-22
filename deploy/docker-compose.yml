@@ -1,0 +1,46 @@
+# APX — the single stateful service (AD-5).
+#
+# PostgreSQL holds relational data, vectors (pgvector, halfvec + HNSW), the
+# deterministic text index and the Procrastinate job queue. No second stateful
+# service (no Redis, no Qdrant) may be introduced — anything that appears to need
+# one is an adapter boundary, not a new deployment unit.
+#
+# Exactly ONE endpoint (AD-5): no replica, no standby, no routing pooler.
+#
+# Story 1.1 declares the service only. NOT here (owning stories in brackets):
+#   - schema / migrations                              [1.3]
+#   - the collation-pinning fail-closed start-up gate  [store / 1.7]
+#     (LC_COLLATE, LC_CTYPE, provider + ICU version asserted at start-up; a
+#      mismatch must fail to start — AD-5)
+#   - the `pg_dump`-first `upgrade.sh` wrapper          [1.11, AD-46]
+#   - the app / worker services                         [later]
+#
+# The image is pinned by digest (AD-30, offline packaging). POSTGRES_IMAGE is an
+# env var so a later story can run a PG17↔PG18 parity matrix (AD-5, Open Q5)
+# without editing this file. `pgvector/pgvector:pg18` bundles pgvector on
+# PostgreSQL 18; the running extension must be 0.8.5 exactly — verify with
+#   SELECT extversion FROM pg_extension WHERE extname = 'vector';   -> 0.8.5
+# If no single public tag ships PG 18.4 + pgvector 0.8.5 together, a custom image
+# build is forced earlier than the deploy story — flag it (story Open Q4).
+
+services:
+  postgres:
+    # Pin by digest in a real deployment (AD-30). Tag shown for readability; the
+    # env var lets CI/deploy substitute a digest and run the version matrix.
+    image: ${POSTGRES_IMAGE:-pgvector/pgvector:pg18}
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:?set POSTGRES_USER in the environment, never in source}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in the environment, never in source}
+      POSTGRES_DB: ${POSTGRES_DB:-apx}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - apx_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  apx_pgdata:

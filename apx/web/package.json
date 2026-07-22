@@ -1,0 +1,28 @@
+{
+  "name": "apx-web",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "description": "APX web — a static SPA (Vite + React Router). Build-time Node only; no Node runtime ships (AD-29).",
+  "engines": {
+    "node": ">=24.18 <27"
+  },
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit"
+  },
+  "dependencies": {
+    "react": "19.2.8",
+    "react-dom": "19.2.8",
+    "react-router": "8.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "6.0.4",
+    "typescript": "5.9.3",
+    "vite": "8.1.5"
+  }
+}

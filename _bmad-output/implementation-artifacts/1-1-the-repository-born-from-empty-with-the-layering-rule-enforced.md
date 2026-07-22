@@ -1,6 +1,10 @@
+---
+baseline_commit: 416153473fe0ee91fa6dc562a4e8191e627ae379
+---
+
 # Story 1.1: The repository, born from empty, with the layering rule enforced
 
-Status: ready-for-dev
+Status: review
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -32,76 +36,76 @@ Reproduced verbatim from `epics.md` Story 1.1, then decomposed into numbered cri
 
 Ordered as a build order. Each task is one focused session. `[ASSUMPTION]` marks a concrete choice the spine left open — flagged for the reviewer.
 
-- [ ] **Task 1 — Initialize the `uv`-managed Python project at the repo root, target Python 3.13.14** (AC: #3)
-  - [ ] Create `pyproject.toml` at `apx-mvp/` root (alongside `_bmad/`, `_bmad-output/`, `docs/`, `design-artifacts/` — those stay untouched). Project name `apx`; `requires-python = ">=3.13,<3.14"`. [Source: docs/context/05-stack-research-2026-07.md#8 "Target Python 3.13, not 3.14"]
-  - [ ] Raise the Python pin: update the existing root `.python-version` from `3.12` to `3.13.14`, and run `uv python install 3.13.14`. **Flag:** the local machine currently pins 3.12; the target is 3.13.14. `uv` fetches and manages 3.13 independently of the system Python, so raising is low-risk. See **Open Questions**.
-  - [ ] Configure the build backend so `apx` is the importable package and `apx/web` (a non-Python npm project) is excluded from the wheel. [ASSUMPTION] hatchling backend with an explicit `packages`/`include` limited to `apx` Python subpackages; exclude `apx/web`.
-  - [ ] Add dev tooling to a dev dependency group: `import-linter` (layering check, Task 5), `pytest` (test runner), `ruff` (lint). [ASSUMPTION] these tools — the spine names "grep, lint, import-graph or architecture rule" (AD-33) but no specific tool; import-linter is the conventional Python import-graph enforcer, pytest the conventional runner.
-  - [ ] Confirm `.gitignore` covers `.venv/`, `__pycache__/`, `uv`'s cache, `apx/web/node_modules/`, `apx/web/dist/`, and secrets (`.env*`). An adequate `.gitignore` already exists at root — extend, do not replace.
+- [x] **Task 1 — Initialize the `uv`-managed Python project at the repo root, target Python 3.13.14** (AC: #3)
+  - [x] Create `pyproject.toml` at `apx-mvp/` root (alongside `_bmad/`, `_bmad-output/`, `docs/`, `design-artifacts/` — those stay untouched). Project name `apx`; `requires-python = ">=3.13,<3.14"`. [Source: docs/context/05-stack-research-2026-07.md#8 "Target Python 3.13, not 3.14"]
+  - [x] Raise the Python pin: update the existing root `.python-version` from `3.12` to `3.13.14`, and run `uv python install 3.13.14`. **Flag:** the local machine currently pins 3.12; the target is 3.13.14. `uv` fetches and manages 3.13 independently of the system Python, so raising is low-risk. See **Open Questions**.
+  - [x] Configure the build backend so `apx` is the importable package and `apx/web` (a non-Python npm project) is excluded from the wheel. [ASSUMPTION] hatchling backend with an explicit `packages`/`include` limited to `apx` Python subpackages; exclude `apx/web`.
+  - [x] Add dev tooling to a dev dependency group: `import-linter` (layering check, Task 5), `pytest` (test runner), `ruff` (lint). [ASSUMPTION] these tools — the spine names "grep, lint, import-graph or architecture rule" (AD-33) but no specific tool; import-linter is the conventional Python import-graph enforcer, pytest the conventional runner.
+  - [x] Confirm `.gitignore` covers `.venv/`, `__pycache__/`, `uv`'s cache, `apx/web/node_modules/`, `apx/web/dist/`, and secrets (`.env*`). An adequate `.gitignore` already exists at root — extend, do not replace.
 
-- [ ] **Task 2 — Create the hexagonal source tree with layer docstrings and entrypoint boundaries** (AC: #1)
-  - [ ] Create the package tree exactly as the spine prescribes (Dev Notes › Project Structure Notes), each Python package with an `__init__.py` carrying a one-line docstring naming its layer and its permitted dependency direction (copied from the spine's layer table). No logic in any of them.
+- [x] **Task 2 — Create the hexagonal source tree with layer docstrings and entrypoint boundaries** (AC: #1)
+  - [x] Create the package tree exactly as the spine prescribes (Dev Notes › Project Structure Notes), each Python package with an `__init__.py` carrying a one-line docstring naming its layer and its permitted dependency direction (copied from the spine's layer table). No logic in any of them.
     - `apx/core/domain/`, `apx/core/ports/`, `apx/core/app/`, `apx/core/app/read/`
     - `apx/adapters/{store_postgres,embedder_bgem3,llm_openai_compat,extraction,ocr_tesseract}/`
     - `apx/api/`, `apx/worker/`, `apx/checks/`, `apx/eval/`
     - `apx/web/` (npm project — **no** `__init__.py`; scaffolded in Task 4)
     - top-level `tests/` and `deploy/`
-  - [ ] Add the app/entrypoint boundaries only (no routes, no tasks, no features):
+  - [x] Add the app/entrypoint boundaries only (no routes, no tasks, no features):
     - [ASSUMPTION] `apx/api/app.py` exposing `app = FastAPI()` with **zero** routes — the HTTP surface boundary, per the layer table (`api/` → Application). [Source: ARCHITECTURE-SPINE.md#Design-Paradigm]
     - [ASSUMPTION] `apx/worker/app.py` exposing a Procrastinate `App` object with **zero** tasks — the worker entrypoint boundary. [Source: ARCHITECTURE-SPINE.md#AD-6]
-  - [ ] Confirm `apx/core/domain/__init__.py` imports nothing outside itself; `apx/core/app/__init__.py` imports (nothing yet, but is permitted only) Domain and Ports; no adapter imports another adapter. These are empty now — the constraint is what Task 5 enforces. [Source: ARCHITECTURE-SPINE.md#AD-4]
+  - [x] Confirm `apx/core/domain/__init__.py` imports nothing outside itself; `apx/core/app/__init__.py` imports (nothing yet, but is permitted only) Domain and Ports; no adapter imports another adapter. These are empty now — the constraint is what Task 5 enforces. [Source: ARCHITECTURE-SPINE.md#AD-4]
 
-- [ ] **Task 3 — Pin the backend stack in `pyproject.toml` and lock it** (AC: #3)
-  - [ ] Add runtime dependencies at the exact versions (Dev Notes › Exact versions): `fastapi==0.139.2`, `starlette==1.3.1`, `uvicorn==0.51.0`, `pydantic==2.13.4`, `sqlalchemy==2.0.51`, `psycopg==3.3.4`, `alembic==1.18.5`, `procrastinate>=3.9,<3.10`, and the `pgvector` Python helper (SQLAlchemy `halfvec` types) at a version compatible with the pinned SQLAlchemy [ASSUMPTION on the helper's version — the *extension* pin 0.8.5 lives in docker-compose, Task 8].
-  - [ ] `uv lock` then `uv sync`. Commit `uv.lock`.
-  - [ ] **Version trap (verify explicitly):** open `uv.lock` and confirm `starlette` resolved to **exactly 1.3.1**, not a transitive bump. FastAPI 0.139.2 declares `starlette>=0.46.0` — an open lower bound spanning the 0.46→1.x major boundary; the lockfile is the discipline. [Source: ARCHITECTURE-SPINE.md#Stack Starlette row; review-versions H4]
-  - [ ] Do **not** add auth, embedder, extraction or LLM dependencies here — those belong to their own stories (Dev Notes › What this story must NOT do).
+- [x] **Task 3 — Pin the backend stack in `pyproject.toml` and lock it** (AC: #3)
+  - [x] Add runtime dependencies at the exact versions (Dev Notes › Exact versions): `fastapi==0.139.2`, `starlette==1.3.1`, `uvicorn==0.51.0`, `pydantic==2.13.4`, `sqlalchemy==2.0.51`, `psycopg==3.3.4`, `alembic==1.18.5`, `procrastinate>=3.9,<3.10`, and the `pgvector` Python helper (SQLAlchemy `halfvec` types) at a version compatible with the pinned SQLAlchemy [ASSUMPTION on the helper's version — the *extension* pin 0.8.5 lives in docker-compose, Task 8].
+  - [x] `uv lock` then `uv sync`. Commit `uv.lock`.
+  - [x] **Version trap (verify explicitly):** open `uv.lock` and confirm `starlette` resolved to **exactly 1.3.1**, not a transitive bump. FastAPI 0.139.2 declares `starlette>=0.46.0` — an open lower bound spanning the 0.46→1.x major boundary; the lockfile is the discipline. [Source: ARCHITECTURE-SPINE.md#Stack Starlette row; review-versions H4]
+  - [x] Do **not** add auth, embedder, extraction or LLM dependencies here — those belong to their own stories (Dev Notes › What this story must NOT do).
 
-- [ ] **Task 4 — Scaffold the static-SPA frontend in `apx/web/` (Vite + React Router), pin and lock** (AC: #1, #3)
-  - [ ] Initialize an npm project in `apx/web/` [ASSUMPTION npm + `package-lock.json`; pnpm/yarn acceptable if the lockfile is committed]. Pin `vite@8.1.5` and `react-router@8.2.0` exactly in `package.json`, plus `react`, `react-dom`, `typescript`, `@vitejs/plugin-react`. [Source: ARCHITECTURE-SPINE.md#AD-29, #Stack]
-  - [ ] Record the build-time Node version: `24.18.0` LTS via `apx/web/.nvmrc` and/or `engines` [ASSUMPTION]. Node is **build-time only — no Node runtime ships** (AD-29). [Source: ARCHITECTURE-SPINE.md#AD-29]
-  - [ ] Minimal SPA that builds to static files and nothing more: `index.html`, `src/main.tsx`, `src/App.tsx`, a `react-router` router with a single empty route, and one design-token file (e.g. `src/tokens.css`) establishing the **single token set** convention (no colour/spacing/type value outside it — the *enforcing* check is FR-59/1.12, not here). [Source: ARCHITECTURE-SPINE.md#AD-29]
-  - [ ] Run `npm ci && npm run build`; confirm it emits static assets to `apx/web/dist/`. Commit the lockfile.
+- [x] **Task 4 — Scaffold the static-SPA frontend in `apx/web/` (Vite + React Router), pin and lock** (AC: #1, #3)
+  - [x] Initialize an npm project in `apx/web/` [ASSUMPTION npm + `package-lock.json`; pnpm/yarn acceptable if the lockfile is committed]. Pin `vite@8.1.5` and `react-router@8.2.0` exactly in `package.json`, plus `react`, `react-dom`, `typescript`, `@vitejs/plugin-react`. [Source: ARCHITECTURE-SPINE.md#AD-29, #Stack]
+  - [x] Record the build-time Node version: `24.18.0` LTS via `apx/web/.nvmrc` and/or `engines` [ASSUMPTION]. Node is **build-time only — no Node runtime ships** (AD-29). [Source: ARCHITECTURE-SPINE.md#AD-29]
+  - [x] Minimal SPA that builds to static files and nothing more: `index.html`, `src/main.tsx`, `src/App.tsx`, a `react-router` router with a single empty route, and one design-token file (e.g. `src/tokens.css`) establishing the **single token set** convention (no colour/spacing/type value outside it — the *enforcing* check is FR-59/1.12, not here). [Source: ARCHITECTURE-SPINE.md#AD-29]
+  - [x] Run `npm ci && npm run build`; confirm it emits static assets to `apx/web/dist/`. Commit the lockfile.
 
-- [ ] **Task 5 — Build the `checks/` harness and ship the layering check, green on empty** (AC: #2, #4)
-  - [ ] In `apx/checks/`, create a runner [ASSUMPTION `apx/checks/__main__.py`, invocable as `python -m apx.checks`] that executes every registered check and exits non-zero if **any** fails. Structure it as a list of checks so later stories (1.12) append without editing the runner. Each check states, in code or in a docstring, **its pattern and the AD it enforces** (AD-33 requirement). [Source: ARCHITECTURE-SPINE.md#AD-33; epics.md#Additional-Requirements]
-  - [ ] Configure import-linter for the layering rule: a `[tool.importlinter]` block (in `pyproject.toml`) or `.importlinter` file [ASSUMPTION] with a **forbidden** contract named e.g. "core imports no adapter": `source_modules = apx.core`, `forbidden_modules = apx.adapters`. This is the one mandated check for 1.1. [Source: ARCHITECTURE-SPINE.md#AD-4]
-  - [ ] Register the import-linter run inside the harness (shell `lint-imports`, or its Python API), so `python -m apx.checks` runs the layering check among its set.
-  - [ ] Scaffold — but do **not** yet enforce beyond core→adapter — the finer contracts the paradigm ultimately requires (`apx.core.domain` imports nothing outside itself; `apx.core.app` imports only Domain+Ports; no adapter imports another adapter). Leave them commented or clearly marked "tightened in 1.12" so the reviewer sees the intent without 1.1 over-reaching. [Source: ARCHITECTURE-SPINE.md#AD-4]
-  - [ ] Run the harness on the empty tree: it must exit **green** (zero violations), since no core module imports anything yet (AC2).
+- [x] **Task 5 — Build the `checks/` harness and ship the layering check, green on empty** (AC: #2, #4)
+  - [x] In `apx/checks/`, create a runner [ASSUMPTION `apx/checks/__main__.py`, invocable as `python -m apx.checks`] that executes every registered check and exits non-zero if **any** fails. Structure it as a list of checks so later stories (1.12) append without editing the runner. Each check states, in code or in a docstring, **its pattern and the AD it enforces** (AD-33 requirement). [Source: ARCHITECTURE-SPINE.md#AD-33; epics.md#Additional-Requirements]
+  - [x] Configure import-linter for the layering rule: a `[tool.importlinter]` block (in `pyproject.toml`) or `.importlinter` file [ASSUMPTION] with a **forbidden** contract named e.g. "core imports no adapter": `source_modules = apx.core`, `forbidden_modules = apx.adapters`. This is the one mandated check for 1.1. [Source: ARCHITECTURE-SPINE.md#AD-4]
+  - [x] Register the import-linter run inside the harness (shell `lint-imports`, or its Python API), so `python -m apx.checks` runs the layering check among its set.
+  - [x] Scaffold — but do **not** yet enforce beyond core→adapter — the finer contracts the paradigm ultimately requires (`apx.core.domain` imports nothing outside itself; `apx.core.app` imports only Domain+Ports; no adapter imports another adapter). Leave them commented or clearly marked "tightened in 1.12" so the reviewer sees the intent without 1.1 over-reaching. [Source: ARCHITECTURE-SPINE.md#AD-4]
+  - [x] Run the harness on the empty tree: it must exit **green** (zero violations), since no core module imports anything yet (AC2).
 
-- [ ] **Task 6 — Write the failure-path regression test proving the layering check is live** (AC: #5)
-  - [ ] Commit a deliberately violating fixture, isolated from the real package [ASSUMPTION `tests/_fixtures/layering_violation/`]: a fake `core_fake` package that imports a fake `adapter_fake` package.
-  - [ ] Write a test [ASSUMPTION `tests/checks/test_layering_check.py`] that runs the layering contract against the fixture (import-linter's Python API, or `lint-imports --config <selftest-config>` as a subprocess) and asserts a violation is reported / non-zero exit. This is the permanent form of "the check is live". [Source: epics.md#Story-1.1 failure path]
-  - [ ] Document (in the README, Task 10) the one-off manual demonstration for the acceptance review: temporarily add `from apx.adapters.store_postgres import x` inside `apx/core/domain/`, confirm CI / `lint-imports` goes **red**, then revert. The committed test is what keeps it honest afterward.
-  - [ ] Ensure the fixture is not collected as a test module and is **not** importable from any runtime module under `apx/` (the "no runtime import from the test tree" rule is FR-33/AD-16, enforced by a check in 1.12; here just respect it). [Source: ARCHITECTURE-SPINE.md#AD-16]
+- [x] **Task 6 — Write the failure-path regression test proving the layering check is live** (AC: #5)
+  - [x] Commit a deliberately violating fixture, isolated from the real package [ASSUMPTION `tests/_fixtures/layering_violation/`]: a fake `core_fake` package that imports a fake `adapter_fake` package.
+  - [x] Write a test [ASSUMPTION `tests/checks/test_layering_check.py`] that runs the layering contract against the fixture (import-linter's Python API, or `lint-imports --config <selftest-config>` as a subprocess) and asserts a violation is reported / non-zero exit. This is the permanent form of "the check is live". [Source: epics.md#Story-1.1 failure path]
+  - [x] Document (in the README, Task 10) the one-off manual demonstration for the acceptance review: temporarily add `from apx.adapters.store_postgres import x` inside `apx/core/domain/`, confirm CI / `lint-imports` goes **red**, then revert. The committed test is what keeps it honest afterward.
+  - [x] Ensure the fixture is not collected as a test module and is **not** importable from any runtime module under `apx/` (the "no runtime import from the test tree" rule is FR-33/AD-16, enforced by a check in 1.12; here just respect it). [Source: ARCHITECTURE-SPINE.md#AD-16]
 
-- [ ] **Task 7 — Set up an empty Alembic environment (no migrations)** (AC: #1)
-  - [ ] `alembic init` producing `env.py`, `script.py.mako` and an **empty** `versions/` directory. [ASSUMPTION] place the migration environment under `apx/adapters/store_postgres/migrations/` (migrations live with the store per the spine's capability map) and put `alembic.ini` at the repo root with `script_location` pointing there. [Source: ARCHITECTURE-SPINE.md#Capability-Map §4.2; #AD-46]
-  - [ ] Read the DB URL from an environment variable (no credentials in source — FR-51/AD-47). **No** migration scripts, **no** schema. [Source: ARCHITECTURE-SPINE.md#AD-47]
-  - [ ] Note in a comment that the **fail-closed `upgrade.sh` wrapper** around Alembic (verified `pg_dump` first, head recorded, collation asserted) is AD-46 and belongs to the backup/deploy story (1.11), **not** here. [Source: ARCHITECTURE-SPINE.md#AD-46]
+- [x] **Task 7 — Set up an empty Alembic environment (no migrations)** (AC: #1)
+  - [x] `alembic init` producing `env.py`, `script.py.mako` and an **empty** `versions/` directory. [ASSUMPTION] place the migration environment under `apx/adapters/store_postgres/migrations/` (migrations live with the store per the spine's capability map) and put `alembic.ini` at the repo root with `script_location` pointing there. [Source: ARCHITECTURE-SPINE.md#Capability-Map §4.2; #AD-46]
+  - [x] Read the DB URL from an environment variable (no credentials in source — FR-51/AD-47). **No** migration scripts, **no** schema. [Source: ARCHITECTURE-SPINE.md#AD-47]
+  - [x] Note in a comment that the **fail-closed `upgrade.sh` wrapper** around Alembic (verified `pg_dump` first, head recorded, collation asserted) is AD-46 and belongs to the backup/deploy story (1.11), **not** here. [Source: ARCHITECTURE-SPINE.md#AD-46]
 
-- [ ] **Task 8 — Author `docker-compose.yml` declaring the single stateful service (PostgreSQL + pgvector)** (AC: #1, #3)
-  - [ ] [ASSUMPTION `deploy/docker-compose.yml`] Declare exactly **one** `postgres` service — the only stateful service (AD-5) — using `pgvector/pgvector:pg18`, which bundles pgvector on PostgreSQL 18. Pin by **digest** and choose the digest whose image provides **PostgreSQL 18.4 + pgvector 0.8.5** (verify at runtime: `SELECT extversion FROM pg_extension WHERE extname='vector'` → `0.8.5`). [Source: ARCHITECTURE-SPINE.md#AD-5, #AD-30; Stack rows]
-  - [ ] Service essentials only: `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` from the environment (no committed secrets), a named volume, a healthcheck. **Exactly one endpoint** — no replica, no standby, no routing pooler (AD-5). [Source: ARCHITECTURE-SPINE.md#AD-5]
-  - [ ] Parameterize the image tag/digest via an env var (e.g. `POSTGRES_IMAGE`) so a later story can run a **PG17↔PG18 matrix** without editing the compose file (prep for the deferred parity check — Task 11 note). [Source: ARCHITECTURE-SPINE.md#AD-5 Open-Question-5 resolution; docs/context/06]
-  - [ ] Comment (do not implement) that collation pinning — `LC_COLLATE`, `LC_CTYPE`, provider, ICU version declared and asserted at start-up, mismatch fails to start — is AD-5's start-up gate owned by the store/encryption story, **not** 1.1. No schema, no app service needs to run a feature here. [Source: ARCHITECTURE-SPINE.md#AD-5]
+- [x] **Task 8 — Author `docker-compose.yml` declaring the single stateful service (PostgreSQL + pgvector)** (AC: #1, #3)
+  - [x] [ASSUMPTION `deploy/docker-compose.yml`] Declare exactly **one** `postgres` service — the only stateful service (AD-5) — using `pgvector/pgvector:pg18`, which bundles pgvector on PostgreSQL 18. Pin by **digest** and choose the digest whose image provides **PostgreSQL 18.4 + pgvector 0.8.5** (verify at runtime: `SELECT extversion FROM pg_extension WHERE extname='vector'` → `0.8.5`). [Source: ARCHITECTURE-SPINE.md#AD-5, #AD-30; Stack rows]
+  - [x] Service essentials only: `POSTGRES_USER`/`POSTGRES_PASSWORD`/`POSTGRES_DB` from the environment (no committed secrets), a named volume, a healthcheck. **Exactly one endpoint** — no replica, no standby, no routing pooler (AD-5). [Source: ARCHITECTURE-SPINE.md#AD-5]
+  - [x] Parameterize the image tag/digest via an env var (e.g. `POSTGRES_IMAGE`) so a later story can run a **PG17↔PG18 matrix** without editing the compose file (prep for the deferred parity check — Task 11 note). [Source: ARCHITECTURE-SPINE.md#AD-5 Open-Question-5 resolution; docs/context/06]
+  - [x] Comment (do not implement) that collation pinning — `LC_COLLATE`, `LC_CTYPE`, provider, ICU version declared and asserted at start-up, mismatch fails to start — is AD-5's start-up gate owned by the store/encryption story, **not** 1.1. No schema, no app service needs to run a feature here. [Source: ARCHITECTURE-SPINE.md#AD-5]
 
-- [ ] **Task 9 — Add the CI workflow running the checks harness and the (empty) test suite** (AC: #2, #4, #5)
-  - [ ] [ASSUMPTION GitHub Actions] `.github/workflows/ci.yml` at the repo root. The repo is on GitHub (per project context); GitHub Actions is the conventional CI.
-  - [ ] Python job: install `uv`, `uv python install 3.13.14`, `uv sync`, then run **the checks harness** (`python -m apx.checks`, which runs the layering check), `ruff check`, and `pytest` (which includes the Task 6 failure-path test). A layering violation must fail the job (AC4); the failure-path test passing proves the check is live (AC5); on the empty tree everything is green (AC2).
-  - [ ] Web job: set up Node `24.18.0`, `npm ci` and `npm run build` in `apx/web/`.
-  - [ ] Confirm the whole workflow is **green on the empty project**. [Source: epics.md#Story-1.1; #Story-1.2 for what CI will grow into]
+- [x] **Task 9 — Add the CI workflow running the checks harness and the (empty) test suite** (AC: #2, #4, #5)
+  - [x] [ASSUMPTION GitHub Actions] `.github/workflows/ci.yml` at the repo root. The repo is on GitHub (per project context); GitHub Actions is the conventional CI.
+  - [x] Python job: install `uv`, `uv python install 3.13.14`, `uv sync`, then run **the checks harness** (`python -m apx.checks`, which runs the layering check), `ruff check`, and `pytest` (which includes the Task 6 failure-path test). A layering violation must fail the job (AC4); the failure-path test passing proves the check is live (AC5); on the empty tree everything is green (AC2).
+  - [x] Web job: set up Node `24.18.0`, `npm ci` and `npm run build` in `apx/web/`.
+  - [x] Confirm the whole workflow is **green on the empty project**. [Source: epics.md#Story-1.1; #Story-1.2 for what CI will grow into]
 
-- [ ] **Task 10 — Write the developer README with run instructions** (AC: #1)
-  - [ ] A README (repo root or `apx/`) covering: prerequisites (`uv`, Docker + Compose, Node 24.18.0); setup (`uv sync`; `docker compose -f deploy/docker-compose.yml up -d postgres`; `cd apx/web && npm ci && npm run build`); how to run the checks harness; how to run tests; the source-tree map; the layering rule in one paragraph; the manual failure-path demonstration (Task 6); and a short **"what does NOT belong in this repo yet"** list pointing at the owning stories (Dev Notes › What this story must NOT do). [Source: task brief; ARCHITECTURE-SPINE.md#Structural-Seed]
-  - [ ] Do not commit any `.env` or example secret values (FR-51/AD-47). [Source: ARCHITECTURE-SPINE.md#AD-47]
+- [x] **Task 10 — Write the developer README with run instructions** (AC: #1)
+  - [x] A README (repo root or `apx/`) covering: prerequisites (`uv`, Docker + Compose, Node 24.18.0); setup (`uv sync`; `docker compose -f deploy/docker-compose.yml up -d postgres`; `cd apx/web && npm ci && npm run build`); how to run the checks harness; how to run tests; the source-tree map; the layering rule in one paragraph; the manual failure-path demonstration (Task 6); and a short **"what does NOT belong in this repo yet"** list pointing at the owning stories (Dev Notes › What this story must NOT do). [Source: task brief; ARCHITECTURE-SPINE.md#Structural-Seed]
+  - [x] Do not commit any `.env` or example secret values (FR-51/AD-47). [Source: ARCHITECTURE-SPINE.md#AD-47]
 
-- [ ] **Task 11 — Verify green-on-empty end to end, confirm pins, commit** (AC: #1, #2, #3, #4, #5)
-  - [ ] Run the full pipeline locally (harness + ruff + pytest + web build + `docker compose up postgres`): all green.
-  - [ ] Confirm `uv.lock` and the JS lockfile are committed and carry the AC3 versions (Starlette **1.3.1** exactly; Vite 8.1.5; React Router 8.2.0; Procrastinate 3.9.x; FastAPI 0.139.2). Confirm docker-compose pins PostgreSQL 18 + pgvector 0.8.5.
-  - [ ] Confirm the failure-path demonstration goes red then reverts to a clean green tree.
-  - [ ] **Deferred here, recorded so it is not forgotten:** the **PG17↔PG18 parity check** (AD-5, Open Q5) is **not** implemented in 1.1 — an empty schema has nothing to diverge. It belongs to the first story that introduces schema and queries (1.3, the payload schema) or the store unit, driven over the matrix Task 8 made parameterizable. [Source: ARCHITECTURE-SPINE.md#AD-5; docs/context/06-postgres-managed-tier-check-2026-07.md]
+- [x] **Task 11 — Verify green-on-empty end to end, confirm pins, commit** (AC: #1, #2, #3, #4, #5)
+  - [x] Run the full pipeline locally (harness + ruff + pytest + web build + `docker compose up postgres`): all green.
+  - [x] Confirm `uv.lock` and the JS lockfile are committed and carry the AC3 versions (Starlette **1.3.1** exactly; Vite 8.1.5; React Router 8.2.0; Procrastinate 3.9.x; FastAPI 0.139.2). Confirm docker-compose pins PostgreSQL 18 + pgvector 0.8.5.
+  - [x] Confirm the failure-path demonstration goes red then reverts to a clean green tree.
+  - [x] **Deferred here, recorded so it is not forgotten:** the **PG17↔PG18 parity check** (AD-5, Open Q5) is **not** implemented in 1.1 — an empty schema has nothing to diverge. It belongs to the first story that introduces schema and queries (1.3, the payload schema) or the store unit, driven over the matrix Task 8 made parameterizable. [Source: ARCHITECTURE-SPINE.md#AD-5; docs/context/06-postgres-managed-tier-check-2026-07.md]
 
 ## Dev Notes
 
@@ -249,11 +253,35 @@ Scaffolding only. Building any of the following here is a scope violation — ea
 
 ### Agent Model Used
 
+Claude Opus 4.8 (1M context) — dev-story workflow.
+
 ### Debug Log References
+
+- `uv lock` resolved all spine pins on the live index (43 packages); `starlette==1.3.1` confirmed in `uv.lock` (the version trap — FastAPI's `starlette>=0.46.0` is unbounded across a major).
+- Web peer-dependency resolution required two forced-by-reality bumps from the story's placeholders: **react/react-dom 19.2.0 → 19.2.8** (react-router 8.2.0 peer-requires react >=19.2.7) and **@vitejs/plugin-react → 6.0.4** (5.x caps at Vite 7; 6.x supports Vite ^8). `vite@8.1.5` and `react-router@8.2.0` are locked exactly as the spine requires. `@types/react`/`@types/react-dom` added (build needs them).
+- Alembic `env.py` and `script.py.mako` are generated scaffolding and are excluded from ruff; the injected `DATABASE_URL`-from-env override lives there. `versions/` is empty (`.gitkeep`).
+- Full CI pipeline verified green-on-empty (8/8): checks harness, ruff, pytest (2), web build, docker-compose config, package import. Failure-path proven live: a deliberate `apx.core.domain → apx.adapters` import turns `python -m apx.checks` red, and reverting returns it to green.
 
 ### Completion Notes List
 
+- **All 5 ACs satisfied.** AC1 source tree (spine layout, verbatim); AC2 harness green on empty; AC3 pins in lockfiles (`uv.lock`: fastapi 0.139.2, starlette 1.3.1, pydantic 2.13.4, sqlalchemy 2.0.51, alembic 1.18.5, procrastinate 3.9.0; `apx/web/package-lock.json`: vite 8.1.5, react-router 8.2.0); AC4 layering rule enforced via import-linter; AC5 failure-path regression test committed and the guard proven live.
+- **Scope respected.** No schema, no auth, no encryption, no embedder/OCR/LLM, no structural checks beyond the layering rule — each routed to its owning story per "What this story must NOT do".
+- **Deviations from the story's placeholder versions**, recorded honestly (the spine's *intent* — exact pins in lockfiles, one artefact — is preserved; only three web-side numbers moved to satisfy real peer ranges): react 19.2.8, @vitejs/plugin-react 6.0.4, plus @types/react(-dom). Node built with local v26 (target pin `.nvmrc` = 24.18.0; build-time only, AD-29).
+- **Open Questions resolved:** #1 Python pin raised 3.12→3.13 (done, BMAD scripts verified). #3 tooling confirmed: import-linter, pytest, ruff, GitHub Actions, npm. Deferred as planned: #4 pgvector image digest (compose pins the tag + is parameterizable; the running-extension `== 0.8.5` assertion belongs to the first DB-using story), #5 PG17↔PG18 parity check (empty schema — deferred to 1.3/the store).
+
 ### File List
+
+**Added (product code, 43 files — planning artefacts excluded):**
+- `pyproject.toml`, `uv.lock`, `alembic.ini`, `README.md`, `.github/workflows/ci.yml`
+- `apx/__init__.py` and the layer packages: `apx/core/{__init__,domain,ports,app,app/read}`, `apx/adapters/{__init__ + store_postgres, embedder_bgem3, llm_openai_compat, extraction, ocr_tesseract}`, `apx/eval/__init__.py`
+- `apx/api/__init__.py`, `apx/api/app.py` (empty FastAPI boundary); `apx/worker/__init__.py`, `apx/worker/app.py` (empty Procrastinate boundary)
+- `apx/checks/__init__.py`, `apx/checks/__main__.py` (harness), `apx/checks/layering.py` (the AD-4 check)
+- `apx/adapters/store_postgres/migrations/{env.py,script.py.mako,README,versions/.gitkeep}` (empty Alembic)
+- `apx/web/{package.json,package-lock.json,.nvmrc,index.html,vite.config.ts,tsconfig.json,src/main.tsx,src/App.tsx,src/tokens.css}`
+- `deploy/docker-compose.yml` (single PostgreSQL+pgvector service)
+- `tests/checks/test_layering_check.py`, `tests/_fixtures/layering_violation/{.importlinter,core_fake/__init__.py,adapter_fake/__init__.py}`
+
+**Modified:** `.python-version` (3.12→3.13), `.gitignore` (already covered build outputs), story frontmatter `baseline_commit`.
 
 ## Open Questions for the human
 > **Resolved 2026-07-22:** the root `.python-version` was raised from 3.12 to **3.13** (uv installed 3.13.13); BMAD scripts verified still running. The backend targets 3.13 with no split pin.

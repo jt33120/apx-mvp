@@ -1,0 +1,12 @@
+[importlinter]
+root_packages =
+    core_fake
+    adapter_fake
+
+[importlinter:contract:core-no-adapter]
+name = core_fake imports no adapter_fake (fixture of AD-4)
+type = forbidden
+source_modules =
+    core_fake
+forbidden_modules =
+    adapter_fake

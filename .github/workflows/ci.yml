@@ -1,0 +1,44 @@
+name: CI
+
+# Story 1.1: green on the empty project. Two jobs — Python and web — that later
+# stories extend. Story 1.2 adds the network-isolated offline-fitness job that
+# drives this structure end to end (AD-2); it is NOT here yet.
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+      - name: Pin Python
+        run: uv python install 3.13.14
+      - name: Sync (runtime + dev)
+        run: uv sync --group dev
+      - name: Structural-property checks (AD-33) — incl. the layering rule (AD-4)
+        run: uv run python -m apx.checks
+      - name: Lint
+        run: uv run ruff check .
+      - name: Tests (incl. the layering failure-path regression, AC5)
+        run: uv run pytest -q
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apx/web
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: apx/web/.nvmrc
+      - name: Install (clean, from lockfile)
+        run: npm ci
+      - name: Build the static SPA (AD-29)
+        run: npm run build
