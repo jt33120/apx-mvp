@@ -72,3 +72,22 @@ def test_ingest_persists_and_reads_back(tmp_path: Path, monkeypatch) -> None:
     assert back["in_corpus"] == 1
     assert back["failures"] == 2
     assert back["consistent"] is True
+
+
+def test_ingest_upload_reconstructs_the_tree_and_counts(monkeypatch) -> None:
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    with TestClient(app) as c:
+        r = c.post(
+            "/api/ingest-upload",
+            data={"matter": "m", "tenant": "t"},
+            files=[
+                ("files", ("emails/letter.txt", b"Ma\xc3\xaetre, ci-joint", "text/plain")),
+                ("files", ("pieces/empty.txt", b"", "text/plain")),
+                ("files", ("pieces/photo.jpg", b"not an image", "image/jpeg")),
+            ],
+        )
+    assert r.status_code == 200
+    inv = r.json()["inventory"]
+    assert inv["consistent"] and inv["submitted"] == 3
+    assert inv["in_corpus"] == 1  # letter.txt
+    assert inv["failures"] == 2  # empty.txt (extracted-empty), photo.jpg (unsupported)

@@ -26,6 +26,7 @@ dependencies = [
     "alembic==1.18.5",
     "procrastinate>=3.9,<3.10",
     "pypdf==6.14.2",
+    "python-multipart==0.0.20",
 ]
 
 [project.optional-dependencies]
@@ -119,6 +120,10 @@ extend-exclude = [
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI's dependency-injection markers are called in argument defaults by design.
+extend-immutable-calls = ["fastapi.Form", "fastapi.File", "fastapi.Depends", "fastapi.Query"]
 
 [tool.ruff.lint.per-file-ignores]
 # Layer-declaration docstrings are one intentional descriptive line naming the

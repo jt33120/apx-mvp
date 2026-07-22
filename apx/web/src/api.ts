@@ -11,18 +11,27 @@ export type IngestResponse = {
   inventory: Inventory;
   failure_list: Failure[];
   exclusion_list: string[];
+  persisted: boolean;
 };
 
 // The one data path: an HTTP call to the API (AD-14). No fixtures, no fallback.
-export async function ingest(folder: string, matter: string, tenant: string): Promise<IngestResponse> {
-  const res = await fetch("/api/ingest", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ folder, matter, tenant }),
-  });
+// Files are uploaded with their folder-relative path so the server rebuilds the tree.
+export async function ingestUpload(
+  files: FileList,
+  matter: string,
+  tenant: string,
+): Promise<IngestResponse> {
+  const form = new FormData();
+  form.append("matter", matter);
+  form.append("tenant", tenant);
+  for (const file of Array.from(files)) {
+    const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
+    form.append("files", file, rel);
+  }
+  const res = await fetch("/api/ingest-upload", { method: "POST", body: form });
   if (!res.ok) {
     const detail = await res.json().catch(() => ({}));
-    throw new Error(detail.detail ?? `ingest failed (${res.status})`);
+    throw new Error(detail.detail ?? `ingestion échouée (${res.status})`);
   }
   return res.json();
 }

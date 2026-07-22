@@ -5,17 +5,20 @@ no adapter — the composition happens here, at the edge). Slice A ships the
 inventory path: drop a folder → the denominator and the failure list. Every data
 access is an HTTP call to this one API (AD-14); there is no second data path.
 
-Not yet (their stories): persistence of the result (the store writer), RBAC
-(1.4/3.3), audit (5.x), upload/USB transport (a server-side folder path stands in
-for the USB key here). No fixtures, no demo override (FR-33).
+Two intake paths through the SAME ingestion: POST /api/ingest (a server-side
+folder — the on-prem / USB-key model) and POST /api/ingest-upload (a browser
+folder upload — the hosted model). Persistence is transparent (`persisted`).
+Not yet (their stories): RBAC (1.4/3.3), audit (5.x), idempotent job semantics,
+container expansion. No fixtures, no demo override (FR-33).
 """
 
 from __future__ import annotations
 
+import tempfile
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from apx.adapters.extraction.files import FileExtractor
@@ -95,6 +98,45 @@ def ingest(req: IngestRequest) -> IngestResponse:
         persisted = True
     return IngestResponse(
         matter=req.matter,
+        inventory=_inventory_out(result.inventory),
+        failure_list=[
+            FailureOut(filename=f.filename, path=f.submitted_path, error_class=str(f.error_class))
+            for f in result.failures
+        ],
+        exclusion_list=result.exclusions,
+        persisted=persisted,
+    )
+
+
+@app.post("/api/ingest-upload", response_model=IngestResponse)
+async def ingest_upload(
+    matter: str = Form(...),
+    tenant: str = Form(...),
+    files: list[UploadFile] = Form(...),
+) -> IngestResponse:
+    """The browser path: a lawyer drops files (or a folder) and sees the inventory.
+    Uploaded files are written to a per-request temp directory — reconstructing the
+    submitted folder tree from each file's relative path — then ingested through the
+    same one path (FR-33). The temp dir is discarded; only the piece text (and
+    failures) persist to the store."""
+    if not files:
+        raise HTTPException(status_code=400, detail="no files uploaded")
+    with tempfile.TemporaryDirectory(prefix="apx-upload-") as tmp:
+        root = Path(tmp)
+        for f in files:
+            # The SPA sends the folder-relative path as the filename; rebuild the tree.
+            rel = Path(f.filename or "unnamed").as_posix().lstrip("/")
+            dest = root / rel
+            dest.parent.mkdir(parents=True, exist_ok=True)
+            dest.write_bytes(await f.read())
+        result = ingest_folder(root, matter=matter, tenant=tenant, extractor=FileExtractor())
+    store = _store()
+    persisted = False
+    if store is not None:
+        store.save(result)
+        persisted = True
+    return IngestResponse(
+        matter=matter,
         inventory=_inventory_out(result.inventory),
         failure_list=[
             FailureOut(filename=f.filename, path=f.submitted_path, error_class=str(f.error_class))
