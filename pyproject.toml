@@ -15,7 +15,13 @@ dependencies = [
     "uvicorn==0.51.0",
     "pydantic==2.13.4",
     "sqlalchemy==2.0.51",
-    "psycopg[binary]==3.3.4", # LGPL-3.0-only, in-process — to counsel (AD-28)
+    # psycopg[binary] bundles a working libpq wheel, so the package imports on any
+    # dev machine without a system libpq (plain `psycopg` fails here — the box's
+    # libpq is the wrong architecture). LGPL-3.0-only, in-process — to counsel
+    # (AD-28). [binary] is discouraged for production; the binary-vs-c-vs-system
+    # choice is the store/deploy story's (1.3), where it first actually connects.
+    # DEVIATION from the story's plain `psycopg`, recorded here per the 1.1 review.
+    "psycopg[binary]==3.3.4",
     "pgvector>=0.4,<0.5",     # Python helper (SQLAlchemy halfvec types); the EXTENSION pin 0.8.5 lives in docker-compose
     "alembic==1.18.5",
     "procrastinate>=3.9,<3.10",
@@ -72,8 +78,21 @@ forbidden_modules = ["apx.adapters"]
 [tool.ruff]
 target-version = "py313"
 line-length = 100
-# apx/adapters/store_postgres/migrations is Alembic-generated scaffolding.
-extend-exclude = ["apx/web", "_bmad", "_bmad-output", "Archives-legacy", "apx/adapters/store_postgres/migrations"]
+# Non-product trees `ruff check .` must not lint: vendored tooling (.claude,
+# _bmad), planning output, generated Alembic scaffolding, the npm project, and
+# reference material. Keeping these out makes `ruff check .` == the product code,
+# so the natural command and a scoped `ruff check apx tests` agree (the 1.1 review
+# found CI's `ruff check .` red on 217 violations inside .claude/).
+extend-exclude = [
+    "apx/web",
+    "apx/adapters/store_postgres/migrations",
+    ".claude",
+    "_bmad",
+    "_bmad-output",
+    "docs",
+    "design-artifacts",
+    "Archives-legacy",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]

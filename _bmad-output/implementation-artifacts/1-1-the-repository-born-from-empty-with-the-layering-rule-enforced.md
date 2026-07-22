@@ -283,6 +283,31 @@ Claude Opus 4.8 (1M context) — dev-story workflow.
 
 **Modified:** `.python-version` (3.12→3.13), `.gitignore` (already covered build outputs), story frontmatter `baseline_commit`.
 
+## Senior Developer Review (AI)
+
+**Date:** 2026-07-22 · **Outcome:** Changes Requested → all resolved → **Approved.**
+Three independent fresh-context reviewers (Blind Hunter, Edge Case Hunter, Acceptance Auditor). Acceptance: all 5 ACs met, scope respected both directions. The others found real integrity gaps in the guard, each reproduced against the repo and each now fixed and re-verified.
+
+### Action Items — all resolved
+
+- [x] **[HIGH] CI lint was red as committed.** `.github/workflows/ci.yml` runs `ruff check .`, which linted committed vendored tooling under `.claude/` (217 violations) — CI would fail though a scoped local run passed. Fixed: `[tool.ruff] extend-exclude` now covers `.claude`, `_bmad`, `_bmad-output`, `docs`, `design-artifacts`, so `ruff check .` == product code and is green.
+- [x] **[HIGH] The guard had no floor.** `apx/checks/layering.py` used a bare exit-code check; import-linter exits 0 on "0 kept, 0 broken", so deleting the sole contract would have passed green — defeating "a cut cannot drop this" (AD-3/AD-45). Fixed: the check parses the contract tally and fails unless ≥1 contract actually evaluated. Verified: removing the contract now turns the harness **red**.
+- [x] **[HIGH] The failure-path test asserted too loosely.** It checked only non-zero exit + "core_fake", which an import-linter *config error* also satisfies without the contract evaluating. Fixed: it now asserts a **BROKEN** contract, proving the contract ran and failed as a contract.
+- [x] **[MEDIUM] `layering.run()` was cwd-dependent** (cried wolf off-root). Fixed: it locates the project root and runs import-linter there; a new test asserts cwd-independence.
+- [x] **[LOW] Entrypoints were never imported by any test** (grimp is static; a runtime import regression would ship green). Fixed: `tests/checks/test_entrypoints.py` smoke-imports the FastAPI app and the Procrastinate worker app and asserts no routes / no apx tasks.
+- [x] **[LOW] compose healthcheck** lacked a `POSTGRES_DB` default → `:-apx` added.
+- [x] **[LOW] Alembic `env.py`** had no else for an unset `DATABASE_URL` → now raises a clear error (inert in 1.1, bites 1.3 otherwise).
+- [x] **[LOW/acceptance] `psycopg[binary]` deviation was silent.** Made explicit: `[binary]` is *required* for the package to import without a system libpq (plain `psycopg` fails on this box's architecture); recorded in `pyproject.toml` and here. The binary-vs-c production choice is deferred to the store story (1.3).
+- Deferred (sanctioned): Postgres image by digest → 1.3 (story Open Q4).
+
+### Post-fix verification (as CI runs it)
+
+`ruff check .` clean · harness green · **5** tests pass · web build emits static assets · compose config valid · guard proven live in **both** directions (red on a real core→adapter import; red on a dropped contract).
+
+## Change Log
+
+- 2026-07-22 — Story 1.1 implemented, then hardened against a 3-reviewer code review: 8 findings resolved (2 HIGH build/guard-integrity, 1 HIGH test-strength, 5 MEDIUM/LOW). Guard floor and cwd-independence added; CI lint scoped; entrypoint smoke test added.
+
 ## Open Questions for the human
 > **Resolved 2026-07-22:** the root `.python-version` was raised from 3.12 to **3.13** (uv installed 3.13.13); BMAD scripts verified still running. The backend targets 3.13 with no split pin.
 

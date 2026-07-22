@@ -18,6 +18,14 @@ import os as _os
 _db_url = _os.environ.get("DATABASE_URL")
 if _db_url:
     config.set_main_option("sqlalchemy.url", _db_url)
+elif not config.get_main_option("sqlalchemy.url"):
+    # Story 1.1 has no schema and never runs a migration, so this branch is inert
+    # here; it fails loudly rather than with an opaque empty-URL error once the
+    # store story (1.3) starts using Alembic.
+    raise RuntimeError(
+        "DATABASE_URL is not set. APX reads the database URL from the environment "
+        "(no credentials in source — AD-47). Set DATABASE_URL before running Alembic."
+    )
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
