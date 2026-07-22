@@ -256,6 +256,8 @@ Scaffolding only. Building any of the following here is a scope violation — ea
 ### File List
 
 ## Open Questions for the human
+> **Resolved 2026-07-22:** the root `.python-version` was raised from 3.12 to **3.13** (uv installed 3.13.13); BMAD scripts verified still running. The backend targets 3.13 with no split pin.
+
 
 1. **Raise the Python pin from 3.12 to 3.13 now?** The root `.python-version` currently reads `3.12`; the spine's target is **3.13.14** ([Stack]; docs/context/05 §8). This story assumes we raise it. `uv` fetches and manages 3.13 independently of the system Python, so the risk is low and no product code depends on 3.12 yet — but the root pin also governs any repo-level Python tooling, so confirm nothing outside `apx/` expects 3.12 before flipping it. **Recommendation: raise to 3.13.14 in this story.**
 2. **`apx/web/` nested vs. repo-root `web/`.** The spine nests the SPA under `apx/`, which puts a non-Python npm project inside the Python package directory. It works (excluded from the wheel), but a repo-root `web/` sibling to `apx/` is the more conventional monorepo shape. Default taken: follow the spine (`apx/web/`). Confirm, or approve relocation.
