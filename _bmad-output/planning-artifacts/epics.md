@@ -1,5 +1,5 @@
 ---
-stepsCompleted: [1, 2]
+stepsCompleted: [1, 2, 3, 4]
 inputDocuments:
   - _bmad-output/planning-artifacts/prds/prd-apx-mvp-2026-07-20/prd.md
   - _bmad-output/planning-artifacts/prds/prd-apx-mvp-2026-07-20/addendum.md
@@ -556,27 +556,990 @@ The *retained set* comes out as a deliverable rather than staying inside the too
 
 <!-- Repeat for each epic in epics_list (N = 1, 2, 3...) -->
 
-## Epic {{N}}: {{epic_title_N}}
+## Epic 1: A firm installs APX, and it is safe from the first minute
 
-{{epic_goal_N}}
+A firm's IT contact installs APX on a machine the firm owns, it starts or refuses to start, and a lawyer signs in. The *payload schema* — the only irreversible decision in the increment — is frozen here, and the offline fitness function runs in CI from the first week so no dependency can quietly make the product un-installable.
 
-<!-- Repeat for each story (M = 1, 2, 3...) within epic N -->
+**Definition of done for the epic:**
+- A network-isolated CI job boots the application, ingests a folder, indexes, retrieves, ranks, audits and exports — with no hosted-provider service reachable — and fails the build if any step needs the network (FR-55).
+- The *payload schema* is frozen: exactly one *chunk* writer, `RBAC scope` a required argument with no default anywhere in source, asserted by a static check (FR-8, FR-56).
+- A deployment started without encryption or a key, or with an unencrypted data volume, fails to start — no permissive default (FR-47).
+- A *tenant* can be provisioned, its first administrative grant established, a user signed in, and a restore into an empty installation reproduces it identically (FR-50, FR-49, FR-48, FR-52).
 
-### Story {{N}}.{{M}}: {{story_title_N_M}}
+### Story 1.1: The repository, born from empty, with the layering rule enforced
 
-As a {{user_type}},
-I want {{capability}},
-So that {{value_benefit}}.
+As the APX build (one lead plus agents),
+I want the repository created from nothing with the prescribed source tree, the hexagonal layering rule and an empty `checks/` harness in place,
+So that every later story is written against a structure a static check already guards, rather than one that drifts.
 
 **Acceptance Criteria:**
 
-<!-- for each AC on this story -->
+**Given** no repository exists and the spine names no starter or paved path,
+**When** Story 1.1 is complete,
+**Then** the source tree matches the spine's prescribed layout (a hexagonal core with adapter boundaries), a `checks/` harness runs in CI and is green on an empty project, and the pinned stack versions from the spine are declared in the lockfiles (PostgreSQL 18.4, pgvector ≥ 0.8.5, Procrastinate 3.9.x, FastAPI 0.139.2, Starlette 1.3.1, Vite 8.1.5, React Router 8.2.0).
+**And** a static check asserts the layering rule — the core imports no adapter — and fails the build on violation (per AD's hexagonal-core rule).
+**And** *(failure path)* a deliberately introduced import from the core to an adapter turns the build red, proving the check is live and not decorative.
 
-**Given** {{precondition}}
-**When** {{action}}
-**Then** {{expected_outcome}}
-**And** {{additional_criteria}}
+### Story 1.2: The offline fitness function, running in CI from week one
 
-<!-- End story repeat -->
-</content>
-</invoke>
+As the APX build,
+I want a CI job that boots the application in a network-isolated container and drives it end to end,
+So that "portable to an air-gapped firm machine" is measured continuously rather than discovered in front of the first client.
+
+**Acceptance Criteria:**
+
+**Given** a network-isolated container with no hosted-provider service reachable and no outbound network except a stubbed model-provider endpoint,
+**When** the fitness job runs,
+**Then** it asserts the application starts, ingests a folder, indexes it, retrieves over both engines, ranks, places **the line**, produces an *audit record* and exports — and a failure of any step fails the build (FR-55).
+**And** the job enumerates which capabilities do **not** survive the model provider's absence — the ranking, the justifications, the priced statement — rather than describing them.
+**And** the *confidence bound* sentence is asserted to be regenerable from the *audit record* with **no** model call (FR-55, `[ASSUMPTION]` carried: a statistical claim must never depend on a network call).
+**And** *(failure path)* introducing a hard dependency on a hosted-provider SDK in the core turns this job red.
+
+### Story 1.3: The frozen payload schema
+
+As a lawyer whose matters must stay walled apart for years,
+I want every indexed *chunk* to carry a complete, versioned provenance and scope record that cannot be written incomplete,
+So that the one decision that cannot be undone later — what travels on every *chunk* — is made once and made right.
+
+**Acceptance Criteria:**
+
+**Given** the *payload schema* writer,
+**When** a *chunk* is written,
+**Then** it carries every mandatory non-nullable field — *tenant*, *matter*, *RBAC scope*, *custodian*, source *pièce* identifier, source position, extraction method and extractor version, schema version, ingestion timestamp, and the *pièce*'s own date or an explicit "undetermined" (FR-8).
+**And** the full extracted text of a *pièce* is stored addressably, separately from its *chunks*, with its own identity and version recorded on the *pièce* (FR-8, so FR-13's exhaustive search has a target).
+**And** the *pièce*'s borne date and its ingestion date are stored separately and neither is ever substituted for the other.
+**And** a static check asserts there is exactly one *chunk* writer, that it takes *RBAC scope* as a required argument, and that no default value for that argument exists anywhere in source (FR-8, FR-56; per AD-40 scope is a write-time check, never a column, and the permitted `chunk` columns are enumerated).
+**And** *(failure path)* a *chunk* write missing any mandatory field is rejected at the boundary, fails the *import job* loudly, and enters the *failure register* — never written with a default, never with an empty *RBAC scope*.
+**And** *(failure path)* an *import job* that spans a schema or chunking version change completes under the versions it started with, or halts and restarts — it never produces two generations of *chunks* inside one *matter*.
+
+### Story 1.4: Tenant isolation, enforced at the boundary
+
+As a firm whose data must never touch another firm's,
+I want every record bound to exactly one *tenant* and every read constrained by *tenant* before anything else,
+So that isolation holds identically whether APX runs hosted or on our own machine.
+
+**Acceptance Criteria:**
+
+**Given** any stored record,
+**When** it is written,
+**Then** it carries its *tenant*, enforced at the write boundary, and a record without a *tenant* cannot be written (FR-29).
+**And** every read is constrained by *tenant* before *RBAC scope* is applied (FR-29, then AD-13's query-time scope).
+**And** an adversarial test asserts zero cross-*tenant* results, counts or metadata across every retrieval, export and diagnostic surface.
+**And** no *tenant*'s data is used to compute anything shown to another *tenant*, including aggregate statistics and model behaviour.
+**And** *(failure path)* a query deliberately crafted to omit the *tenant* constraint fails closed — returning nothing — rather than returning another *tenant*'s rows.
+
+### Story 1.5: Authentication and sessions the application owns
+
+As a lawyer signing in to a tool holding privileged material,
+I want authentication and sessions handled by the application itself, not by a hosting provider,
+So that the same identity model works air-gapped and hosted, and no third party stands between me and the wall.
+
+**Acceptance Criteria:**
+
+**Given** the authentication surface,
+**When** a credential is stored,
+**Then** it uses a current password-hashing function (Argon2id via `pwdlib[argon2]`) with a per-credential salt, and a static check asserts no reversible credential storage exists anywhere (FR-48, FR-56).
+**And** sessions are opaque, server-side, with a configured absolute and idle lifetime, invalidated on password change, on scope revocation and on explicit sign-out, with identifiers that are not guessable and not reusable (FR-48; per AD's owned-auth decision, no JWT for user sessions).
+**And** a configured lockout or rate limit applies to repeated authentication failure, and every failure and lockout is recorded in the *audit record*.
+**And** multi-factor authentication exists and is *configuration-as-data* per *tenant* (FR-48, `[ASSUMPTION]` carried).
+**And** *(failure path)* a revoked scope invalidates the live session that held it, at the next request, not at the next login (ties FR-14, FR-49).
+
+> SSO against a firm's directory is explicitly out of scope for this increment and recorded as a probable day-one ask (OQ-22) — not a surprise.
+
+### Story 1.6: Grant-time authorisation and scope administration
+
+As a firm's supervising partner,
+I want creating, granting, revoking and re-scoping *RBAC scopes* to be privileged, recorded and reversible acts,
+So that a Chinese wall cannot be widened by anyone who happens to have access — a wall anyone can move is not a wall.
+
+**Acceptance Criteria:**
+
+**Given** scope administration,
+**When** a scope is created, granted, revoked, or a *matter* re-scoped,
+**Then** each is a privileged act requiring an explicit administrative grant held by a named user of the *tenant*, each recorded in the *audit record* with actor, subject, scope, authority and timestamp, and each reversible (FR-49).
+**And** the administrative grant is itself granted by the same mechanism, its first holder established at *tenant* provisioning, with no implicit superuser and no identity that bypasses FR-14 — fail-closed applies to administrative and system identities alike.
+**And** a re-scope takes effect at the next query with nothing to propagate and no half-stamped window (FR-49 as amended, AD-13), recorded as one operation with its before and after scope.
+**And** *(failure path)* the mutating adversarial suite re-scopes a *matter* mid-*corpus* and asserts the wall holds in its new position immediately and in its old position never.
+
+### Story 1.7: Encryption at rest and in transit, with a fail-closed start
+
+As a firm whose *secret professionnel* is a criminal obligation,
+I want everything at rest encrypted and the application to refuse to start without it,
+So that a stolen disk or a restored backup yields nothing.
+
+**Acceptance Criteria:**
+
+**Given** any *tenant* data at rest — originals, extracted text, *chunks*, embeddings, OCR images, the *audit record*, the *failure register*, configuration, staged exports,
+**When** it is stored,
+**Then** it is encrypted by the application's storage adapters, in a hosted deployment and a single-machine install alike, **except** the two named searchable surfaces — the vector column and the deterministic text index — which are protected by volume- or cluster-level encryption instead (FR-47 as amended, AD-31/47).
+**And** all network traffic carrying *tenant* data or credentials is encrypted in transit, including between the application and its own stores.
+**And** a seeded-token inspection of the raw stores finds no plaintext token, excluding the two named surfaces, which are asserted differently.
+**And** *(failure path)* a deployment started with encryption disabled, without a key, or with an unencrypted data volume, fails to start — no permissive default, no warning-and-continue, both layers covered by one startup gate.
+
+### Story 1.8: Secret and key management
+
+As a firm,
+I want every secret held outside the data stores, never logged or exported, and rotatable without redeployment,
+So that the one mistake that ends a client relationship — a secret in the wrong place — is designed out.
+
+**Acceptance Criteria:**
+
+**Given** model-provider credentials, embedder credentials and encryption keys,
+**When** they are held,
+**Then** they live outside the application's own data stores, are never written to a log, diagnostic, export or *audit record* entry, and are never displayed after entry (FR-51).
+**And** every secret is rotatable without a redeployment and without re-indexing, and rotation is recorded in the *audit record*.
+**And** a static check asserts no secret value appears in source, in committed configuration, or in any example configuration (FR-51, FR-56).
+**And** the *content-free projection* is asserted against seeded secret values as well as seeded content tokens (ties FR-31).
+**And** *(failure path)* a seeded secret placed in a log line or an export turns the build red.
+
+### Story 1.9: Configuration-as-data and the provisioning surface
+
+As APX operating one codebase for many firms,
+I want per-*tenant* behaviour to be data rows edited through one audited surface, and a *tenant* provisioned through it,
+So that saying yes to a firm's bespoke need never becomes a per-site code fork — the failure that is fatal at eight clients.
+
+**Acceptance Criteria:**
+
+**Given** the configuration surface (FR-50),
+**When** a *tenant* is provisioned,
+**Then** its first administrative grant is established, and its taxonomy, *RBAC scopes*, model provider and endpoint, sources, chunking configuration, exclusion list, cascade and refusal thresholds, and interface language are all editable as data without a code change or a different deployment (FR-30, FR-50).
+**And** configuration is edited only through that surface — direct database editing is not the mechanism, because it produces no *audit record* entry, no validation and no rollback (FR-30).
+**And** a static check asserts no *tenant*-specific identifier or name appears anywhere in source, and one artefact is built and every installation runs it (FR-30, FR-56).
+**And** every configuration key referenced in any documentation exists in the surface and is asserted to exist by a test; every key has a default, and a test asserts no default disables the guarantee its key governs (FR-30; v1 defects: keys that existed in zero source files, the off-corpus gate disabled by default).
+**And** *(failure path)* a documented key with no backing entry, or a default that disables its own guarantee, fails the build.
+
+> **UX pass required before implementation.** No UX design contract exists yet. The provisioning and configuration surface is user-facing.
+
+### Story 1.10: The content-free projection primitive
+
+As APX supporting an installation I can never see into,
+I want a single audited primitive that emits counts, versions, error classes and redacted diagnostics and provably no *tenant* content,
+So that "only code travels" is one enforceable mechanism reused three times, not a promise repeated in three places.
+
+**Acceptance Criteria:**
+
+**Given** the *content-free projection* (FR-31),
+**When** it emits anything — a client-pushed diagnostic export, a cockpit signal, or the style-profile output of a later increment,
+**Then** the output passes an assertion that seeded content tokens and seeded secret values do not appear in it, and the content-freedom is enforced by a structural property rather than by an allow-list that a later field could quietly break (FR-31, AD's open-registry-with-attestation decision).
+**And** the egress check lives in a unit that cannot be cut from the build (per AD-45, moved off the unit an adversarial review predicted would be dropped).
+**And** *(failure path)* adding a new projected field without an attestation that it is content-free turns the build red.
+*Note: an adversarial review named the content-free projection among the components most likely to be quietly dropped under pressure. It is load-bearing for the sovereignty claim.*
+
+### Story 1.11: Backup, restore and disaster recovery
+
+As a firm running APX on one machine with no ops staff,
+I want scheduled encrypted backups, a restore that is exercised not assumed, and a stated storage footprint,
+So that a disk failure does not destroy a record I may need in front of a *bâtonnier*.
+
+**Acceptance Criteria:**
+
+**Given** a *tenant* at scale,
+**When** a backup runs,
+**Then** it produces a complete restorable backup — originals, extracted text, index, *audit record*, *failure register*, configuration — encrypted, inside the *tenant* boundary, on a schedule and on demand (FR-52).
+**And** a restore into an empty installation reproduces a *tenant* whose *denominator*, ranked orders, *audit record* sequence and *confidence bounds* are identical to the source, asserted by CI test at reduced scale (FR-52).
+**And** the storage footprint at the *design target* is computed and stated by the product, and a pre-flight capacity check refuses an *import job* that cannot fit rather than discovering it at 70%.
+**And** backup success or failure is a *worklist* line in the lawyer's language, and a *tenant* with no successful backup within the configured interval says so persistently on the home screen.
+**And** *(failure path)* on a full disk, writes to the append-only stores fail closed, the *import job* halts with a *worklist* line, and no partial state is presented as complete (ties FR-53).
+*Note: this entire FR is an inference — backup and restore appear in no source document, and their absence is the single most likely way an installation ends a client relationship. Do not drop it as "not in the PRD".*
+
+### Story 1.12: The structural-properties harness
+
+As the APX build standing in for the engineers who are not on the team,
+I want every "no code path does X" claim in the PRD backed by a named static check in CI,
+So that a guarantee is decided by a machine, not by a human remembering to look.
+
+**Acceptance Criteria:**
+
+**Given** the set of structural properties the PRD enumerates,
+**When** the harness runs,
+**Then** each named property has a check — grep, lint, import-graph or architecture rule — that fails the build on violation, and a property with no check is itself a build failure (FR-56).
+**And** the set includes at minimum: no fallback embedder (FR-9), destructive index operations reachable from one entry point only (FR-10), no post-filter in retrieval (FR-14), one *chunk* write boundary with a required scope argument (FR-8), no *tenant*-specific identifier in source (FR-30), no runtime import from the test tree and no fixture path (FR-33), no natural-language string as a translation key (FR-34), no hard-coded locale (FR-35), no outbound call site outside the enumerated adapters (FR-32), no reversible credential storage (FR-48), no secret in source (FR-51), no model-reported confidence field consumed (FR-42), and no banned *confidence bound* phrasing in any locale (FR-23).
+**And** each property names the check that enforces it and the file or pattern it inspects.
+**And** where a claim cannot be decided by a check or a test, the document's verb is honoured — *asserted by test*, *enforced as a structural property*, or *asserted by review* — and the third is never counted as a passing test (FR-56).
+
+**Epic 1 covers:** FR-8, FR-29, FR-30, FR-31, FR-47, FR-48, FR-49, FR-50, FR-51, FR-52, FR-55, FR-56.
+
+---
+
+## Epic 2: A lawyer hands over a matter and every document is accounted for
+
+A lawyer selects a folder — a USB key, a network share — and leaves. On return: every *pièce* is in the *corpus*, in the *failure register*, or in a declared exclusion, with nothing in two of them and nothing in none. The *denominator* is permanent and on screen, the *worklist* says what needs a human, and the completion summary is readable by someone who is not technical. Closes with the timed 5 000-*pièce* concurrent run that gates every performance commitment downstream.
+
+**Definition of done for the epic:**
+- `submitted = in corpus + open failure register entries + declared exclusions` holds after every *import job* and every retry, at the *design target*, asserted by an invariant test (FR-6, FR-57).
+- A folder ingests non-blockingly and survives a worker kill at three or more points without losing or duplicating a *pièce* (FR-2, FR-4).
+- No fixture layer and no demo override exists anywhere in runtime code, asserted statically (FR-33).
+- The timed 5 000-*pièce* concurrent run has produced a real number for OCR + embedding + inference together, and no downstream performance claim precedes it (gate).
+
+### Story 2.1: Folder selection as the whole onboarding gesture
+
+As a lawyer with four years of a *matter* on a USB key,
+I want to start an import by choosing the folder, the *matter* and the *RBAC scope* and nothing else mandatory,
+So that onboarding is a gesture, not an IT project.
+
+**Acceptance Criteria:**
+
+**Given** an authenticated user,
+**When** she starts an *import job*,
+**Then** exactly three inputs are mandatory — folder, *matter*, *RBAC scope* — with exactly one optional input on the same screen, the *case theory*, which can be skipped and whose skipping blocks nothing, and no further mandatory configuration screen exists on this path (FR-1, FR-37).
+**And** subfolders are traversed to arbitrary depth and the submitted folder structure is reconstructible from the *payload schema* record alone.
+**And** the *RBAC scope* selectable is constrained to scopes the user holds or may grant, asserted by test in both directions — she cannot narrow material out of her supervisor's sight nor broaden it to a group she chose (FR-1, FR-49).
+**And** the *custodian* is captured at import as a mandatory field, `custodian-undeclared` where genuinely unknown, never blank.
+**And** *(failure path)* a folder of zero readable files produces a completed job with a 0/0 *denominator* and an explanatory *worklist* line — not an error dialog, not a silent no-op.
+**And** *(failure path)* an attempt to write a *pièce* with a null or empty *RBAC scope* fails the job loudly rather than defaulting to permissive.
+
+> **UX pass required before implementation.** No UX design contract exists yet. The onboarding screen is user-facing.
+
+### Story 2.2: The non-blocking, resumable import job
+
+As a lawyer who wants to keep working while four years of a *matter* import,
+I want the job to run in the background and survive a crash without losing or repeating work,
+So that a machine restart at hour six does not mean starting over.
+
+**Acceptance Criteria:**
+
+**Given** a running *import job*,
+**When** the user does anything else,
+**Then** no screen is blocked and no modal shown, and progress is a persistent, collapsed, non-blocking indicator of processed-against-submitted (FR-2).
+**And** killing the worker mid-job and restarting resumes from the last committed unit — no indexed *pièce* re-indexed as new, no unprocessed *pièce* skipped — asserted with an induced kill at three or more points (FR-2; Procrastinate over PostgreSQL makes resume a transaction property per AD).
+**And** memory is bounded per unit of work: no single *pièce*, however large, need fit in memory whole, and a unit exceeding the bound enters the *failure register* as `resource-exhausted` rather than killing the worker.
+**And** *(failure path)* a poison unit that kills the worker is quarantined after a configured number of attempts, entered in the register with its class, and the job proceeds and completes — asserted with a deliberately poisonous unit.
+*Note: resumable ingestion is flagged by the work breakdown as likely underestimated. The quarantine rule is what stops resume from looping forever onto the unit that killed it.*
+
+### Story 2.3: Multi-format extraction — the largest surface
+
+As a lawyer whose *matter* is mostly `.msg` with attachments and scanned PDFs,
+I want text and structure extracted from every format a litigation *matter* actually contains,
+So that the corpus is the *matter*, not the subset that happened to be easy to read.
+
+**Acceptance Criteria:**
+
+**Given** *ingestion*,
+**When** it processes a *pièce*,
+**Then** it extracts `.msg` (headers, reply chains, embedded attachments), born-digital PDF, scanned PDF via OCR, `.docx`, `.xlsx`, and standalone images via OCR, with OCR running **inside the *tenant* boundary** — no hosted OCR service (FR-3, §15; extract-msg out-of-process and GPL-isolated, Docling + Tesseract 5.5.2 per the stack research).
+**And** an email with N attachments yields N+1 *pièces*, each with a stable identifier, provenance to its parent, and the parent's *custodian* inherited.
+**And** every *pièce* records extraction method and extractor version, so a transcription is distinguishable from a text layer and a re-extraction is detectable.
+**And** *(failure path)* an unsupported format enters the register as `unsupported-format`, counted in the *denominator* — never silently vanished.
+**And** *(failure path)* an extraction that yields no text — blank scan, empty `.docx` — enters the register as `extracted-empty` and is **not** counted as in the *corpus*, because otherwise an absence claim would assert it was searched.
+*Note: this is the largest single engineering surface in the increment — `.msg` alone is compound-file parsing, RTF-compressed bodies, TNEF, nested messages, charset recovery, reply-chain reconstruction — and the work breakdown flags it as months, not weeks. Do not size it as one story in practice; it is written as one here for traceability and must be split at implementation.*
+
+### Story 2.4: Container expansion and the unit of the denominator
+
+As a lawyer,
+I want archives, PDF portfolios and nested messages expanded, with every hidden *pièce* counted,
+So that a `.zip` of 500 documents is not recorded as one missing file.
+
+**Acceptance Criteria:**
+
+**Given** a container — `.zip`, `.7z`, PDF portfolio, mailbox export, `.msg` nested in `.msg`,
+**When** it is ingested,
+**Then** members become *pièces* carrying provenance through the container and inheriting its *custodian*, asserted with a container three levels deep (FR-57).
+**And** recursion depth and expansion ratio are bounded by configuration, and a container exceeding either enters the register as `container-unopenable` with the reason — a zip bomb is a register entry, not an outage.
+**And** a container that cannot be opened is one entry with cardinality `unknown`, and every *denominator* and absence claim states the unknown explicitly — *"1 archive unopened, contents unknown"*, never "· 1 not indexed".
+**And** the unit of the inventory guarantee is the *pièce* counted after expansion, and *submitted* is frozen at completion of enumeration-and-expansion, declaring itself provisional while expansion is in progress.
+
+### Story 2.5: Idempotent ingestion with stable identity
+
+As a lawyer who might import overlapping folders,
+I want re-submitting material to neither duplicate nor destroy it, and every *custodian* kept,
+So that who held a document — often the fact in issue in *ordonnance 145 CPC* work — is never lost to deduplication.
+
+**Acceptance Criteria:**
+
+**Given** *ingestion*,
+**When** a *pièce* is identified,
+**Then** its identifier is a deterministic function of **(content, *matter*)** — provenance path is not part of identity — stable across runs, processes and installations, never from a restarting counter (FR-4; per AD-40, `(content, matter)` identity).
+**And** importing the same folder twice into the same *matter* leaves the *corpus* count unchanged, every prior *pièce* readable and unmodified, and reports the recognised-already-present count as its own line — asserted by test (FR-4; the v1 defect was ids reused from 1, so a second upload overwrote the first).
+**And** importing a file present in two folders yields one *pièce* with two recorded provenance paths and **every *custodian* retained as a queryable set** — deduplication may never collapse two custodians into one.
+**And** importing the same file into two different *matters* yields two *pièces*, because *matter* is part of identity — cross-*matter* deduplication is never performed.
+**And** *(failure path)* under an induced write conflict — the same *pièce* processed by two workers — the *corpus* contains exactly one copy and the job does not fail.
+
+### Story 2.6: The failure register
+
+As a lawyer,
+I want every *pièce* that failed to index enumerated, attributed and actionable, resolved by state change and never by removal,
+So that the decisive document that would not open is on a list I can act on, not silently gone.
+
+**Acceptance Criteria:**
+
+**Given** a *pièce* that fails at any stage,
+**When** it is recorded,
+**Then** the register entry carries filename, submitted path, *matter*, *custodian*, error class, cardinality, resolution state, timestamp and a retry action, with error classes drawn from the enumerated stable set and an unclassified failure recorded as `unknown` with its redacted diagnostic — never dropped (FR-5).
+**And** entries are resolved by state change: retrying re-runs *ingestion* for that *pièce* only, a success moves the entry to `resolved` and keeps its history, and the *inventory guarantee* counts open entries only.
+**And** a `password-protected` entry offers a credential-supply action; an entry whose only exit is an *override* is a defect of this FR, because it would force a lawyer to record that she excluded a document she could in fact have opened.
+**And** a **bulk retry** exists over a filtered set — by class, *matter*, *custodian* — producing one *audit record* entry naming the set, not one per *pièce*.
+**And** the register is exportable one *pièce* per line, within the exporting user's *RBAC scope*, recorded in the *audit record*; entries whose *matter* could not be determined are visible only to the *tenant*-wide administrative grant holder (FR-5, FR-49).
+
+> **UX pass required before implementation.** No UX design contract exists yet. The register is a user-facing surface.
+
+### Story 2.7: The inventory guarantee and the permanent denominator
+
+As a lawyer who must one day tell a court what was and was not reviewed,
+I want a permanent, on-screen accounting where every submitted *pièce* is in exactly one of three named, countable places,
+So that "nothing relevant was silently lost" is a number, not a hope.
+
+**Acceptance Criteria:**
+
+**Given** any *matter*,
+**When** its *denominator* is computed,
+**Then** `submitted = in corpus + open failure register entries + declared exclusions` holds at all times, each term separately countable and displayed as its own line, nothing in two terms or in none, with no fourth bucket and no unnamed remainder — asserted by an invariant test after every *import job* and every retry, at the *design target* (FR-6 as corrected 21 July 2026, FR-57).
+**And** filesystem noise is a declared, configured, countable exclusion class reported as its own line — *"1 240 excluded as filesystem noise"* — one click from the list of what was excluded, neither silently dropped nor dominating the register.
+**And** the *denominator* is permanent and visible on the home screen and carries the *failure register* count and the unknown-cardinality containers explicitly (FR-28, ties FR-57).
+**And** *(failure path)* a deliberately induced miscount — a *pièce* in two terms, or in none — fails the invariant test, which is a release blocker (SM-3).
+
+### Story 2.8: The embedder fails loudly and the index never deletes itself
+
+As a firm whose *corpus* took days to build,
+I want embedding to stop the work rather than degrade silently, and no automatic process to ever wipe the index,
+So that one transient error cannot turn retrieval into noise or destroy the *corpus*.
+
+**Acceptance Criteria:**
+
+**Given** the embedder,
+**When** it fails — unavailability, rate limit, timeout, dimension mismatch, auth failure,
+**Then** it halts the affected unit, records it in the register with its class, generates a *worklist* line, and never produces a *chunk* (FR-9).
+**And** there is no fallback embedder: a static check asserts the embedder interface has exactly one non-test implementation, no exception handler in the embedding path constructs an embedder, and no configuration selects one outside the enumerated provider list (FR-9, FR-56; v1 defect: silent 1024→256 hash fallback).
+**And** no code path performs a bulk deletion, recreation or truncation of indexed material in response to any error, schema, dimension or version difference — the destructive operations are reachable from exactly one named administrative entry point, asserted statically (FR-10, FR-56; v1 defect: the whole collection wiped on any vector-size mismatch).
+**And** a dimension or schema mismatch halts that unit, surfaces an actionable *worklist* line, and leaves the existing *corpus* intact and queryable, with recovery not requiring a full re-index.
+**And** *(failure path)* injecting a transient embedder failure into a 1 000-*pièce* job leaves some indexed, the failed ones in the register, the *denominator* consistent, and a retry that completes them — asserted by test.
+
+### Story 2.9: Chunking with provenance to the exact passage
+
+As a lawyer,
+I want every *chunk* traceable to the exact place in the source it came from, and a failed resolution shown as failed,
+So that an extract in an export a court reads later cannot silently be pointing at nothing.
+
+**Acceptance Criteria:**
+
+**Given** a *chunk*,
+**When** the interface resolves it,
+**Then** it opens the source *pièce* and locates the passage, and re-chunking the same *pièce* with the same configuration produces identical *chunks* with identical identifiers (FR-11).
+**And** a resolution that fails at read time — *pièce* gone, text changed under re-extraction, containment check fails — is surfaced as such wherever the extract appears and marks the containing *audit record* export as degraded; an extract that no longer resolves is never displayed as though it did.
+**And** chunking configuration is *configuration-as-data*, recorded on the *chunk*, so *chunks* under different configurations are distinguishable.
+
+### Story 2.10: The completion summary — tasks, not a log
+
+As a lawyer returning to the machine after dinner,
+I want a summary whose first element is the *denominator* and whose second is the human tasks this job created,
+So that I see what needs me, not a wall of technical events.
+
+**Acceptance Criteria:**
+
+**Given** a finished *import job*,
+**When** the user opens the completed indicator,
+**Then** the first element is the *denominator* and the second is the *worklist* lines this job generated, each phrased as an action in the lawyer's language and clickable through to its referent; a non-actionable line is not shown here (FR-7, FR-27).
+**And** the summary distinguishes with counts: newly indexed, recognised as already present, excluded as filesystem noise, expanded from containers, and entered in the register broken down by error class.
+**And** the summary is reachable again later from the *matter* and from the *audit record* — not a transient notification.
+
+> **UX pass required before implementation.** No UX design contract exists yet. The *worklist* and completion summary are user-facing.
+
+### Story 2.11: The worklist and the matters zone
+
+As a lawyer opening APX,
+I want the home screen to open on what needs me, with my *matters* below it as navigation,
+So that the queue is never pushed off the screen by a firm with three hundred *matters*.
+
+**Acceptance Criteria:**
+
+**Given** the home screen,
+**When** it renders,
+**Then** the top zone is the *worklist* — actionable lines only, each an action in the lawyer's language, never a technical state; a non-actionable line is not shown there (FR-27), with aggregation and a cap so that at the *design target* it does not become the log it forbids.
+**And** below it the *matters* zone lists *matters* within the user's *RBAC scope* with each one's *scoped denominator*, whether a job is running, whether a ranking exists and is stale, whether a *sampling run* is open, and when the user last touched it (FR-60).
+**And** a *matters* line is navigation, not a task: no line type appears in both zones, asserted by test, and the *worklist* is always the top zone (FR-60).
+**And** *(failure path)* a *tenant* with three hundred *matters* does not push the *worklist* off the screen — the *matters* zone is bounded and ordered by last activity with the remainder one click away.
+
+> **UX pass required before implementation.** No UX design contract exists yet. The home screen is the most-seen surface in the product.
+
+### Story 2.12: The corpus and gold-set evaluation pipeline
+
+As the APX build with no client corpus,
+I want the evaluation corpora acquired, licence-cleared, degraded and merged behind a gate that blocks ranking work until recall is measured,
+So that ranking quality is measurable from the first line rather than asserted — the exact thing v1 never did.
+
+**Acceptance Criteria:**
+
+**Given** the evaluation corpora (Enron/EDRM, TREC Legal Track, mechanically degraded French public text),
+**When** they are assembled,
+**Then** they enter through *ingestion* as configured data sources, never as fixtures, with licence verification of the specific distribution used an explicit recorded step (FR-54, FR-33).
+**And** the degradation pipeline is part of the test surface: each mechanical degradation of real French public text is asserted against the *failure register* class it must produce — a corrupted `.msg` → `corrupt-file`, a password-protected PDF → `password-protected`, an unopenable archive → `container-unopenable`.
+**And** the *gold set*'s relevance judgments are mapped onto this product's notion of relevance — its *case theory*, taxonomy and **the line** — and the mapping is written down, versioned and reviewable.
+**And** a **merge gate** blocks any ranking or triage code from merging before SM-2 executes against the *gold set* in CI (FR-54; this gate precedes all of Epic 4).
+**And** the pipeline runs at the *design target*, not extrapolated, and the *denominator* is verified against it.
+*Note: this is a product-sized build with no user-visible output, and an adversarial review named it among the components most likely to be quietly dropped. It has a numbered requirement precisely so that dropping it is a visible decision. Salvage: the v1 labelled mock corpus and its gold `manifest.json` are ranked the single most valuable thing to lift, per the retrospective — they are a ready-made eval set.*
+
+### Story 2.13: The timed 5 000-pièce concurrent run — the gate
+
+As the APX build,
+I want a real measurement of OCR, embedding and inference running **concurrently** on one machine over 5 000 *pièces*,
+So that every wall-clock promise downstream rests on a number rather than on three components each sized as if it owned the machine alone.
+
+**Acceptance Criteria:**
+
+**Given** one machine at each supported inference profile (the GPU profile and the CPU profile),
+**When** 5 000 real *pièces* — including scanned PDFs requiring OCR — are ingested with extraction, OCR, embedding and LLM judgement running concurrently,
+**Then** the wall-clock, peak memory and peak VRAM are measured and recorded, not extrapolated from single-component benchmarks (Open Risk 3 from the spine: nobody summed the machine).
+**And** the measured figures are the basis for any latency or throughput ceiling stated anywhere downstream; until they exist, no such ceiling may be asserted (NFR-2, ties SM-C4).
+**And** the run is documented as a **measurement, not a feature** — it ships no user-visible capability and exists to falsify or confirm the machine sizing.
+**And** *(failure path)* if the concurrent run exceeds the CCBE €2 000 machine's envelope, that is a recorded finding that revises the hardware ask or the cascade aggressiveness — it is not smoothed over.
+*Note: this story closes Epic 2 and gates Epics 3, 4 and 5. It is the first thing to measure and it is written last in the epic so that there is something real to measure.*
+
+**Epic 2 covers:** FR-1, FR-2, FR-3, FR-4, FR-5, FR-6, FR-7, FR-9, FR-10, FR-11, FR-27, FR-28, FR-33, FR-54, FR-57, FR-60.
+
+---
+
+## Epic 3: A lawyer finds a pièce, and can prove another does not exist
+
+Two engines with different truth status: one that finds and never claims completeness, one that proves and returns the whole match set. Every result declares which it is, in the interface and in any export. The *RBAC scope* is a pre-filter on the query itself, so a wall cannot leak silently. And the *pièce* viewer, because reading the document is the job.
+
+**Definition of done for the epic:**
+- A semantic result never labels itself complete and a deterministic result always carries its *denominator*, asserted at the one construction site per engine (FR-12, FR-13, FR-15).
+- An adversarial suite whose highest-similarity matches are deliberately out of *RBAC scope* returns zero out-of-scope results and zero out-of-scope metadata across both engines (FR-14).
+- The viewer opens every extracted format at the highlighted passage, inside the *tenant* boundary, applying the scope pre-filter (FR-44).
+
+### Story 3.1: Semantic retrieval, marked suggestive
+
+As a lawyer looking for *pièces* about a topic,
+I want ranked results that never pretend to be the complete set,
+So that I am never misled into thinking a suggestion was a proof.
+
+**Acceptance Criteria:**
+
+**Given** a semantic query,
+**When** results return,
+**Then** they are ranked with a stated k and the result set declares *truth status* = **suggestive**, each result carrying its *pièce* identity and *chunk* provenance and openable at the source position (FR-12).
+**And** the set never displays or exports a count phrased as a total; it says "top N of the corpus by similarity" or equivalent wording that cannot be read as completeness.
+**And** a static check asserts *truth status* is set at exactly one construction site per engine and is constant there, so no similarity threshold in any configuration can label a semantic set **exhaustive** (FR-12, FR-56).
+**And** any **similarity threshold** used is *configuration-as-data*, recorded with the result, with a defined default, and a default that disables the behaviour it governs is a defect (FR-12; the v1 instance is `addendum.md` §4).
+
+### Story 3.2: Deterministic exhaustive search — the one thing that can prove absence
+
+As a lawyer who must tell a court a term appears nowhere in the *corpus*,
+I want an exact search over the full stored text that returns the complete match set with its *denominator*,
+So that I can say "searched everything indexed, zero occurrences" and defend it.
+
+**Acceptance Criteria:**
+
+**Given** a deterministic query over the stored full text (FR-8's addressable text, PostgreSQL-native full-text per AD-21),
+**When** it runs,
+**Then** it returns the complete match set — not a top-k, not a sample — and the result set declares *truth status* = **exhaustive** and carries its *denominator*, including the *failure register* count and any unknown-cardinality containers (FR-13, FR-57).
+**And** the search normalises French correctly — accents, elision, hyphenation, case — by a defined, tested rule, so that "l'état" and "etat" and "État" behave as specified rather than by accident (FR-13).
+**And** an absence claim carries its *RBAC scope* and its *denominator* in the exported wording — *"searched everything indexed within this scope; the register lists 2 800 unreadable and 1 archive of unknown contents"* — never a bare "not found".
+**And** *(failure path)* a *pièce* whose OCR was too poor to index is qualified in the absence claim, because it is in the *corpus* but its text may not be, and an unqualified claim would be v1's "guess in the costume of a proof" relocated to the extraction layer.
+
+> **UX pass required before implementation.** No UX design contract exists yet. Search results and the absence statement are user-facing.
+
+### Story 3.3: RBAC scope as a query pre-filter, never a post-filter
+
+As a firm bound by Chinese walls,
+I want the scope constraint applied inside the query itself and impossible to bypass,
+So that a cross-*matter* leak — silent, and a professional-conduct violation — cannot happen through any read.
+
+**Acceptance Criteria:**
+
+**Given** any read of *tenant* data — both engines, the viewer, exports, aggregates, every non-search screen,
+**When** it executes,
+**Then** the *RBAC scope* predicate is applied as a constraint on the query itself, resolved at query time from the single authoritative source, never a post-filter and never denormalised onto rows (FR-14, per AD-13 and AD-14 which binds **every** read, not only search).
+**And** a static check asserts exactly one code path constructs a tenant-data read and no read filters after returning (FR-14, FR-56).
+**And** an adversarial suite issues queries whose highest-similarity matches are deliberately outside the caller's scope, over both engines, and asserts zero out-of-scope results and zero out-of-scope metadata — counts, snippets, identifiers, filenames, *denominator* figures (FR-14).
+**And** the *denominator* and any *confidence bound* shown are computed within the user's scope, so the numbers cannot leak the existence of material she may not see.
+**And** *(failure path)* the mutating adversarial suite revokes a scope while a session is open and grants one mid-*sampling run*, asserting the wall holds in its new position immediately and its old never (FR-14, FR-49).
+**And** *(failure path)* a user with no scope receives an empty *corpus*, not the whole one — fail-closed, asserted for administrative and system identities alike.
+
+### Story 3.4: Every result set declares its truth status
+
+As a lawyer,
+I want finding and proving to be visibly and permanently distinct, carried by the data,
+So that the distinction survives into an export a court reads without the system.
+
+**Acceptance Criteria:**
+
+**Given** any result set from any engine,
+**When** it is shown or exported,
+**Then** its *truth status* is present in the interface, in every export, and in the *audit record* entry for the query, with the two statuses visually and verbally distinct and the distinction surviving export to any format offered (FR-15).
+**And** no interface element combines results from both engines into one undifferentiated list.
+**And** an exported **suggestive** set carries wording that cannot be read as completeness; an exported **exhaustive** set carries its *denominator*.
+
+### Story 3.5: The pièce viewer
+
+As a lawyer,
+I want to read any *pièce* inside the product, at the passage, for every format,
+So that reading the document — the actual job — never requires leaving the tool or sending content outside the firm.
+
+**Acceptance Criteria:**
+
+**Given** any format FR-3 extracts,
+**When** the lawyer opens a *pièce*,
+**Then** it is **rendered**, not merely extracted: `.msg` with headers, body and reply chain and navigation to each attachment as its own *pièce*; born-digital PDF; scanned PDF with the OCR text layer over the page image; `.docx`; `.xlsx`; images — and a format that cannot be rendered offers the original and says so, never an empty pane (FR-44).
+**And** from any *chunk* or *retained extract* the viewer opens the source at the highlighted passage, asserted per format with a planted passage.
+**And** the viewer applies the *RBAC scope* pre-filter: a *pièce* outside scope is not renderable, not downloadable, and its existence is not disclosed (FR-44, FR-14).
+**And** opening a *pièce* is recorded in the *audit record* and is the fact that distinguishes a *validation act* performed after reading from one performed from the list (ties FR-45).
+**And** rendering happens inside the *tenant* boundary — no *pièce* content sent to any third-party rendering or conversion service, in any deployment.
+**And** *(failure path)* a *pièce* larger than the configured rendering bound opens progressively or offers the original; it never blocks the interface or exhausts the client.
+
+> **UX pass required before implementation.** No UX design contract exists yet. The viewer is a central user-facing surface.
+
+**Epic 3 covers:** FR-12, FR-13, FR-14, FR-15, FR-44.
+
+---
+
+## Epic 4: A lawyer receives a ranked working set and keeps control of it
+
+The heart of the product. An optional *case theory*, a cascade that spends the model only where cheap filters cannot decide, one ranked order with nothing deleted, and **the line** the tool commits to and the lawyer moves at a priced cost. Confidence is derived, never self-reported. Every edit is a per-*pièce* diff with a live *change log*, and a single *pièce* can cross **the line** without dragging it.
+
+**Definition of done for the epic:**
+- Re-running a fixed *ranking version* over a fixed *corpus* reproduces the same order, *pièce* for *pièce*, with a deterministic tie-break (FR-39).
+- A *pièce* in the *discarded set* is still returned by exhaustive search — nothing is deleted or excluded (FR-16, FR-21).
+- No user edit re-ranks or overwrites another row, and human-set values survive re-ranking marked as such (FR-20).
+- No ranking or triage code was merged before the *gold set* merge gate (Epic 2) executed SM-2 in CI.
+
+### Story 4.1: The optional case theory
+
+As a lawyer who knows what she is trying to establish,
+I want to state it in my own words at any time and have the ranking be relative to it,
+So that relevance is a relation to my question, not a property the tool guessed at.
+
+**Acceptance Criteria:**
+
+**Given** a *matter*,
+**When** the lawyer writes, rewrites or deletes a *case theory*,
+**Then** it is free text in her language, optional at import and writable at any later moment, never mandatory, and its absence never blocks *ingestion*, ranking or anything else (FR-37, FR-1).
+**And** writing or rewriting produces a new version, retains previous versions readably, is recorded in the *audit record* with actor and timestamp, and offers a re-rank that is explicit and never automatic (FR-37).
+**And** a re-rank under a new *case theory* version produces a new *ranking version*, and human-set values, *validation acts* and *pins* survive it marked as human-set.
+**And** *(failure path)* deleting the *case theory* does not delete the rankings computed under it, which remain readable bound to the version that produced them.
+
+### Story 4.2: The relevance judgement — a cascade, cheap filters first
+
+As a firm paying for inference,
+I want relevance assessed by a staged cascade that reaches the language model only for the *pièces* cheap filters cannot separate,
+So that cutting the model's workload ten-fold is cheaper than buying ten times the machine — the difference between the €2 000 box and the €20 000 one.
+
+**Acceptance Criteria:**
+
+**Given** the *pièces* of a *matter*,
+**When** ranking runs,
+**Then** the cascade has three stages, its boundaries *configuration-as-data*: (1) deterministic filters and near-duplicate grouping — type, participant roles, dates against the *case theory*'s period, exact and near-duplicate families, obvious noise; (2) cheap semantic scoring over the FR-9 embeddings; (3) an **LLM judgement applied only to the uncertain band**, plus a mandatory sample of the confident bands so calibration is measurable (FR-38).
+**And** the **share of *pièces* reaching stage 3 is measured and recorded per run** (SM-18) — the number that decides cost, latency and egress, and that a regression would otherwise hide.
+**And** near-duplicate families are grouped and judged as a family, one representative carrying it, members retaining their own identity, provenance and *custodian*, so forty near-copies of one thread do not occupy forty positions and are not counted by a *sampling run* as forty independent draws (FR-38; the near-duplicate threshold is an input to OQ-4).
+**And** *(failure path)* the LLM provider being unreachable halts stage 3, records the affected units, and leaves stages 1–2 results intact — it does not fail the whole run silently.
+*Note: the per-*pièce* LLM judgement is the largest inference cost and the largest egress event in the system (NFR). The cascade is load-bearing, not an optimisation.*
+
+### Story 4.3: The ranked order and the reproducible ranking version
+
+As a lawyer who may have to defend a ranking in front of a court,
+I want one ranked order per *matter* that reproduces exactly from its recorded version, with a specified tie-break,
+So that "reconstructible from the audit record alone" is true, not aspirational.
+
+**Acceptance Criteria:**
+
+**Given** a ranking act,
+**When** it completes,
+**Then** it produces exactly one ranked order plus a *ranking version* recording the full identity of what produced it — *case theory* version, model identity, prompt version, temperature and every sampling parameter, cascade configuration, embedder identity, chunking configuration, schema version (FR-39).
+**And** re-running a fixed *ranking version* over a fixed *corpus* reproduces the same order *pièce* for *pièce*, asserted by test; where the model is non-deterministic at the configured temperature, the *ranking version* records the scores so the order is reconstructible even where the judgement is not repeatable.
+**And** the tie-break is deterministic and specified — ties broken by a stable key recorded in the *ranking version*, never by the order a store returned — because a tie spanning **the line** would otherwise reshuffle set membership on recomputation with no recorded event and silently invalidate any *sampling run* drawn from it (FR-39).
+
+### Story 4.4: Confidence is derived, never self-reported
+
+As a lawyer whose *confidence bound* must mean something,
+I want the per-*pièce* confidence derived from observable quantities and never from a number the model made up about itself,
+So that a statistical statement does not rest on the model's own opinion of its certainty.
+
+**Acceptance Criteria:**
+
+**Given** a *pièce* in a ranking,
+**When** its confidence is computed,
+**Then** it is derived from observable quantities — score margin, agreement across cascade stages, agreement across repeated judgements — never from a figure the model states about itself, and a static check asserts no field parsed from a model response is named or used as a confidence and the derivation has one implementation (FR-42, FR-56).
+**And** the derivation method is recorded in the *ranking version* and reproducible from it.
+**And** confidence is calibrated against the *gold set*: among *pièces* assigned a given band, the observed relevant share is measured and recorded (SM-17), and a systematically overconfident derivation fails the build.
+
+### Story 4.5: Per-pièce labelling against the taxonomy
+
+As a lawyer,
+I want every *pièce* to carry exactly one label from my firm's taxonomy, changeable without moving it in the ranking,
+So that classifying a document and ranking it are two acts, not one.
+
+**Acceptance Criteria:**
+
+**Given** a ranking,
+**When** labels are assigned,
+**Then** every *pièce* carries exactly one label from the *tenant*'s configured taxonomy, or the explicit `unlabelled` — no null, no default (FR-40, FR-30).
+**And** changing a label never changes a *pièce*'s position and never moves it across **the line** (that is FR-43).
+**And** a label change is an ordinary cell edit: it produces a *change log* entry, survives re-ranking marked as human-set, and is reversible from the *change log* (FR-40, FR-20).
+
+### Story 4.6: Per-pièce confidence and a justification derived from named evidence
+
+As a lawyer reading a ranking,
+I want each *pièce* to show why it is where it is, in one line, backed by extracts I can verify,
+So that the tool's assessment is checkable rather than a fluent sentence I must trust.
+
+**Acceptance Criteria:**
+
+**Given** a *pièce* in the ranking,
+**When** its justification is shown,
+**Then** it carries a confidence value and a one-line justification in the user's language readable without opening the *pièce* (FR-18), generated from a stated input set — the *case theory* version or the named intrinsic signals, and the specific *retained extracts* the judgement used, each named by *chunk* identifier and resolvable to a source position (FR-41).
+**And** every *retained extract* passes exact-containment verification against its source at the moment it is shown; a justification whose extracts do not resolve is shown as **unverified**, never as ordinary (FR-41, FR-11).
+**And** the justification expands into the *audit drawer* showing the extracts behind it, and is reversible in one action recorded in the *audit record* (FR-18).
+**And** the justification states the source *pièce*'s language where it differs from the interface language (FR-41, FR-36).
+
+> **UX pass required before implementation.** No UX design contract exists yet. The ranking table and per-*pièce* justification are central user-facing surfaces.
+
+### Story 4.7: One ranked order, nothing deleted, nothing categorised
+
+As a firm bound by "never destroy a document",
+I want triage to be one ranked order with the *retained* and *discarded* sets derived from it, nothing stored as membership,
+So that reversibility is a structural property, not a promise someone must keep.
+
+**Acceptance Criteria:**
+
+**Given** a *matter*,
+**When** it is ranked,
+**Then** the system holds exactly one ranked order per *matter* per *ranking version*, and the *retained set* and *discarded set* are derived from that order, the position of **the line** and the *pins* — never stored as memberships (FR-16, FR-43).
+**And** no triage operation deletes a *pièce*, removes it from the *corpus* or excludes it from retrieval — asserted by test: a *pièce* in the *discarded set* is still returned by exhaustive search (FR-16, FR-13).
+**And** re-running ranking produces a new *ranking version*; previous versions remain readable, and every *confidence bound*, *audit record* entry, *pin* and **the line** position stays bound to the version it was computed against.
+**And** every surface naming "the discarded set" or "the retained set" names the *ranking version* it means, and the number of retained versions is bounded by configuration with those referenced by a bound, a *pin*, an export or the *audit record* exempt.
+
+### Story 4.8: The tool draws the line and commits
+
+As a lawyer who is paying not to make the judgement herself,
+I want the tool to commit to a recommended cut with a stated basis, not hand me an undifferentiated ranking,
+So that a ranked list that refuses to decide does not push the work back onto me.
+
+**Acceptance Criteria:**
+
+**Given** a completed ranking,
+**When** **the line** is placed,
+**Then** it has a position chosen by the system with a stated basis — the *case theory* where one exists, or the named intrinsic signals — and the interface states the commitment in words, "in my view, everything above this", not merely a divider (FR-17).
+**And** **the line**'s position is stored as an ordinal cut over a named *ranking version* together with the identity of the last retained *pièce*, with author and timestamp — never a bare score, never a bare integer (FR-17).
+**And** *(failure path)* an import that adds *pièces* does not silently move what **the line** designates, because it is stored against the last retained *pièce*, not a bare position 180 that becomes position 180 of a larger set.
+**And** changing **the line** never reorders the underlying ranked order.
+
+> **UX pass required before implementation.** No UX design contract exists yet.
+
+### Story 4.9: Moving the line is priced
+
+As a lawyer deciding how much to read,
+I want to see the cost and the benefit of moving **the line** before I move it, honestly labelled,
+So that the recall/precision trade-off is a dial I control with a price shown, not a hidden default.
+
+**Acceptance Criteria:**
+
+**Given** a user repositioning **the line**,
+**When** she considers a candidate position,
+**Then** the interface states the change in the number of *pièces* to read and the change in the **estimated prevalence of relevant material in the resulting discarded set** — "400 more pièces to read; the estimated share of the discarded set that is relevant falls from about 3% to about 0.4%" — and never states a "risk of having missed a relevant document", which is not what any estimator here produces (FR-19, §0.2).
+**And** the priced figure is labelled on screen as a **projection from the ranking**, not a sampling bound: it is a model estimate where nothing has been sampled, and a completed *sampling run*'s statement is never shown in the same visual register (FR-19).
+**And** *(failure path)* where the projection cannot be produced, the move still shows the change in *pièces* to read, and says the prevalence projection is unavailable rather than inventing one.
+
+> **UX pass required before implementation.** No UX design contract exists yet. The priced move is a subtle and dangerous surface — the labelling that separates projection from bound is the safeguard.
+
+### Story 4.10: The editable cell-by-cell table with a live change log
+
+As a lawyer correcting the tool,
+I want to edit any cell without the tool undoing my other edits, with each change logged beside the row,
+So that correcting the machine never costs me the correction I made a minute ago — the named requirement that turned out to be the architecture's invariant.
+
+**Acceptance Criteria:**
+
+**Given** the triage table,
+**When** the lawyer edits a cell,
+**Then** committing changes that cell and nothing else — asserted by test: after N edits across N rows, all N values hold (FR-20).
+**And** no user edit triggers regeneration, re-ranking or re-classification of any other row; any re-ranking is a separate explicit user-initiated act producing a new *ranking version* that never overwrites edits — edited values survive re-ranking marked as human-set (FR-20, FR-16).
+**And** each edit produces a *change log* entry beside the row immediately: previous value, new value, author, timestamp.
+**And** *(failure path)* an explicit re-rank after edits preserves every human-set value and marks it as such, rather than replacing it with a fresh machine value.
+
+> **UX pass required before implementation.** No UX design contract exists yet. This is the surface the whole "the document is the source of truth, the AI only proposes" principle lives on.
+
+### Story 4.11: The pin — moving a single pièce across the line
+
+As a lawyer who knows one discarded document is decisive,
+I want to move that one *pièce* across **the line** without dragging the line past everything above it,
+So that retaining the decisive piece does not force me to retain four hundred others.
+
+**Acceptance Criteria:**
+
+**Given** a ranked *matter*,
+**When** the lawyer pins a *pièce* into or out of the *retained set*,
+**Then** the *retained set* changes by exactly one *pièce*, the ranked order does not change, **the line** does not move, and no other *pièce*'s membership changes (FR-43).
+**And** a pin requires a one-line reason and is recorded as an *override* (FR-25), because it contradicts a machine assertion.
+**And** pins survive re-ranking and carry to new *ranking versions* marked as human-set until explicitly removed, and removing a pin is itself a recorded reversible act.
+
+### Story 4.12: Never hard-delete, proven by a bounded probe
+
+As a firm,
+I want no user-facing action anywhere to destroy data, proven by exercising every action,
+So that "triage never destroys" is checked against reality, not asserted about all possible behaviour.
+
+**Acceptance Criteria:**
+
+**Given** the registry of user-reachable actions (whose completeness is a structural property, FR-56),
+**When** the bounded runtime probe runs,
+**Then** it executes each action and asserts no reduction in the count of stored *pièces*, *audit record* entries, *change log* entries or *failure register* entries (FR-21).
+**And** no control performs a hard deletion of a *pièce*, *chunk*, *audit record* entry, *change log* entry or *failure register* entry; any action a user could read as deletion is a reversible, labelled, recorded state change (FR-21, FR-5).
+**And** *(failure path)* an action added to the product but not to the registry fails the build (FR-56).
+
+### Story 4.13: Freshness and staleness of derived artefacts
+
+As a lawyer who must not read a false number off the screen,
+I want any derived artefact marked stale the instant an input changes — including a new import,
+So that the north-star sentence can never be exported as current while its population has grown underneath it.
+
+**Acceptance Criteria:**
+
+**Given** a derived artefact — a ranked order, **the line**'s position, a review-effort estimate, a *confidence bound*, an *exhaustive* result set,
+**When** any input changes,
+**Then** it is marked stale, on the complete trigger list: a new *ranking version*; a move of **the line**; a *pin* added or removed; a *case theory* revision; a configuration change affecting retrieval, ranking or the estimator; an *RBAC scope* change affecting the population; **and any ingestion into the *matter*** (FR-58).
+**And** *pièces* ingested into a ranked *matter* are in neither set — a third state FR-16 forbids — so ingestion marks the ranking and any *confidence bound* stale, generates a *worklist* line offering a re-rank, and states the count of unranked *pièces* wherever the sets are counted (FR-58).
+**And** a stale *confidence bound* cannot be exported as current, cannot be copied as text without its staleness in the copied string, and is visually distinct wherever it appears.
+**And** staleness is resolved only by explicit user-initiated recomputation producing a new artefact — never by elapsed time, a background job or being viewed.
+
+**Epic 4 covers:** FR-16, FR-17, FR-18, FR-19, FR-20, FR-21, FR-37, FR-38, FR-39, FR-40, FR-41, FR-42, FR-43, FR-58.
+
+---
+
+## Epic 5: A sceptic audits what was set aside and says a defensible sentence
+
+A random draw from the *discarded set*, verdicts recorded, and a *confidence bound* stated as a prevalence bound a lawyer can say to a client or a judge — or counts only, if the estimator cannot be proven sound. The *audit record* is atomic, chained, and detectably incomplete rather than silently so; *overrides* carry a written reason; the *validation act* is real and bulk acceptance is never undetectable.
+
+**Definition of done for the epic:**
+- A *sampling run* freezes its population by explicit identifier list and invalidates itself in flight if the population changes (FR-22).
+- The estimator ships only if a simulation harness shows a stated 95% bound holds in at least 95% of runs against populations whose truth is known; otherwise the product emits counts only (FR-23, SM-1).
+- An action whose *audit record* entry cannot be written fails, and a gap in the chain is detectable by a reader holding only the export (FR-53).
+
+### Story 5.1: Random draw from the discarded set, population frozen
+
+As a sceptical senior lawyer,
+I want a verifiably random sample from the whole *discarded set*, frozen for the duration,
+So that an hour of my verdicts cannot silently become worthless because the population moved underneath me.
+
+**Acceptance Criteria:**
+
+**Given** a *matter* with a *discarded set*,
+**When** a *sampling run* is started,
+**Then** the user sets a sample size or requests a target *confidence bound* and is given the size achieving it under the hypergeometric estimator, drawn **without replacement** over the whole *discarded set* within her *RBAC scope* — not a convenient or already-loaded subset (FR-22).
+**And** where the required size equals the *discarded set* the run is a **census**, labelled as one, producing "every discarded pièce was reviewed; none was relevant" — a categorically stronger statement than a bound; where a target bound is unreachable at any size, the tool says so and offers the best achievable.
+**And** the population is frozen: the run records the *ranking version*, the position of **the line**, the *RBAC scope* and the **explicit identifier list** of the drawn *pièces* — a seed alone is insufficient.
+**And** *(failure path)* ingestion, re-ranking or a line move during a run marks it **invalidated-in-flight** and tells the user immediately, rather than letting the verdicts silently become worthless (FR-22, FR-58).
+
+### Story 5.2: The hypergeometric estimator and the census crossover
+
+As the APX build,
+I want the prevalence estimator implemented as standard hypergeometric statistics with the census crossover handled,
+So that the number behind the north-star sentence is sound by construction rather than by hope.
+
+**Acceptance Criteria:**
+
+**Given** a completed draw of size n from a *discarded set* of size N with k relevant found,
+**When** the estimator computes,
+**Then** it produces a **hypergeometric** (finite-population) upper confidence bound on the **prevalence** of relevant material in the *discarded set* at a stated confidence level — never a probability that nothing was missed (§0.2, FR-23).
+**And** the estimator's five hard inputs are each answered explicitly in the design and recorded: near-duplicate family structure (a family is not n independent draws), the census-versus-sample crossover, repeated sampling over one population, population freezing, and the projection at an unsampled position (OQ-4, FR-22, FR-38).
+**And** the near-duplicate grouping of FR-38 feeds the unit of the draw, so a family counts as it should rather than as its member count.
+*Note: the work breakdown flags the estimator as the most likely single point to be underestimated. It is split across 5.2, 5.3 and 5.4 for that reason.*
+
+### Story 5.3: The simulation gate — the estimator ships only if proven
+
+As a firm that will say this number to a judge,
+I want the estimator validated by simulation against populations whose truth is known, in CI,
+So that an unsound estimator cannot ship — the exact discipline the false "1.5%" claim failed.
+
+**Acceptance Criteria:**
+
+**Given** the estimator,
+**When** the simulation harness runs in CI,
+**Then** it generates populations at varying relevant-item prevalence and varying duplicate structure, runs the sampling procedure many times, and asserts a stated C% bound holds in at least C% of runs — and an estimator that fails does not ship (FR-23, SM-1).
+**And** SM-1 asserts **soundness**, not merely reproducibility of the number.
+**And** the harness records explicitly that it validates the estimator against its assumed model, **not** the assumption that a real *discarded set* resembles the simulated ones — which is what the *gold set* and calibration (SM-17) are for, and where the honest residual uncertainty lives.
+**And** *(failure path)* if the simulation cannot be made to pass, the product emits the counts-only fallback and no bound (ties 5.4).
+
+### Story 5.4: The confidence bound as a sentence, or counts only
+
+As a sceptical lawyer,
+I want a completed run to give me a sentence I can say to a client or a court, or honest counts if no defensible bound exists,
+So that I am never handed a number nobody can defend.
+
+**Acceptance Criteria:**
+
+**Given** a completed *sampling run* with a proven estimator,
+**When** the sentence is produced,
+**Then** it reads "N pièces sampled at random from the M discarded; K relevant. With C% confidence, at most X% of the discarded set — about Y pièces — is relevant.", copyable as text, carrying its *RBAC scope* and its staleness state in the copied string (FR-23, FR-58).
+**And** where the estimator is not proven sound, the product emits **counts only** — "200 pièces sampled at random from the 1 400 discarded; none relevant" — with no bound and no projected figure, and says so (FR-23).
+**And** the sentence is regenerable from the *audit record* with **no** model call — a statistical claim never depends on the network (FR-55, FR-36).
+**And** a static check asserts no banned phrasing — "risk of having missed", or any wording implying a probability that nothing remains — appears in any locale's string set (FR-23, FR-56).
+
+> **UX pass required before implementation.** No UX design contract exists yet. The sentence and its visual register — distinct from the priced projection of FR-19 — are the product's most consequential text.
+
+### Story 5.5: The audit record
+
+As a firm that may have to defend every decision,
+I want an append-only record of everything that matters, each entry sequenced and attributed,
+So that "auditability is non-negotiable" — the one named client requirement — becomes a mechanism rather than a slide.
+
+**Acceptance Criteria:**
+
+**Given** the *audit record*,
+**When** any recordable act occurs,
+**Then** it appends an entry and never edits or removes one — a correction is a new entry (FR-24).
+**And** the record captures at minimum: who validated what and when via a *validation act*; every *case theory* and revision; the *ranking version*, *payload schema* version and application version; modified-versus-accepted values; every position of **the line** with author and priced statement; every *pin*; every *sampling run* with its draw, frozen identifier list, verdicts and *confidence bound*; every *override* with reason; every retrieval with *truth status* and *RBAC scope*; every *import job* with *denominator*; every configuration change; every scope grant, revocation and re-scope with its authority (FR-24).
+**And** every entry carries an actor, a wall-clock timestamp, a **monotonic sequence number from a single authority**, and a *matter*; system-initiated entries name the system component as actor (FR-24; per AD-43 the sequence authority is decided, and matterless acts like scope grants are handled by a named tenant-level chain).
+
+### Story 5.6: Overrides with a mandatory one-line reason
+
+As a firm,
+I want every act that contradicts the machine or bypasses a guard to cost one written sentence,
+So that a deliberate exception is a recorded, arguable decision rather than an invisible one.
+
+**Acceptance Criteria:**
+
+**Given** an action that contradicts a machine assertion made with stated confidence, removes a *failure register* entry without successful *ingestion*, or bypasses a system guard,
+**When** the user commits it,
+**Then** it is classified as an *override* and cannot be committed without a free-text reason, stored verbatim, attributed and timestamped, and appearing in the export (FR-25).
+**And** *overrides* are countable and filterable in the *audit drawer* and the export, separately from ordinary modifications.
+**And** *(failure path)* an *override* submitted with an empty reason is refused — the reason is mandatory, not encouraged.
+
+### Story 5.7: The audit drawer and its export
+
+As a sceptical lawyer and as a *bâtonnier* reading later,
+I want the reasoning behind any one *pièce* and the record for a whole *matter*, both readable and both exportable as documents,
+So that the trust mechanism leaves the building in a form a court can read without the system.
+
+**Acceptance Criteria:**
+
+**Given** any *pièce*,
+**When** the *audit drawer* opens,
+**Then** it shows the *pièce*'s confidence, the *retained extracts* behind it (each resolving to a *chunk* and source position), the proposed *audit record* entry in readable form, and reversible actions each producing an *audit record* entry (FR-26).
+**And** the *audit record* for a *matter* is exportable as a document within the user's *RBAC scope*, containing the *scoped denominator*, the *case theory* and revisions, the position history of **the line**, all *pins*, all *sampling runs* and their *confidence bounds*, all *overrides* with reasons, the *validation acts*, and the modified-versus-accepted breakdown (FR-26).
+**And** an extract that no longer resolves is shown as such and marks the export degraded (FR-11) — self-containment is verified at read time, not only at export time.
+
+> **UX pass required before implementation.** No UX design contract exists yet. The *audit drawer* is the trust surface the sceptic lives in; it is fully designed in the v1 mockup `maquette_anfr_v2.html` (salvage candidate).
+
+### Story 5.8: The validation act
+
+As a supervising partner,
+I want "a human read this" to be a real per-*pièce* gesture that records whether the document was actually opened, with no undetectable bulk acceptance,
+So that a click-through cannot masquerade as review — the failure the whole trust architecture must not end in.
+
+**Acceptance Criteria:**
+
+**Given** a *pièce*,
+**When** a lawyer performs a *validation act* from the table, the viewer or the *audit drawer*,
+**Then** it states its meaning in her language — "I have read this pièce and I accept the tool's assessment of it" — and produces one *audit record* entry carrying actor, timestamp, sequence number, *matter*, *pièce*, *ranking version*, the values accepted, and **whether the *pièce* was opened in the viewer before the act** (FR-45, FR-44).
+**And** "accepted as-is" exists **only** where a *validation act* occurred — no default, no elapsed time, no scroll position, no screen visit produces it — asserted by test: a *matter* left open and scrolled end to end yields zero accepted-as-is entries (FR-45).
+**And** *(failure path)* there is no bulk-accept control that produces undetectable acceptance; any bulk gesture records per-*pièce* entries each marked as accepted-from-the-list rather than read, and SM-C2 observes the ratio.
+
+### Story 5.9: Audit record continuity
+
+As a *bâtonnier* holding only the exported record,
+I want an action whose entry cannot be written to fail, and any gap in the record to be detectable,
+So that the blessed backup restore cannot quietly truncate the audit trail and still pass its own check.
+
+**Acceptance Criteria:**
+
+**Given** a recordable action,
+**When** its *audit record* entry cannot be written,
+**Then** the action fails — moving **the line**, committing an *override*, completing a *sampling run*, a *validation act*, granting a scope and changing configuration are each atomic with their record — asserted by test with the audit store made read-only mid-action (FR-53).
+**And** entries carry a monotonic sequence number from a single authority and a **chain value over the previous entry**, so a gap, reordering or truncation is detectable by a reader holding only the export, and a continuity check runs on export with its result on the export's face (FR-53).
+**And** the chain is verified on restore and a failed verification is surfaced, never silently repaired (FR-53, FR-52); the chain head is held outside the restorable store so a restore cannot forge a clean chain (per AD-35).
+
+**Epic 5 covers:** FR-22, FR-23, FR-24, FR-25, FR-26, FR-45, FR-53.
+
+---
+
+## Epic 6: The work leaves the building, in the firm's own language
+
+The *retained set* comes out as a deliverable rather than staying inside the tool. The client-pushed diagnostic export carries counts and never content. The interface, dates, sorting and the model's own instructions all follow the firm's language. And the usability gate is exercised against a real non-technical reader.
+
+**Definition of done for the epic:**
+- The *retained set* exports as an ordered numbered list that is the basis for a *bordereau de pièces*, and the product says it does not claim to produce a court-ready one (FR-46).
+- A missing translation fails the build and no natural-language string is used as a key, asserted statically (FR-34).
+- The usability checklist has a recorded, dated verdict per surface, and every *worklist* action and table edit is keyboard-reachable (FR-59).
+
+### Story 6.1: Export of the retained set
+
+As a lawyer,
+I want the *retained set* handed back as an ordered, numbered, attributed list,
+So that I have the basis for a *bordereau de pièces* rather than a working set trapped inside the tool.
+
+**Acceptance Criteria:**
+
+**Given** a ranked *matter*,
+**When** the lawyer exports the *retained set*,
+**Then** it comes out within her *RBAC scope* as an ordered numbered list, one row per *pièce*, carrying at minimum sequence number, *pièce* identity, title or filename, *pièce* date, *custodian*, label, rank, confidence, the one-line justification, whether validated and by whom, and any *pin* (FR-46).
+**And** the order is the ranked set as adjusted by pins, and the export names the *ranking version*, the *case theory* version, the position of **the line** and the *RBAC scope* it was produced under.
+**And** superseded *pièces* are marked as superseded and the current version named (FR-46, FR-4).
+**And** the export states that it is the basis for a *bordereau de pièces* and that the product does **not** claim to produce a court-ready *bordereau* — an honest boundary, not a silent overclaim.
+
+> **UX pass required before implementation.** No UX design contract exists yet. The export's face is read outside the system.
+
+### Story 6.2: The client-pushed diagnostic export
+
+As a firm running APX where APX can never see in,
+I want to send APX a diagnostic that I initiate and can read in full first, carrying counts and never content,
+So that support is possible without a channel by which APX could ever pull my data.
+
+**Acceptance Criteria:**
+
+**Given** a *tenant*,
+**When** a diagnostic export is produced,
+**Then** it is initiated by a user of the *tenant*, never by a remote request, with no inbound channel by which APX can trigger it — asserted by test (FR-32).
+**And** it is produced by the *content-free projection* (FR-31), inspectable by the user in full readable form before it leaves — no opaque blob — and contains at minimum the *denominator*, *failure register* counts by error class, component and schema versions, and redacted diagnostics.
+**And** *(failure path)* a seeded content token or secret placed in the source data does not appear in the export (FR-31, FR-51).
+
+### Story 6.3: Namespaced translation keys, no silent fallback
+
+As a firm in Luxembourg working across French and English,
+I want every string keyed and every missing translation to fail the build,
+So that the v1 failure — French source strings used as keys, silent fallback — cannot recur.
+
+**Acceptance Criteria:**
+
+**Given** the interface,
+**When** it is built,
+**Then** every user-visible string is referenced by a structured namespaced key, a natural-language string is never used as a key (asserted statically), and a missing translation fails the build rather than falling back silently at runtime (FR-34, FR-56).
+**And** a test asserts key-set parity across all supported languages — no key present in one and absent in another.
+**And** coverage is asserted across every route and surface, including *worklist* lines, *failure register* error classes, justifications, the *confidence bound* sentence and every export; a route with zero translated strings fails the build (FR-34).
+*Note: i18n depth is flagged by the work breakdown as likely to be quietly dropped. The Luxembourg market makes it load-bearing, not optional.*
+
+### Story 6.4: Locale-aware dates, numbers and sorting
+
+As a lawyer,
+I want dates, numbers and sorting to follow my locale while stored dates stay unambiguous,
+So that a date is never misread and the *pièce*'s own date is never conflated with when it was ingested.
+
+**Acceptance Criteria:**
+
+**Given** the interface,
+**When** it renders locale-sensitive values,
+**Then** no date, number or currency format is hard-coded to a locale anywhere in the code (asserted statically), dates shown to a user use that user's locale, and dates stored and in exports use an unambiguous locale-independent representation (FR-35, FR-56).
+**And** a *pièce*'s own date and its ingestion timestamp are rendered distinguishably and never conflated (FR-35, FR-8).
+**And** sorting of user-visible lists respects the active locale's collation.
+
+### Story 6.5: The language reaches the language model
+
+As a lawyer working in French,
+I want every model request to carry an explicit output language,
+So that a justification or a sentence never comes back in the wrong language because the model guessed.
+
+**Acceptance Criteria:**
+
+**Given** a request to a language model,
+**When** it is made,
+**Then** it carries an explicit output language derived from the user's active locale or *tenant* configuration, and machine-generated user-facing text — justifications, the priced statement, the *confidence bound* sentence — is produced in that language, asserted by test with the locale switched (FR-36).
+**And** where the source *pièce* language differs from the interface language, the output states the source language rather than silently translating without saying so.
+**And** language selection is *configuration-as-data* per *tenant* and per user, never a build-time constant.
+
+### Story 6.6: The usability gate
+
+As the daily non-technical user whose adoption is voluntary,
+I want every surface reviewed against a phrasing checklist with a recorded verdict, and everything reachable by keyboard,
+So that the least-instrumented promise — ease of use — has at least a dated, arguable gate rather than nothing.
+
+**Acceptance Criteria:**
+
+**Given** a release candidate,
+**When** the usability gate runs,
+**Then** every user-facing surface — every *worklist* line type, every *failure register* error class, the completion summary, the priced statement, the *confidence bound* sentence, the *audit drawer*, the viewer's controls, the *matters* zone, the face of every export — is reviewed against the **versioned phrasing checklist** (no technical vocabulary, no component name, no error code as primary text, no job identifier, no untranslated string, an action and its object on every line), and **each item's verdict is recorded with its reviewer and date** (FR-59, SM-20).
+**And** a failed item blocks the release candidate or is recorded as an accepted exception with a reason in the same register; an unrecorded verdict counts as a failure.
+**And** every *worklist* action and every triage-table edit is reachable and completable by keyboard alone, asserted by test; no WCAG level is claimed.
+**And** this gate is **asserted by review**, the third verb of FR-56, and is never counted as a passing test — its value is that the review happened, is dated and is arguable.
+*Note: FR-59 cannot be closed by a test. It needs a real non-technical reader, and SM-10 has no date because no client engagement exists. Written honestly rather than dressed as automatable.*
+
+> **UX pass required before implementation.** No UX design contract exists yet — and this gate is where its absence is most consequential.
+
+**Epic 6 covers:** FR-32, FR-34, FR-35, FR-36, FR-46, FR-59.
