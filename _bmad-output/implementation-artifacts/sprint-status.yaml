@@ -1,0 +1,104 @@
+# generated: 2026-07-22
+# last_updated: 2026-07-22
+# project: APX MVP
+# project_key: NOKEY
+# tracking_system: file-system
+# story_location: /Users/juliantalou/Documents/PRO/01-CLIENTS/APX-Advisory/Dev/apx-mvp/_bmad-output/implementation-artifacts
+#
+# STATUS DEFINITIONS:
+# ==================
+# Epic:   backlog -> in-progress -> done
+# Story:  backlog -> ready-for-dev -> in-progress -> review -> done
+# Retrospective: optional <-> done
+# Action Item:   open -> in-progress -> done
+#
+# WORKFLOW NOTES:
+# ===============
+# - Epic -> in-progress automatically when its first story is created (create-story)
+# - Stories may run in parallel if capacity allows; here capacity is one lead + agents
+# - Dev moves a story to 'review', then runs code-review (fresh context recommended)
+#
+# SEQUENCING GATES (from the architecture work breakdown — honour these):
+# - 1-3 (payload schema) is the only irreversible decision: build it before anything rests on it
+# - 1-2 (offline fitness CI) and 1-12 (structural-properties harness) exist from week one
+# - 2-13 (timed 5000-piece concurrent run) GATES every performance/retrieval commitment in epics 3-5
+# - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
+
+generated: 2026-07-22
+last_updated: 2026-07-22
+project: APX MVP
+project_key: NOKEY
+tracking_system: file-system
+story_location: /Users/juliantalou/Documents/PRO/01-CLIENTS/APX-Advisory/Dev/apx-mvp/_bmad-output/implementation-artifacts
+
+development_status:
+  epic-1: backlog
+  1-1-the-repository-born-from-empty-with-the-layering-rule-enforced: backlog
+  1-2-the-offline-fitness-function-running-in-ci-from-week-one: backlog
+  1-3-the-frozen-payload-schema: backlog
+  1-4-tenant-isolation-enforced-at-the-boundary: backlog
+  1-5-authentication-and-sessions-the-application-owns: backlog
+  1-6-grant-time-authorisation-and-scope-administration: backlog
+  1-7-encryption-at-rest-and-in-transit-with-a-fail-closed-start: backlog
+  1-8-secret-and-key-management: backlog
+  1-9-configuration-as-data-and-the-provisioning-surface: backlog
+  1-10-the-content-free-projection-primitive: backlog
+  1-11-backup-restore-and-disaster-recovery: backlog
+  1-12-the-structural-properties-harness: backlog
+  epic-1-retrospective: optional
+  epic-2: backlog
+  2-1-folder-selection-as-the-whole-onboarding-gesture: backlog
+  2-2-the-non-blocking-resumable-import-job: backlog
+  2-3-multi-format-extraction-the-largest-surface: backlog
+  2-4-container-expansion-and-the-unit-of-the-denominator: backlog
+  2-5-idempotent-ingestion-with-stable-identity: backlog
+  2-6-the-failure-register: backlog
+  2-7-the-inventory-guarantee-and-the-permanent-denominator: backlog
+  2-8-the-embedder-fails-loudly-and-the-index-never-deletes-itself: backlog
+  2-9-chunking-with-provenance-to-the-exact-passage: backlog
+  2-10-the-completion-summary-tasks-not-a-log: backlog
+  2-11-the-worklist-and-the-matters-zone: backlog
+  2-12-the-corpus-and-gold-set-evaluation-pipeline: backlog
+  2-13-the-timed-5-000-pi-ce-concurrent-run-the-gate: backlog
+  epic-2-retrospective: optional
+  epic-3: backlog
+  3-1-semantic-retrieval-marked-suggestive: backlog
+  3-2-deterministic-exhaustive-search-the-one-thing-that-can-prove-absence: backlog
+  3-3-rbac-scope-as-a-query-pre-filter-never-a-post-filter: backlog
+  3-4-every-result-set-declares-its-truth-status: backlog
+  3-5-the-pi-ce-viewer: backlog
+  epic-3-retrospective: optional
+  epic-4: backlog
+  4-1-the-optional-case-theory: backlog
+  4-2-the-relevance-judgement-a-cascade-cheap-filters-first: backlog
+  4-3-the-ranked-order-and-the-reproducible-ranking-version: backlog
+  4-4-confidence-is-derived-never-self-reported: backlog
+  4-5-per-pi-ce-labelling-against-the-taxonomy: backlog
+  4-6-per-pi-ce-confidence-and-a-justification-derived-from-named-evidence: backlog
+  4-7-one-ranked-order-nothing-deleted-nothing-categorised: backlog
+  4-8-the-tool-draws-the-line-and-commits: backlog
+  4-9-moving-the-line-is-priced: backlog
+  4-10-the-editable-cell-by-cell-table-with-a-live-change-log: backlog
+  4-11-the-pin-moving-a-single-pi-ce-across-the-line: backlog
+  4-12-never-hard-delete-proven-by-a-bounded-probe: backlog
+  4-13-freshness-and-staleness-of-derived-artefacts: backlog
+  epic-4-retrospective: optional
+  epic-5: backlog
+  5-1-random-draw-from-the-discarded-set-population-frozen: backlog
+  5-2-the-hypergeometric-estimator-and-the-census-crossover: backlog
+  5-3-the-simulation-gate-the-estimator-ships-only-if-proven: backlog
+  5-4-the-confidence-bound-as-a-sentence-or-counts-only: backlog
+  5-5-the-audit-record: backlog
+  5-6-overrides-with-a-mandatory-one-line-reason: backlog
+  5-7-the-audit-drawer-and-its-export: backlog
+  5-8-the-validation-act: backlog
+  5-9-audit-record-continuity: backlog
+  epic-5-retrospective: optional
+  epic-6: backlog
+  6-1-export-of-the-retained-set: backlog
+  6-2-the-client-pushed-diagnostic-export: backlog
+  6-3-namespaced-translation-keys-no-silent-fallback: backlog
+  6-4-locale-aware-dates-numbers-and-sorting: backlog
+  6-5-the-language-reaches-the-language-model: backlog
+  6-6-the-usability-gate: backlog
+  epic-6-retrospective: optional
