@@ -6,15 +6,18 @@ export type IngestResponse = {
   matter: string; inventory: Inventory; failure_list: Failure[]; exclusion_list: string[]; persisted: boolean;
 };
 export type MatterSummary = { matter: string; scope: string; inventory: Inventory };
+export type AuditEntry = { seq: number; actor: string; action: string; detail: string; timestamp: string };
+export type AuditTrail = { entries: AuditEntry[]; verified: boolean };
 
 // The one data path: HTTP to the API (AD-14). No fixtures, no fallback.
 export async function ingestUpload(
-  files: FileList, matter: string, tenant: string, scope: string,
+  files: FileList, matter: string, tenant: string, scope: string, actor: string,
 ): Promise<IngestResponse> {
   const form = new FormData();
   form.append("matter", matter);
   form.append("tenant", tenant);
   form.append("scope", scope);
+  form.append("actor", actor);
   for (const file of Array.from(files)) {
     const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
     form.append("files", file, rel);
@@ -28,6 +31,15 @@ export async function ingestUpload(
 export async function listMatters(tenant: string, scope: string): Promise<MatterSummary[]> {
   const q = new URLSearchParams({ tenant, scopes: scope });
   const res = await fetch(`/api/matters?${q}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+  return res.json();
+}
+
+// The audit trail for a matter — scope-checked server-side (403 outside the wall).
+// `verified` is the tamper-evidence: the tenant chain recomputes cleanly.
+export async function readAudit(matter: string, tenant: string, scope: string): Promise<AuditTrail> {
+  const q = new URLSearchParams({ tenant, scopes: scope });
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/audit?${q}`);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
   return res.json();
 }

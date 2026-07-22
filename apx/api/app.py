@@ -46,6 +46,7 @@ class IngestRequest(BaseModel):
     matter: str
     tenant: str
     scope: str = ""  # the Chinese-wall scope; defaults to the matter itself (its own wall)
+    actor: str = "unknown"  # who acted; the real identity comes from auth (story 1.5)
     custodian: str = "custodian-undeclared"
 
 
@@ -71,6 +72,19 @@ class IngestResponse(BaseModel):
     persisted: bool  # transparent: whether the result was written to the durable store
 
 
+class AuditEntryOut(BaseModel):
+    seq: int
+    actor: str
+    action: str
+    detail: str
+    timestamp: str
+
+
+class AuditTrailOut(BaseModel):
+    entries: list[AuditEntryOut]
+    verified: bool
+
+
 class MatterOut(BaseModel):
     matter: str
     scope: str
@@ -84,12 +98,13 @@ def _inventory_out(inv) -> InventoryOut:  # noqa: ANN001
     )
 
 
-def _persist(result: IngestionResult, scope: str) -> bool:
-    """Persist under the given Chinese-wall scope, if a database is configured."""
+def _persist(result: IngestionResult, scope: str, actor: str) -> bool:
+    """Persist under the given Chinese-wall scope, if a database is configured.
+    The ingestion is recorded in the audit trail, atomically, under `actor`."""
     store = _store()
     if store is None:
         return False
-    store.save(result, scope)
+    store.save(result, scope, actor)
     return True
 
 
@@ -111,7 +126,7 @@ def ingest(req: IngestRequest) -> IngestResponse:
         folder, matter=req.matter, tenant=req.tenant,
         extractor=FileExtractor(), custodian=req.custodian,
     )
-    persisted = _persist(result, req.scope or req.matter)
+    persisted = _persist(result, req.scope or req.matter, req.actor)
     return IngestResponse(
         matter=req.matter,
         inventory=_inventory_out(result.inventory),
@@ -129,6 +144,7 @@ async def ingest_upload(
     matter: str = Form(...),
     tenant: str = Form(...),
     scope: str = Form(""),
+    actor: str = Form("unknown"),
     files: list[UploadFile] = Form(...),
 ) -> IngestResponse:
     """The browser path: a lawyer drops files (or a folder) and sees the inventory.
@@ -147,7 +163,7 @@ async def ingest_upload(
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(await f.read())
         result = ingest_folder(root, matter=matter, tenant=tenant, extractor=FileExtractor())
-    persisted = _persist(result, scope or matter)
+    persisted = _persist(result, scope or matter, actor)
     return IngestResponse(
         matter=matter,
         inventory=_inventory_out(result.inventory),
@@ -171,6 +187,27 @@ def list_matters(tenant: str, scopes: str) -> list[MatterOut]:
         MatterOut(matter=m.matter, scope=m.scope, inventory=_inventory_out(m.inventory))
         for m in store.matters(tenant, _parse_scopes(scopes))
     ]
+
+
+@app.get("/api/matters/{matter}/audit", response_model=AuditTrailOut)
+def read_audit(matter: str, tenant: str, scopes: str) -> AuditTrailOut:
+    """The audit trail for a matter — 403 if its scope is not held. `verified` is
+    the tamper-evidence: the tenant's audit chain recomputes cleanly."""
+    store = _store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    try:
+        trail = store.read_audit(matter, tenant, _parse_scopes(scopes))
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    return AuditTrailOut(
+        entries=[
+            AuditEntryOut(seq=e.seq, actor=e.actor, action=e.action, detail=e.detail,
+                          timestamp=e.timestamp)
+            for e in trail.entries
+        ],
+        verified=trail.verified,
+    )
 
 
 @app.get("/api/matters/{matter}/inventory", response_model=InventoryOut)

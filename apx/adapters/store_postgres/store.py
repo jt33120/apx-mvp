@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from apx.adapters.store_postgres.models import Failure, MatterScope, Piece
+from apx.adapters.store_postgres.models import AuditRecord, Failure, MatterScope, Piece
 from apx.core.app.ingest import IngestionResult
 from apx.core.domain.inventory import Inventory
 
@@ -42,15 +42,72 @@ class MatterSummary:
     inventory: Inventory
 
 
+@dataclass(frozen=True)
+class AuditEntry:
+    seq: int
+    actor: str
+    action: str
+    detail: str
+    chain: str
+    timestamp: str
+
+
+@dataclass(frozen=True)
+class AuditTrail:
+    entries: list[AuditEntry]
+    verified: bool  # the chain recomputes cleanly (no gap, reorder or truncation)
+
+
 def _failure_id(matter: str, submitted_path: str) -> str:
     return hashlib.sha256(f"{matter}\x00{submitted_path}".encode()).hexdigest()
+
+
+def _audit_ts(dt: datetime) -> str:
+    """The canonical timestamp string for the chain: UTC, tz-naive, microseconds.
+    The chain must recompute to the SAME bytes whichever backend round-trips the
+    column — SQLite drops the tzinfo, Postgres timestamptz keeps it — so we
+    normalise to a single representation on BOTH the write and the verify side.
+    Without this, an untampered chain would fail to verify across backends."""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(UTC).replace(tzinfo=None)
+    return dt.isoformat(timespec="microseconds")
+
+
+def _audit_content(seq: int, tenant: str, matter: str | None, actor: str, action: str,
+                   detail: str, ts: str) -> str:
+    return f"{seq}|{tenant}|{matter or ''}|{actor}|{action}|{detail}|{ts}"
+
+
+def _audit_chain(prev_chain: str, content: str) -> str:
+    return hashlib.sha256(f"{prev_chain}\x00{content}".encode()).hexdigest()
 
 
 class SqlStore:
     def __init__(self, session_factory: sessionmaker[Session]) -> None:
         self._sf = session_factory
 
-    def save(self, result: IngestionResult, scope: str) -> SaveOutcome:
+    def _append_audit(self, session: Session, tenant: str, matter: str | None,
+                      actor: str, action: str, detail: str, ts: datetime) -> None:
+        """Append one entry inside the caller's transaction (atomic with the act,
+        FR-53). Monotonic per-tenant seq; chained over the previous entry."""
+        last = session.execute(
+            select(AuditRecord.seq, AuditRecord.chain)
+            .where(AuditRecord.tenant == tenant)
+            .order_by(AuditRecord.seq.desc())
+            .limit(1)
+        ).first()
+        prev_seq, prev_chain = (last[0], last[1]) if last else (0, "")
+        seq = prev_seq + 1
+        content = _audit_content(seq, tenant, matter, actor, action, detail, _audit_ts(ts))
+        chain = _audit_chain(prev_chain, content)
+        session.add(
+            AuditRecord(
+                id=chain, tenant=tenant, seq=seq, matter=matter, actor=actor,
+                action=action, detail=detail, chain=chain, timestamp=ts,
+            )
+        )
+
+    def save(self, result: IngestionResult, scope: str, actor: str = "unknown") -> SaveOutcome:
         now = result.pieces[0].ingestion_timestamp if result.pieces else datetime.now(UTC)
         matter = result.pieces[0].matter if result.pieces else (
             result.failures[0].matter if result.failures else None
@@ -61,6 +118,12 @@ class SqlStore:
         with self._sf() as session, session.begin():
             if matter is not None and tenant is not None:
                 session.merge(MatterScope(matter=matter, tenant=tenant, scope=scope))
+                inv = result.inventory
+                detail = (
+                    f"submitted={inv.submitted} corpus={inv.in_corpus} "
+                    f"failures={inv.failures} exclusions={inv.exclusions}"
+                )
+                self._append_audit(session, tenant, matter, actor, "ingest", detail, now)
             for p in result.pieces:
                 session.merge(
                     Piece(
@@ -132,3 +195,39 @@ class SqlStore:
                 raise ScopeDenied(matter)  # fail closed, and never disclose existence
             in_corpus, failures = self._counts(session, matter, tenant)
         return Inventory(in_corpus + failures, in_corpus, failures, 0)
+
+    def read_audit(self, matter: str, tenant: str, scopes: set[str]) -> AuditTrail:
+        """The audit trail for a matter — scope-checked. The chain is per-tenant
+        (a single authority, FR-24), so verification recomputes the WHOLE tenant
+        chain end to end; a gap, reorder or truncation anywhere flips `verified`.
+        The returned entries are this matter's slice (FR-53)."""
+        with self._sf() as session:
+            scope = session.scalar(
+                select(MatterScope.scope).where(
+                    MatterScope.matter == matter, MatterScope.tenant == tenant
+                )
+            )
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)
+            all_rows = session.execute(
+                select(AuditRecord)
+                .where(AuditRecord.tenant == tenant)
+                .order_by(AuditRecord.seq)
+            ).scalars().all()
+
+        verified = True
+        prev_chain = ""
+        for i, r in enumerate(all_rows):
+            content = _audit_content(
+                r.seq, tenant, r.matter, r.actor, r.action, r.detail, _audit_ts(r.timestamp)
+            )
+            if r.seq != i + 1 or _audit_chain(prev_chain, content) != r.chain:
+                verified = False
+            prev_chain = r.chain
+
+        entries = [
+            AuditEntry(r.seq, r.actor, r.action, r.detail, r.chain, r.timestamp.isoformat())
+            for r in all_rows
+            if r.matter == matter
+        ]
+        return AuditTrail(entries, verified)

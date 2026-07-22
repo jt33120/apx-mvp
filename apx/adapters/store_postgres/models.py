@@ -74,3 +74,27 @@ class MatterScope(Base):
     matter: Mapped[str] = mapped_column(String, primary_key=True)
     tenant: Mapped[str] = mapped_column(String, nullable=False)
     scope: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class AuditRecord(Base):
+    """Append-only, tamper-evident trail (FR-24, FR-53). Each entry carries a
+    monotonic per-tenant sequence and a chain value over the previous entry, so a
+    gap, a reordering or a truncation is detectable by a reader holding only the
+    export. No user-facing action edits or removes an entry; a correction is a new
+    entry. The validation act (FR-45) and the full recorded surface are later
+    stories; this slice records ingestion under an actor.
+    """
+
+    __tablename__ = "audit_record"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    seq: Mapped[int] = mapped_column(nullable=False)          # monotonic per tenant
+    matter: Mapped[str | None] = mapped_column(String, nullable=True)
+    actor: Mapped[str] = mapped_column(String, nullable=False)
+    action: Mapped[str] = mapped_column(String, nullable=False)
+    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    chain: Mapped[str] = mapped_column(String(64), nullable=False)  # sha256(prev.chain + content)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+    __table_args__ = (UniqueConstraint("tenant", "seq", name="uq_audit_tenant_seq"),)

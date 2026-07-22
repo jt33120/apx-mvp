@@ -123,3 +123,29 @@ def test_chinese_wall_over_http(tmp_path: Path, monkeypatch) -> None:
         # Reading m-b with the wrong wall is refused (403); with the right wall, 200.
         assert _read(c, "m-b", "wall-A").status_code == 403
         assert _read(c, "m-b", "wall-B").status_code == 200
+
+
+def test_audit_trail_over_http(tmp_path: Path, monkeypatch) -> None:
+    url = f"sqlite:///{tmp_path / 'apx.db'}"
+    Base.metadata.create_all(create_engine(url))
+    monkeypatch.setenv("DATABASE_URL", url)
+    matter_dir = tmp_path / "matter"
+    matter_dir.mkdir()
+    _matter(matter_dir)
+
+    with TestClient(app) as c:
+        c.post(
+            "/api/ingest",
+            json={"folder": str(matter_dir), "matter": "m", "tenant": "t",
+                  "scope": "wall-A", "actor": "me.durupt"},
+        )
+        # In scope: the ingestion is on the trail, under the actor, and it verifies.
+        ok = c.get("/api/matters/m/audit", params={"tenant": "t", "scopes": "wall-A"})
+        body = ok.json()
+        assert ok.status_code == 200
+        assert body["verified"] is True
+        assert [e["action"] for e in body["entries"]] == ["ingest"]
+        assert body["entries"][0]["actor"] == "me.durupt"
+        # Out of scope: refused, existence not disclosed (same 403 as a missing matter).
+        denied = c.get("/api/matters/m/audit", params={"tenant": "t", "scopes": "wall-B"})
+        assert denied.status_code == 403
