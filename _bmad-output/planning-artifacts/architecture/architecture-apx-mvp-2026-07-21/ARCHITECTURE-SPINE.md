@@ -169,9 +169,14 @@ graph TD
 - **Prevents:** units independently introducing a second stateful service — Redis for the queue,
   Qdrant or LanceDB for vectors — producing a deployment a non-specialist cannot operate, back up
   or restore, and a backup that is not one consistent snapshot.
-- **Rule:** PostgreSQL 18.4 holds relational data, vectors (pgvector `== 0.8.5`, HNSW, 1024-dim
-  `halfvec`), the deterministic text index and the job queue (Procrastinate 3.9.x). No component
-  may introduce a stateful service beyond it. Anything that appears to require one is an adapter
+- **Rule:** one PostgreSQL instance holds relational data, vectors (**pgvector ≥ 0.8 with `halfvec`
+  and HNSW** — the invariant is the extension contract, not the server's patch number), the
+  deterministic text index and the job queue (Procrastinate 3.9.x). **The major version is "the
+  newest the environment offers"**: the on-premise artefact and Railway ship PostgreSQL 18.4
+  (`pgvector/pgvector:pg18`); the Supabase dev tier runs PostgreSQL 17 with pgvector 0.8.0, which
+  satisfies `halfvec` + HNSW identically. A PG17↔PG18 parity check runs in CI (verified 2026-07-22,
+  `docs/context/06-postgres-managed-tier-check-2026-07.md`). No component may introduce a stateful
+  service beyond it. Anything that appears to require one is an adapter
   boundary, not a new deployment unit. Consequence taken deliberately: crash-resume mid-ingestion
   is a transaction property rather than a configuration, and "*chunk* row + its vector + its
   *matter*" is one transactional object — an embedding cannot outlive the *pièce* it came from.
@@ -1376,7 +1381,7 @@ once it exists; the reasoning does not live here.*
 | Pydantic | 2.13.4 | Boundary validation (2.14.0a1 is alpha — do not ship) |
 | SQLAlchemy | 2.0.51 | Persistence (2.1.0b3 is beta — do not ship) |
 | Alembic | 1.18.5 | Migrations, behind the AD-30 fail-closed wrapper |
-| PostgreSQL | 18.4 | The one stateful service (PG19 is at Beta 2 — must not ship into a firm). Managed-dev-tier availability of **major version 18** is unverified — Open Question 5 |
+| PostgreSQL | 18.4 on-prem / Railway · 17 on Supabase dev | The one stateful service (PG19 is at Beta 2 — must not ship into a firm). The invariant is **pgvector ≥ 0.8 + `halfvec` + HNSW**, not the major number; Supabase runs 17 with pgvector 0.8.0 which satisfies it. Verified 2026-07-22 — Open Question 5 resolved |
 | pgvector | **== 0.8.5** | Vectors: HNSW, 1024-dim `halfvec`. Pinned exactly, not `≥`: 0.8.3 and 0.8.4 fixed HNSW vacuum corruption, and AD-30 pins everything by digest |
 | Procrastinate | 3.9.x | Job queue, in the same PostgreSQL |
 | BGE-M3 | 568M, 1024-dim, MIT | Default embedder, dense + sparse from one pass |
@@ -1724,17 +1729,20 @@ Real gaps. None is filled with an invented answer.
    requires only that a latency figure exists and then may not regress, which is the honest
    position — but the figure does not exist yet.
 
-5. **PostgreSQL 18 availability on the managed dev tier is asserted in two documents and verified
-   in neither.** AD-3 makes managed-dev-tier availability a **build-gating criterion** — it is the
-   stated reason pgvectorscale and ParadeDB are excluded — and the deployment diagram commits
-   "Managed PostgreSQL 18.4 + pgvector" on the hosted tier. The stack research verified managed-tier
-   parity **for the pgvector extension** (present on Supabase, Neon, RDS/Aurora, Railway) and
-   **never for the PostgreSQL major version**; grepping it for the managed providers returns hits
-   about extensions only. So the one environment-availability fact that AD-3 turns into a rejection
-   criterion for other components is unchecked for the component AD-5 makes mandatory. **It is a
-   thirty-second check and it must be done before the dev tier is relied upon** — if the hosted
-   tier is on PG 17, either the dev tier diverges from the artefact (which AD-3 forbids) or the
-   schedule absorbs a self-hosted dev database. Unfilled deliberately: nobody has looked yet.
+5. **PostgreSQL major-version parity across environments — RESOLVED 2026-07-22.** *(Was: "PG 18
+   availability on the managed dev tier is asserted in two documents and verified in neither.")*
+   Checked against primary sources (`docs/context/06-postgres-managed-tier-check-2026-07.md`).
+   Finding: the **Supabase dev tier runs PostgreSQL 17, not 18, and you cannot bring your own
+   image**; Railway and the on-premise artefact can be image-identical on 18.4
+   (`pgvector/pgvector:pg18`). This does **not** break anything, because the invariant was
+   mis-stated as a patch number: Supabase carries **pgvector 0.8.0 with `halfvec` and HNSW**, which
+   satisfies every requirement, and the AD-3 rejection of pgvectorscale and ParadeDB is **confirmed
+   consistent** — both are live-verified absent from Supabase while pgvector is present. **Actions
+   taken:** AD-5's rule is re-pinned to "pgvector ≥ 0.8 + `halfvec` + HNSW on the newest major the
+   environment offers", and a **PG17↔PG18 parity check is added to CI** (dev on 17, artefact on 18,
+   two majors that must not diverge silently). **Residual, minor:** re-evaluate if a firm's or a
+   feature's need pins a PG18-only capability; Supabase's own PG18 is roadmapped "eventually in
+   2026" with no committed date, at which point the dev tier and the artefact re-converge.
 
 6. **The default judgement model was committed on a comparison its own evidence set up and did not
    run.** `Mistral-Small-3.2-24B` is real, current-enough and Apache-2.0 — but it dates from June
