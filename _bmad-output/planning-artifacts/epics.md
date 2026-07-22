@@ -1,5 +1,5 @@
 ---
-stepsCompleted: [1]
+stepsCompleted: [1, 2]
 inputDocuments:
   - _bmad-output/planning-artifacts/prds/prd-apx-mvp-2026-07-20/prd.md
   - _bmad-output/planning-artifacts/prds/prd-apx-mvp-2026-07-20/addendum.md
@@ -444,11 +444,115 @@ Paths are relative to `../apx-platform/` — **reference only, never an edit tar
 
 ### FR Coverage Map
 
-{{requirements_coverage_map}}
+- **FR-1:** Epic 2 — Folder selection as the whole onboarding gesture
+- **FR-2:** Epic 2 — Non-blocking, resumable *import job*
+- **FR-3:** Epic 2 — Multi-format extraction
+- **FR-4:** Epic 2 — Idempotent *ingestion* with stable identifiers
+- **FR-5:** Epic 2 — The *failure register*
+- **FR-6:** Epic 2 — The inventory guarantee and the permanent *denominator*
+- **FR-7:** Epic 2 — Completion summary
+- **FR-8:** Epic 1 — The frozen *payload schema*
+- **FR-9:** Epic 2 — The embedder fails loudly
+- **FR-10:** Epic 2 — The index never deletes itself
+- **FR-11:** Epic 2 — Chunking with provenance to source position
+- **FR-12:** Epic 3 — Semantic retrieval, marked *suggestive*
+- **FR-13:** Epic 3 — Deterministic exhaustive search
+- **FR-14:** Epic 3 — *RBAC scope* as a query pre-filter
+- **FR-15:** Epic 3 — Every result set declares its *truth status*
+- **FR-16:** Epic 4 — One ranked order, nothing deleted, nothing categorised
+- **FR-17:** Epic 4 — The tool draws **the line**
+- **FR-18:** Epic 4 — Per-*pièce* confidence and a one-line reversible justification
+- **FR-19:** Epic 4 — Moving **the line** is priced
+- **FR-20:** Epic 4 — The editable cell-by-cell table with a live *change log*
+- **FR-21:** Epic 4 — Never hard-delete
+- **FR-22:** Epic 5 — Random draw from the *discarded set*
+- **FR-23:** Epic 5 — The *confidence bound* as a sentence
+- **FR-24:** Epic 5 — The *audit record*
+- **FR-25:** Epic 5 — *Overrides* with a mandatory one-line reason
+- **FR-26:** Epic 5 — The *audit drawer* and its export
+- **FR-27:** Epic 2 — The *worklist*, actionable lines only
+- **FR-28:** Epic 2 — The permanent *denominator* on the home screen
+- **FR-29:** Epic 1 — Tenant isolation
+- **FR-30:** Epic 1 — Configuration-as-data
+- **FR-31:** Epic 1 — The *content-free projection* primitive
+- **FR-32:** Epic 6 — The client-pushed diagnostic export
+- **FR-33:** Epic 2 — One *ingestion* path
+- **FR-34:** Epic 6 — Namespaced translation keys, no silent fallback
+- **FR-35:** Epic 6 — Locale-aware dates, numbers and sorting
+- **FR-36:** Epic 6 — The language reaches the language model
+- **FR-37:** Epic 4 — The optional *case theory*
+- **FR-38:** Epic 4 — The *relevance judgement*
+- **FR-39:** Epic 4 — The ranked order and the *ranking version*
+- **FR-40:** Epic 4 — Per-*pièce* labelling against the *tenant*'s triage taxonomy
+- **FR-41:** Epic 4 — The justification, derived from named evidence
+- **FR-42:** Epic 4 — Per-*pièce* confidence is derived, never self-reported
+- **FR-43:** Epic 4 — Moving a single *pièce* across **the line**
+- **FR-44:** Epic 3 — The *pièce* viewer
+- **FR-45:** Epic 5 — The *validation act*, and no undetectable bulk acceptance
+- **FR-46:** Epic 6 — Export of the *retained set*
+- **FR-47:** Epic 1 — Encryption at rest and in transit
+- **FR-48:** Epic 1 — Authentication and session handling
+- **FR-49:** Epic 1 — Grant-time authorisation and *RBAC scope* administration
+- **FR-50:** Epic 1 — The minimal configuration and provisioning surface
+- **FR-51:** Epic 1 — Secret and key management
+- **FR-52:** Epic 1 — Backup, restore and disaster recovery
+- **FR-53:** Epic 5 — *Audit record* continuity
+- **FR-54:** Epic 2 — The corpus and *gold set* pipeline
+- **FR-55:** Epic 1 — The offline fitness function, executed in CI
+- **FR-56:** Epic 1 — Structural properties, enforced in CI
+- **FR-57:** Epic 2 — Container expansion and the unit of the *denominator*
+- **FR-58:** Epic 4 — Freshness and staleness of derived artefacts
+- **FR-59:** Epic 6 — The usability gate
+- **FR-60:** Epic 2 — The *matters* zone
 
 ## Epic List
 
-{{epics_list}}
+### Epic 1: A firm installs APX, and it is safe from the first minute
+
+A firm's IT contact installs APX on a machine the firm owns, it starts or refuses to start, and a lawyer signs in. The *payload schema* — the only irreversible decision in the increment — is frozen here, and the offline fitness function runs in CI from the first week so no dependency can quietly make the product un-installable. For on-premise software, a working, secured, accountable installation is a user outcome, not plumbing.
+
+**FRs covered:** FR-8, FR-29, FR-30, FR-31, FR-47, FR-48, FR-49, FR-50, FR-51, FR-52, FR-55, FR-56  ·  **12 requirements**
+
+### Epic 2: A lawyer hands over a matter and every document is accounted for
+
+A lawyer selects a folder — a USB key, a network share — and leaves. On return: every *pièce* is in the *corpus*, in the *failure register*, or in a declared exclusion, with nothing in two of them and nothing in none. The *denominator* is permanent and on screen, the *worklist* says what needs a human, and the completion summary is readable by someone who is not technical. Closes with the timed 5 000-document concurrent run that gates every performance commitment downstream.
+
+**FRs covered:** FR-1, FR-2, FR-3, FR-4, FR-5, FR-6, FR-7, FR-9, FR-10, FR-11, FR-27, FR-28, FR-33, FR-54, FR-57, FR-60  ·  **16 requirements**
+
+### Epic 3: A lawyer finds a pièce, and can prove another does not exist
+
+Two engines with different truth status: one that finds and never claims completeness, one that proves and returns the whole match set. Every result declares which it is, in the interface and in any export. The *RBAC scope* is a pre-filter on the query itself, so a wall cannot leak silently. And the *pièce* viewer, because reading the document is the job.
+
+**FRs covered:** FR-12, FR-13, FR-14, FR-15, FR-44  ·  **5 requirements**
+
+### Epic 4: A lawyer receives a ranked working set and keeps control of it
+
+An optional *case theory*, a cascade that spends the model only where cheap filters cannot decide, one ranked order with nothing deleted and nothing categorised, and **the line** the tool commits to and the lawyer moves at a priced cost. Confidence is derived, never self-reported. Every edit is a per-*pièce* diff with a live *change log*, and a single *pièce* can cross **the line** without dragging it.
+
+**FRs covered:** FR-16, FR-17, FR-18, FR-19, FR-20, FR-21, FR-37, FR-38, FR-39, FR-40, FR-41, FR-42, FR-43, FR-58  ·  **14 requirements**
+
+### Epic 5: A sceptic audits what was set aside and says a defensible sentence
+
+A random draw from the *discarded set*, verdicts recorded, and a *confidence bound* stated as a prevalence bound a lawyer can say to a client or a judge — or counts only, if the estimator cannot be proven sound. The *audit record* is atomic, chained, and detectably incomplete rather than silently so; *overrides* carry a written reason; the *validation act* is real and bulk acceptance is never undetectable.
+
+**FRs covered:** FR-22, FR-23, FR-24, FR-25, FR-26, FR-45, FR-53  ·  **7 requirements**
+
+### Epic 6: The work leaves the building, in the firm's own language
+
+The *retained set* comes out as a deliverable rather than staying inside the tool. The client-pushed diagnostic export carries counts and never content. The interface, dates, sorting and the model's own instructions all follow the firm's language. And the usability gate is exercised against a real non-technical reader.
+
+**FRs covered:** FR-32, FR-34, FR-35, FR-36, FR-46, FR-59  ·  **6 requirements**
+
+---
+
+**Coverage:** 60 of 60 functional requirements, each in exactly one epic.
+
+**Dependencies run strictly forward.** Epic 2 depends on Epic 1; Epic 3 on 1–2; Epic 4 on 1–3 (the cascade uses retrieval); Epic 5 on 4 (there must be a *discarded set* to audit); Epic 6 on the rest. **No epic requires a later epic to function.**
+
+**Two gates.** The timed 5 000-*pièce* concurrent run — OCR, embedding and inference together — closes Epic 2 and gates every performance and retrieval commitment in Epics 3–5; until it exists, wall-clock claims are speculation. The *gold set* merge gate (FR-54, Epic 2) precedes ranking-quality work in Epic 4.
+
+**No UX design contract exists.** Stories touching the *worklist*, **the line**, the editable table, the viewer, the *audit drawer* and the export carry behavioural acceptance criteria only and are marked as requiring a UX pass before implementation.
+
 
 <!-- Repeat for each epic in epics_list (N = 1, 2, 3...) -->
 
