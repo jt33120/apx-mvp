@@ -4,7 +4,7 @@ baseline_commit: 493b8c8c32f58c7ca718bcd983951498a767223a
 
 # Story 1.3: The frozen payload schema
 
-Status: review
+Status: done
 
 ## Story
 
@@ -83,7 +83,7 @@ Claude Opus 4.8 (1M context) — Claude Code dev-story workflow.
 
 ### Completion Notes List
 
-- **The scope/custodian reconciliation (AC2, generalised — the subtlety the story flags).** FR-8 lists both *RBAC scope* and *custodian* among a chunk's "mandatory fields", but AD-9 states plainly that **no column named or aliased as a scope or a custodian exists on `chunk`, `piece` or `full_text`**, and AD-13/AD-40 make scope a query-time resolution. AC2 spells the reconciliation out for scope only; I extended the *same* reading to custodian, since AD-9 treats them identically. Locked: `rbac_scope` is a **required write-time argument** the writer checks against `matter_scope` and never persists; *custodian* is piece-level provenance (kept on the existing `piece`, never a `chunk` column). "Carries X" (FR-8) means *written under an authorised/attributed X*, not *stored as a chunk field*. A raw scope/custodian column on `chunk` fails the build (check `chunk_columns_enumerated`).
+- **The scope/custodian reconciliation (AC2, generalised — the subtlety the story flags).** FR-8 lists both *RBAC scope* and *custodian* among a chunk's "mandatory fields", but AD-9 states plainly that **no column named or aliased as a scope or a custodian exists on `chunk`, `piece` or `full_text`**, and AD-13/AD-40 make scope a query-time resolution. AC2 spells the reconciliation out for scope only; I extended the *same* reading to custodian, since AD-9 treats them identically. Locked: `rbac_scope` is a **required write-time argument** the writer checks against `matter_scope` and never persists; *custodian* is piece-level provenance (kept on the existing `piece`, never a `chunk` column). "Carries X" (FR-8) means *written under an authorised/attributed X*, not *stored as a chunk field*. A raw scope/custodian column on `chunk` fails the build (check `chunk_columns_enumerated`). **Honest caveat (raised in review, corrected here):** the *pièce* still carries a **legacy scalar `custodian` column** from the pre-BMAD build, which AD-9 *also* forbids on `piece`; AD-9's `CUSTODIAN_LINK` **set** (unioned across imports) and the removal of that column are **owed to a later story**, not delivered here. 1.3 realises only the *chunk* dimension of the reconciliation — docstrings that had overstated this were corrected.
 - **Environment reconciliation (recorded per the 1.1 deviation convention).** `piece` and `matter_scope` already existed from the pre-BMAD ad-hoc build (migrations 0001/0002) and already satisfied most of AC1/AC3/AC4 (piece identity `(content_hash, matter)`, the `piece_date`/`piece_date_status` CHECK, full text on the piece). Story 1.3's real work against the live tree was therefore: the **`chunk` table**, the **one `write_chunk` writer**, the **domain payload record + `chunk_id`**, the **`ChunkWriter` port**, the **structural checks**, and the missing **`text_identity`** on `piece` (AC3). The "first Alembic migration" (AC7) is delivered *in substance* as `0009` — the first migration to create the frozen `chunk` schema — rather than re-creating tables that already exist.
 - **`text_identity` (AC3).** Added to `piece` (AD-10: the full text is a first-class artefact with its own identity beside its version). Migration `0009` adds the column, backfills existing rows with the exact hash the writer computes (`encode(sha256(convert_to(full_text,'UTF8')),'hex')`), then sets `NOT NULL`. The ad-hoc `save` path was updated to set it (kept green).
 - **Embedding trio deferred (per story scope).** `chunk` carries AD-9's non-embedding enumeration plus the reserved `external_ref`; the `halfvec` vector and `model_id`/`model_version` are the embedder story (2.8). The structural column check permits the full AD-9 set and forbids anything else (esp. scope/custodian), so 2.8 adds them without a schema fight.
@@ -100,10 +100,10 @@ Claude Opus 4.8 (1M context) — Claude Code dev-story workflow.
 - `apx/adapters/store_postgres/migrations/versions/0009_chunk_payload_schema.py` — the migration.
 - `apx/checks/payload_schema.py` — the four structural checks.
 - `tests/domain/test_payload.py`, `tests/adapters/test_chunk_writer.py`, `tests/adapters/test_chunk_writer_postgres.py`, `tests/checks/test_payload_schema_checks.py`.
-- `tests/_fixtures/payload_schema_violations/{two_writers,scope_defaulted,forbidden_column,cascade_fk}/*.py` — the failure-path fixtures.
+- `tests/_fixtures/payload_schema_violations/{two_writers,scope_defaulted,forbidden_column,stray_column,cascade_fk}/*.py` — the failure-path fixtures.
 
 **Modified**
-- `apx/core/domain/identity.py` — added `chunk_id(piece_id, position, chunking_config_version)`.
+- `apx/core/domain/identity.py` — added `chunk_id(piece_id, full_text_version, position, chunking_config_version)` (AD-40 — the extractor version is inside the identity).
 - `apx/adapters/store_postgres/models.py` — the `Chunk` model; `piece.text_identity`; imports.
 - `apx/adapters/store_postgres/store.py` — `save` sets `text_identity`.
 - `apx/checks/__main__.py` — registered the four payload-schema checks.
@@ -116,6 +116,33 @@ Claude Opus 4.8 (1M context) — Claude Code dev-story workflow.
 | Date | Change |
 |---|---|
 | 2026-07-23 | Implemented story 1.3 — the frozen payload schema: `chunk` table + one `write_chunk` writer (completeness / scope / version guards), `PayloadRecord` domain + `chunk_id`, `ChunkWriter` port, `piece.text_identity`, migration `0009`, four structural checks with failure fixtures, fitness `schema` stage. 182 passed / 8 skipped, checks + ruff green. Status → review. |
+| 2026-07-23 | Addressed the adversarial code review (three-reviewer pass): fixed 1 High + 5 Med findings; re-verified green (189 passed / 8 skipped). Status → done. |
+
+## Senior Developer Review (AI)
+
+**Date:** 2026-07-23 · **Reviewers:** Blind Hunter + Edge-Case Hunter + Acceptance Auditor (parallel, blind, same model tier) · **Outcome:** CHANGES-REQUESTED → resolved.
+
+### Findings and resolutions
+
+- [x] **[High] `chunk_id` omitted `full_text_version` (AD-40).** The identity, the unique constraint and AC4 all used `(piece_id, position, chunking_config_version)`; AD-40 (adopted) requires `(piece_id, full_text_version, position, chunking config)`, so a re-extraction is a NEW chunk, never an in-place overwrite of indexed evidence. **Fixed:** `chunk_id` + the unique constraint (`uq_chunk_piece_ftv_position_cfg`) + the migration + the writer now include `full_text_version`; added AD-40's asserted test (a changed extractor version → a different `chunk_id`). AC4 was wrong vs AD-40; AD-40 wins.
+- [x] **[Med] The writer trusted `source_piece_id`.** A caller for matter B could reference matter A's pièce (piece_id encodes the matter), overwriting A's chunk. **Fixed:** the writer rejects (`PieceIdentityMismatch`) any payload whose `source_piece_id != piece_id(content_hash, matter)`, before any write.
+- [x] **[Med] `chunk_columns_enumerated` was a scope/custodian denylist.** The house alias `wall`, a positional `mapped_column("scope")`, or any stray column slipped past. **Fixed:** it is now an **allowlist** over the exact AD-9 enumeration, reading the real DB column name (and plain `Assign` columns). Added `stray_column` + DB-named-`scope` fixtures.
+- [x] **[Med] The checks failed open on an unparseable file (a NUL byte crashed the runner).** **Fixed:** every check **fails closed** (an unparseable file is a check failure) and the parser catches `ValueError`. Added tmp-file fail-closed + NUL-byte tests.
+- [x] **[Med] The record overstated the custodian reconciliation.** Docstrings claimed the legacy scalar `piece.custodian` *is* AD-9's `CUSTODIAN_LINK` set. **Fixed:** corrected the docstrings and completion notes — it is a legacy scalar column (which AD-9 also forbids on `piece`); the `CUSTODIAN_LINK` set is owed to a later story.
+- [x] **[Low] Hardening.** `validate()` now rejects a non-`date` `piece_date`; `one_chunk_writer` also counts `insert(Chunk)` and dedups by full path.
+
+### Deferred (documented, not 1.3 defects)
+
+- [x] `piece.custodian` scalar column → AD-9 `CUSTODIAN_LINK` set — epic-2 ingestion/custody.
+- [x] `ingest.py`/`app.py` default `custodian="custodian-undeclared"` contradicts "no default anywhere" — the ingest path is a later story.
+- [x] `merge` is not a concurrent upsert — a single import job is the expected caller; `ON CONFLICT` is a later optimisation.
+- [x] CI exercises only PostgreSQL 18 (a 17 matrix leg is owed); the fitness `schema` stage checks model metadata, not a migrated DB (a model↔migration `alembic check` would strengthen it).
+
+### Dismissed
+
+- Migration backfill NULL-guard — `full_text` is NOT NULL since 0001. · `chunk_id`/`piece_id` `\x00` preimage ambiguity — inputs are hex digests + a validated non-negative position.
+
+**Post-fix verification:** `ruff` clean · `python -m apx.checks` 5/5 · `python -m apx.fitness` 3 asserted / 9 pending · `pytest` **189 passed, 8 skipped**.
 
 ## Open Questions for the human
 

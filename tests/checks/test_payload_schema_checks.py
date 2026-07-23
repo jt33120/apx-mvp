@@ -27,9 +27,16 @@ def test_scope_required_fires_on_a_defaulted_scope() -> None:
     assert not result.ok and "default" in result.detail.lower()
 
 
-def test_forbidden_column_fires_on_an_rbac_scope_column() -> None:
+def test_forbidden_column_fires_on_a_scope_named_db_column() -> None:
+    # the DB column is 'scope' even though the attribute is the innocent 'wall'
     result = payload_schema.chunk_columns_enumerated([FIX / "forbidden_column"])
-    assert not result.ok and "rbac_scope" in result.detail
+    assert not result.ok and "scope" in result.detail
+
+
+def test_column_check_fires_on_any_non_enumerated_column() -> None:
+    # the allowlist is "exactly the AD-9 set" — a stray non-scope column also fails
+    result = payload_schema.chunk_columns_enumerated([FIX / "stray_column"])
+    assert not result.ok and "foo" in result.detail
 
 
 def test_no_cascade_fires_on_a_cascade_foreign_key() -> None:
@@ -41,3 +48,32 @@ def test_one_chunk_writer_reports_the_single_real_writer() -> None:
     """A positive sanity check: on the real tree there is exactly one, and it is named."""
     result = payload_schema.one_chunk_writer()
     assert result.ok and "write_chunk" in result.detail
+
+
+def test_one_chunk_writer_counts_an_insert_core_statement(tmp_path: Path) -> None:
+    # an ORM Chunk(...) writer AND a separate insert(Chunk) bulk path = two writers → fail.
+    # Proves the check counts the Core bulk path (the natural way to smuggle a 2nd writer).
+    (tmp_path / "a.py").write_text("def w1(p):\n    return Chunk(chunk_id='x')\n")
+    (tmp_path / "b.py").write_text("def w2(rows):\n    return insert(Chunk).values(rows)\n")
+    result = payload_schema.one_chunk_writer([tmp_path])
+    assert not result.ok and "more than one" in result.detail.lower()
+
+
+def test_checks_fail_closed_on_an_unparseable_file(tmp_path: Path) -> None:
+    (tmp_path / "broken.py").write_text("def oops(:\n")  # a syntax error
+    for check in (
+        payload_schema.one_chunk_writer,
+        payload_schema.scope_arg_required,
+        payload_schema.chunk_columns_enumerated,
+        payload_schema.no_cascade_delete,
+    ):
+        result = check([tmp_path])
+        assert not result.ok and "parse" in result.detail.lower()
+
+
+def test_checks_do_not_crash_on_a_nul_byte(tmp_path: Path) -> None:
+    # a NUL byte makes ast.parse raise ValueError (not SyntaxError) — must fail closed,
+    # never propagate and crash `python -m apx.checks`.
+    (tmp_path / "nul.py").write_bytes(b"x = 1\x00\n")
+    result = payload_schema.no_cascade_delete([tmp_path])
+    assert not result.ok and "parse" in result.detail.lower()

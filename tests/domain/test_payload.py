@@ -49,25 +49,36 @@ def _payload(**overrides: object) -> PayloadRecord:
 
 
 def test_chunk_id_is_deterministic() -> None:
-    a = chunk_id("piece-abc", 3, "c1")
-    b = chunk_id("piece-abc", 3, "c1")
+    a = chunk_id("piece-abc", "tv1", 3, "c1")
+    b = chunk_id("piece-abc", "tv1", 3, "c1")
     assert a == b and len(a) == 64
 
 
 def test_chunk_id_varies_with_every_component() -> None:
-    base = chunk_id("piece-abc", 3, "c1")
-    assert chunk_id("piece-xyz", 3, "c1") != base  # different piece
-    assert chunk_id("piece-abc", 4, "c1") != base  # different position
-    assert chunk_id("piece-abc", 3, "c2") != base  # different chunking config → new generation
+    base = chunk_id("piece-abc", "tv1", 3, "c1")
+    assert chunk_id("piece-xyz", "tv1", 3, "c1") != base  # different piece
+    assert chunk_id("piece-abc", "tv1", 4, "c1") != base  # different position
+    assert chunk_id("piece-abc", "tv1", 3, "c2") != base  # different chunking config
+    assert chunk_id("piece-abc", "tv2", 3, "c1") != base  # different extraction → new gen
+
+
+def test_chunk_id_reflects_re_extraction_as_a_new_generation() -> None:
+    """AD-40's asserted test: a re-extraction (a changed full_text_version) yields a NEW
+    chunk id — the old chunk is retired by state, never overwritten in place."""
+    v1 = chunk_id("piece-abc", "extractor-v1", 0, "c1")
+    v2 = chunk_id("piece-abc", "extractor-v2", 0, "c1")
+    assert v1 != v2
 
 
 def test_chunk_id_and_piece_id_reject_empty_inputs() -> None:
     with pytest.raises(ValueError):
-        chunk_id("", 0, "c1")
+        chunk_id("", "tv1", 0, "c1")
     with pytest.raises(ValueError):
-        chunk_id("p", 0, "")
+        chunk_id("p", "", 0, "c1")  # empty full_text_version
     with pytest.raises(ValueError):
-        chunk_id("p", -1, "c1")
+        chunk_id("p", "tv1", 0, "")
+    with pytest.raises(ValueError):
+        chunk_id("p", "tv1", -1, "c1")
     with pytest.raises(ValueError):
         piece_id("", "m")
 
@@ -130,3 +141,12 @@ def test_an_unknown_date_status_is_rejected() -> None:
     with pytest.raises(IncompletePayload):
         _payload(piece_date=None, piece_date_status="maybe").validate()
     assert DATE_STATUSES == frozenset({"determined", "undetermined"})
+
+
+def test_a_non_date_piece_date_is_rejected() -> None:
+    with pytest.raises(IncompletePayload):  # a string is not a date
+        _payload(piece_date="2020-01-01", piece_date_status="determined").validate()
+    with pytest.raises(IncompletePayload):  # a datetime is not a pure date
+        _payload(
+            piece_date=datetime(2020, 1, 1, tzinfo=UTC), piece_date_status="determined"
+        ).validate()

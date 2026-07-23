@@ -3,7 +3,8 @@
 The ``chunk`` payload schema (AD-9) is the increment's one irreversible decision. Its
 columns are exactly the enumerated set — no ``rbac_scope``/``scope`` column (scope is a
 write-time check resolved from ``matter_scope`` at query time, AD-13/AD-40) and no
-``custodian`` column (custodianship is a set on the *pièce*, AD-9). The piece FK carries
+``custodian`` column (custodianship lives on the *pièce* — today a legacy scalar column;
+AD-9's ``CUSTODIAN_LINK`` set is a later story). The piece FK carries
 no ``ON DELETE`` action at all (AD-7): a *pièce* is retired, never hard-deleted out from
 under its chunks. The embedding trio — the ``halfvec`` vector and its
 ``model_id``/``model_version`` — is added by the embedder story (2.8).
@@ -59,11 +60,14 @@ def upgrade() -> None:
         sa.Column("schema_version", sa.String(), nullable=False),
         sa.Column("external_ref", sa.String(), nullable=True),
         sa.ForeignKeyConstraint(["piece_id"], ["piece.id"], name="fk_chunk_piece"),
+        # The natural key behind chunk_id — full_text_version included (AD-40), so a
+        # re-extraction is a new chunk, not a collision that overwrites evidence.
         sa.UniqueConstraint(
             "piece_id",
+            "full_text_version",
             "position",
             "chunking_config_version",
-            name="uq_chunk_piece_position_cfg",
+            name="uq_chunk_piece_ftv_position_cfg",
         ),
     )
     op.create_index("ix_chunk_piece_id", "chunk", ["piece_id"])

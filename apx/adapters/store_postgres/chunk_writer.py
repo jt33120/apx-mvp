@@ -21,7 +21,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session, sessionmaker
 
 from apx.adapters.store_postgres.models import Chunk, MatterScope
-from apx.core.domain.identity import chunk_id
+from apx.core.domain.identity import chunk_id, piece_id
 from apx.core.domain.payload import PayloadRecord
 
 
@@ -37,6 +37,17 @@ class UnauthorizedScope(Exception):
 class VersionMismatch(Exception):
     """The payload's schema/chunking version differs from the one the *import job*
     started under (AD-40). The write halts rather than mixing generations in one matter."""
+
+    def __init__(self, reason: str) -> None:
+        super().__init__(reason)
+        self.reason = reason
+
+
+class PieceIdentityMismatch(Exception):
+    """The payload's ``source_piece_id`` is not ``piece_id(content_hash, matter)`` — the
+    chunk would reference a *pièce* that does not match its own provenance. Because
+    ``piece_id`` encodes the *matter* (AD-40), this is a cross-matter hazard, so the single
+    write seam rejects it fail-closed (AD-12)."""
 
     def __init__(self, reason: str) -> None:
         super().__init__(reason)
@@ -62,6 +73,16 @@ class ChunkStore:
         # 1. Completeness — reject at the boundary (raises IncompletePayload).
         payload.validate()
 
+        # 1b. The referenced pièce must be the one this payload describes. piece_id encodes
+        #     (content, matter) (AD-40), so a mismatch means the chunk would point at another
+        #     matter's pièce — a Chinese-wall hazard the single seam refuses (AD-12).
+        expected_piece = piece_id(payload.content_hash, payload.matter)
+        if payload.source_piece_id != expected_piece:
+            raise PieceIdentityMismatch(
+                f"source_piece_id {payload.source_piece_id!r} != "
+                f"piece_id(content_hash, matter) {expected_piece!r}"
+            )
+
         # 3. Version guard — refuse a chunk from a different generation (AD-40). Checked
         #    before any write so a mismatch touches nothing.
         if payload.schema_version != self._schema_version:
@@ -80,7 +101,10 @@ class ChunkStore:
             raise UnauthorizedScope("an empty RBAC scope is never authorised (fail closed)")
 
         cid = chunk_id(
-            payload.source_piece_id, payload.position, payload.chunking_config_version
+            payload.source_piece_id,
+            payload.text_version,
+            payload.position,
+            payload.chunking_config_version,
         )
         with self._sf() as session, session.begin():
             # 2b. Scope is checked against the matter's authoritative row, never persisted.

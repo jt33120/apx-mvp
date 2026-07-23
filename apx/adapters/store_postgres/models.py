@@ -69,8 +69,9 @@ class Chunk(Base):
     columns are EXACTLY the enumerated payload-schema set (AD-9); any other column fails
     the build (Task 5 asserts it). Absent by design: **no** ``rbac_scope``/``scope``
     column — scope is a write-time check resolved from ``matter_scope`` at query time
-    (AD-13/AD-40) — and **no** ``custodian`` column — custodianship is a set on the
-    *pièce* (AD-9). The embedding trio (the ``halfvec`` vector and its
+    (AD-13/AD-40) — and **no** ``custodian`` column — custodianship lives on the *pièce*
+    (today a legacy scalar column; AD-9's ``CUSTODIAN_LINK`` set is a later story). The
+    embedding trio (the ``halfvec`` vector and its
     ``model_id``/``model_version``) is added by the embedder story (2.8); 1.3 freezes the
     non-embedding provenance. No cascade FK (AD-7): a *pièce* is retired, never
     hard-deleted out from under its chunks.
@@ -78,13 +79,17 @@ class Chunk(Base):
 
     __tablename__ = "chunk"
     __table_args__ = (
+        # The natural key BEHIND the deterministic chunk_id — it must match chunk_id's
+        # preimage exactly, full_text_version included (AD-40), so a re-extraction is a
+        # NEW chunk (new id, new row) rather than a collision that overwrites evidence.
         UniqueConstraint(
-            "piece_id", "position", "chunking_config_version",
-            name="uq_chunk_piece_position_cfg",
+            "piece_id", "full_text_version", "position", "chunking_config_version",
+            name="uq_chunk_piece_ftv_position_cfg",
         ),
     )
 
-    # chunk_id(piece_id, position, chunking_config_version) — deterministic, never a counter
+    # chunk_id(piece_id, full_text_version, position, chunking_config_version) — AD-40,
+    # deterministic, never a counter; the extractor version is inside it via full_text_version
     chunk_id: Mapped[str] = mapped_column(String(64), primary_key=True)
     # no ON DELETE anywhere on this FK — a retired state, never a cascade (AD-7)
     piece_id: Mapped[str] = mapped_column(

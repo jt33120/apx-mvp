@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from apx.adapters.store_postgres.chunk_writer import (
     ChunkStore,
+    PieceIdentityMismatch,
     UnauthorizedScope,
     VersionMismatch,
 )
@@ -75,7 +76,7 @@ def _chunk_count(sf: sessionmaker[Session]) -> int:
 def test_writes_a_chunk_under_the_authorised_scope(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
     cid = _store(sf).write_chunk(_payload(pid), rbac_scope=_SCOPE)
-    assert cid == chunk_id(pid, 0, _CFG)
+    assert cid == chunk_id(pid, "tv", 0, _CFG)
     with sf() as s:
         row = s.get(Chunk, cid)
         assert row is not None and row.piece_id == pid and row.matter == "pole-penal"
@@ -114,6 +115,16 @@ def test_rejects_an_empty_scope(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
     with pytest.raises(UnauthorizedScope):
         _store(sf).write_chunk(_payload(pid), rbac_scope="")
+    assert _chunk_count(sf) == 0
+
+
+def test_rejects_a_source_piece_id_not_matching_its_provenance(sf: sessionmaker[Session]) -> None:
+    _seed(sf)
+    # a pièce id derived from ANOTHER matter — piece_id encodes the matter (AD-40), so a
+    # chunk carrying it would cross the Chinese wall. The single seam refuses it.
+    foreign_pid = piece_id("h", "pole-assurance")
+    with pytest.raises(PieceIdentityMismatch):
+        _store(sf).write_chunk(_payload(foreign_pid), rbac_scope=_SCOPE)
     assert _chunk_count(sf) == 0
 
 

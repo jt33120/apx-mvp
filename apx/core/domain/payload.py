@@ -13,8 +13,10 @@ and any *scope* alias. Scope is not provenance that travels on the row — it is
 write-time authorisation resolved from the authoritative ``matter_scope`` at query time,
 so a re-scope takes effect at the next read with nothing to propagate. It reaches the
 writer as a separate required argument, never as a field here. *Custodian* is provenance
-and is carried (recorded on the *pièce*, AD-9's ``CUSTODIAN_LINK`` set), never on the
-*chunk* row.
+and is carried on the *pièce*, never on the *chunk* row. (Today the *pièce* holds a legacy
+scalar ``custodian`` column from the pre-BMAD build; AD-9's ``CUSTODIAN_LINK`` *set* — a
+custodian set unioned across imports, and no column on ``piece`` either — is owed to a later
+story. 1.3 fixes only the *chunk* dimension: custodian is never a chunk column.)
 """
 
 from __future__ import annotations
@@ -109,6 +111,12 @@ class PayloadRecord:
                 f"piece_date_status must be one of {sorted(DATE_STATUSES)}, "
                 f"got {self.piece_date_status!r}"
             )
+        # a borne date is a `date`, never a string and never a `datetime` (which is a date
+        # subclass): the column is DATE, and a smuggled datetime/str would round-trip wrong.
+        if self.piece_date is not None and (
+            not isinstance(self.piece_date, date) or isinstance(self.piece_date, datetime)
+        ):
+            raise IncompletePayload("piece_date must be a date (not a datetime, not a string)")
         determined = self.piece_date is not None
         if determined != (self.piece_date_status == _DETERMINED):
             raise IncompletePayload(

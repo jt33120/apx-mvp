@@ -94,7 +94,7 @@ def test_piece_text_identity_is_not_null(engine: Engine) -> None:
 def test_writes_a_chunk_on_postgres(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
     store = ChunkStore(sf, schema_version=_SCHEMA, chunking_config_version=_CFG)
-    assert store.write_chunk(_payload(pid), rbac_scope=_SCOPE) == chunk_id(pid, 0, _CFG)
+    assert store.write_chunk(_payload(pid), rbac_scope=_SCOPE) == chunk_id(pid, "tv", 0, _CFG)
 
 
 def test_a_chunk_for_a_missing_piece_is_refused_by_the_fk(sf: sessionmaker[Session]) -> None:
