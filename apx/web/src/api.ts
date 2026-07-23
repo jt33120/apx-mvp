@@ -52,6 +52,16 @@ export async function logout(): Promise<void> {
   await fetch("/api/logout", { method: "POST" });
 }
 
+// Change your own password (confirms the current one server-side).
+export async function changePassword(current_password: string, new_password: string): Promise<void> {
+  const res = await fetch("/api/me/password", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ current_password, new_password }),
+  });
+  if (!res.ok) throw new Error(await detail(res));
+}
+
 // Cockpit (admin only): the server enforces the admin gate and tenant scope.
 export async function listUsers(): Promise<AdminUser[]> {
   const res = await fetch("/api/admin/users");

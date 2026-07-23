@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  createUser, grantScope, ingestUpload, judgeMatter, listMatters, listUsers, login, logout, me,
-  readAudit, readLabels, readTriage, recallReview, recallSample, revokeScope, searchCorpus,
+  changePassword, createUser, grantScope, ingestUpload, judgeMatter, listMatters, listUsers,
+  login, logout, me, readAudit, readLabels, readTriage, recallReview, recallSample, revokeScope,
+  searchCorpus,
   type AdminUser, type AuditTrail, type Identity, type IngestResponse, type Labels,
   type MatterSummary, type RecallBound, type RecallSample, type SearchResults, type Triage,
 } from "./api";
@@ -188,7 +189,77 @@ function Console({ identity, onLogout, onCockpit }: {
           </div>
         </section>
       )}
+
+      <ChangePassword />
     </main>
+  );
+}
+
+/** Self-service password change — confirms the current password server-side. */
+function ChangePassword() {
+  const [open, setOpen] = useState(false);
+  const [current, setCurrent] = useState("");
+  const [next, setNext] = useState("");
+  const [confirm, setConfirm] = useState("");
+  const [msg, setMsg] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setErr(null);
+    setMsg(null);
+    if (next !== confirm) {
+      setErr("les deux nouveaux mots de passe diffèrent");
+      return;
+    }
+    setBusy(true);
+    try {
+      await changePassword(current, next);
+      setMsg("Mot de passe changé.");
+      setCurrent("");
+      setNext("");
+      setConfirm("");
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="apx-panel">
+      <button className="apx-ghost apx-btn-sm" onClick={() => setOpen(!open)}>
+        {open ? "▾" : "▸"} Changer mon mot de passe
+      </button>
+      {open && (
+        <div className="apx-card apx-pad" style={{ marginTop: ".6rem", maxWidth: "26rem" }}>
+          <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: ".7rem" }}>
+            <label className="apx-field">
+              <span>Mot de passe actuel</span>
+              <input type="password" value={current} onChange={(e) => setCurrent(e.target.value)}
+                autoComplete="current-password" />
+            </label>
+            <label className="apx-field">
+              <span>Nouveau (min. 8 caractères)</span>
+              <input type="password" value={next} onChange={(e) => setNext(e.target.value)}
+                autoComplete="new-password" />
+            </label>
+            <label className="apx-field">
+              <span>Confirmer</span>
+              <input type="password" value={confirm} onChange={(e) => setConfirm(e.target.value)}
+                autoComplete="new-password" />
+            </label>
+            <button type="submit" disabled={busy || !current || next.length < 8}
+              style={{ alignSelf: "flex-start" }}>
+              {busy ? "…" : "Mettre à jour"}
+            </button>
+          </form>
+          {err && <p className="apx-error" role="alert">{err}</p>}
+          {msg && <p className="apx-seal apx-seal--ok" style={{ marginTop: ".6rem" }}>✓ {msg}</p>}
+        </div>
+      )}
+    </section>
   );
 }
 

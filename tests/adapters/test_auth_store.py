@@ -60,3 +60,13 @@ def test_managing_a_user_in_another_tenant_is_rejected(store: SqlStore) -> None:
     uid = store.create_user("t", "a@c.fr", "pw", "A", set())
     with pytest.raises(ValueError):
         store.grant_scope("autre-cabinet", uid, "w1")  # the user is not in that tenant
+
+
+def test_change_password(store: SqlStore) -> None:
+    uid = store.create_user("t", "a@c.fr", "old-pass", "A", {"w"})
+    assert store.verify_user_password(uid, "old-pass") is True
+    assert store.verify_user_password(uid, "nope") is False
+
+    store.set_password(uid, "new-secret")
+    assert store.authenticate("t", "a@c.fr", "new-secret") is not None
+    assert store.authenticate("t", "a@c.fr", "old-pass") is None  # the old one no longer works

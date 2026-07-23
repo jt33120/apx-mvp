@@ -280,6 +280,28 @@ def test_cockpit_is_admin_only_and_manages_users(tmp_path: Path, monkeypatch) ->
         assert sorted(c.get("/api/me").json()["scopes"]) == ["wall-C"]
 
 
+def test_change_password_over_http(tmp_path: Path, monkeypatch) -> None:
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "old-pass", "Me", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr", pw="old-pass")
+        short = c.post("/api/me/password",
+                       json={"current_password": "old-pass", "new_password": "short"})
+        assert short.status_code == 422
+        wrong = c.post("/api/me/password",
+                       json={"current_password": "WRONG", "new_password": "a-good-password"})
+        assert wrong.status_code == 400
+        ok = c.post("/api/me/password",
+                    json={"current_password": "old-pass", "new_password": "a-good-password"})
+        assert ok.status_code == 200
+    # the new password works; the old one no longer does
+    with TestClient(app) as c:
+        assert _login(c, "me@cab.fr", pw="a-good-password").status_code == 200
+        old = c.post("/api/login",
+                     json={"tenant": "t", "email": "me@cab.fr", "password": "old-pass"})
+        assert old.status_code == 401
+
+
 def test_audit_trail_over_http(tmp_path: Path, monkeypatch) -> None:
     store = _prepare(tmp_path, monkeypatch)
     store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})

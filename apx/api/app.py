@@ -364,6 +364,28 @@ def me(ident: Identity = Depends(current_identity)) -> IdentityOut:
     )
 
 
+class PasswordChangeIn(BaseModel):
+    current_password: str
+    new_password: str
+
+
+@app.post("/api/me/password")
+def change_password(
+    req: PasswordChangeIn, ident: Identity = Depends(current_identity)
+) -> dict[str, str]:
+    """Change your own password: confirm the current one, then set the new (min 8).
+    400 if the current password is wrong, 422 if the new one is too short."""
+    store = _require_store()
+    if len(req.new_password) < 8:
+        raise HTTPException(
+            status_code=422, detail="le mot de passe doit faire au moins 8 caractères"
+        )
+    if not store.verify_user_password(ident.user_id, req.current_password):
+        raise HTTPException(status_code=400, detail="mot de passe actuel incorrect")
+    store.set_password(ident.user_id, req.new_password)
+    return {"status": "changed"}
+
+
 @app.get("/api/admin/users", response_model=list[AdminUserOut])
 def admin_list_users(ident: Identity = Depends(require_admin)) -> list[AdminUserOut]:
     """Every user in the caller's tenant with their scopes (admin only)."""

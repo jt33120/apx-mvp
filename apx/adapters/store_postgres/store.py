@@ -573,6 +573,20 @@ class SqlStore:
             }
         return is_admin, scopes
 
+    def verify_user_password(self, user_id: str, password: str) -> bool:
+        """Check a password for a known user id (used to confirm a self-service change)."""
+        with self._sf() as session:
+            user = session.get(User, user_id)
+            return user is not None and verify_password(password, user.password_hash)
+
+    def set_password(self, user_id: str, new_password: str) -> None:
+        """Replace a user's password with a fresh scrypt hash (plaintext never stored)."""
+        with self._sf() as session, session.begin():
+            user = session.get(User, user_id)
+            if user is None:
+                raise ValueError("unknown user")
+            user.password_hash = hash_password(new_password)
+
     def list_users(self, tenant: str) -> list[UserInfo]:
         """Every user in the tenant with their scopes — the cockpit roster."""
         with self._sf() as session:
