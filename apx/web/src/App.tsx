@@ -1,19 +1,80 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ingestUpload, judgeMatter, listMatters, readAudit, readLabels, readTriage, searchCorpus,
-  type AuditTrail, type IngestResponse, type Labels, type MatterSummary,
-  type SearchResults, type Triage,
+  ingestUpload, judgeMatter, listMatters, login, logout, me,
+  readAudit, readLabels, readTriage, searchCorpus,
+  type AuditTrail, type Identity, type IngestResponse, type Labels,
+  type MatterSummary, type SearchResults, type Triage,
 } from "./api";
 
-const TENANT = "cabinet";
-
-/** Slice A — drop a folder, see the inventory; re-open matters already ingested;
- *  read a matter's audit journal. Reads are pre-filtered by the Chinese-wall
- *  scope (AD-13); the journal is append-only and tamper-evident (FR-24/FR-53). */
+/** Owned auth gate (AD-15): the session — not the request — carries the tenant and
+ *  the held scopes. Nothing loads until you are who you say you are. */
 export default function App() {
+  const [identity, setIdentity] = useState<Identity | null>(null);
+  const [ready, setReady] = useState(false);
+
+  useEffect(() => {
+    me().then(setIdentity).catch(() => setIdentity(null)).finally(() => setReady(true));
+  }, []);
+
+  if (!ready) return <main style={{ padding: "2rem", maxWidth: 760, margin: "0 auto" }}>…</main>;
+  if (!identity) return <Login onLogin={setIdentity} />;
+  return (
+    <Console
+      identity={identity}
+      onLogout={async () => {
+        await logout();
+        setIdentity(null);
+      }}
+    />
+  );
+}
+
+function Login({ onLogin }: { onLogin: (id: Identity) => void }) {
+  const [tenant, setTenant] = useState("cabinet");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [err, setErr] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    try {
+      onLogin(await login(tenant, email, password));
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const box = { padding: ".5rem", width: "100%", boxSizing: "border-box" as const };
+  return (
+    <main style={{ padding: "3rem 1.25rem", maxWidth: 360, margin: "0 auto" }}>
+      <h1>A P<span style={{ color: "#9a7a34" }}>X</span></h1>
+      <p style={{ color: "#555", fontSize: ".9rem" }}>Accès au cabinet — identifiez-vous.</p>
+      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: ".6rem" }}>
+        <input aria-label="Cabinet" placeholder="Cabinet" value={tenant}
+          onChange={(e) => setTenant(e.target.value)} style={box} />
+        <input aria-label="Courriel" placeholder="Courriel" type="email" value={email}
+          onChange={(e) => setEmail(e.target.value)} style={box} />
+        <input aria-label="Mot de passe" placeholder="Mot de passe" type="password" value={password}
+          onChange={(e) => setPassword(e.target.value)} style={box} />
+        <button type="submit" disabled={busy || !email || !password} style={{ padding: ".5rem 1rem" }}>
+          {busy ? "Connexion…" : "Se connecter"}
+        </button>
+      </form>
+      {err && <p role="alert" style={{ color: "#a3161c" }}>{err}</p>}
+    </main>
+  );
+}
+
+/** Drop a folder, see the inventory; deduplicate, judge, search — all within the
+ *  scopes the session holds. */
+function Console({ identity, onLogout }: { identity: Identity; onLogout: () => void }) {
   const [matter, setMatter] = useState("");
-  const [scope, setScope] = useState("");
-  const [actor, setActor] = useState("");
+  const [scope, setScope] = useState(identity.scopes[0] ?? "");
   const [fileCount, setFileCount] = useState(0);
   const [result, setResult] = useState<IngestResponse | null>(null);
   const [matters, setMatters] = useState<MatterSummary[]>([]);
@@ -21,29 +82,27 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
 
-  async function refreshMatters(s: string) {
-    if (!s) return setMatters([]);
+  async function refreshMatters() {
     try {
-      setMatters(await listMatters(TENANT, s));
+      setMatters(await listMatters());
     } catch {
-      setMatters([]); // no database configured yet (503) — nothing to list
+      setMatters([]);
     }
   }
   useEffect(() => {
-    void refreshMatters(scope);
-  }, [scope]);
+    void refreshMatters();
+  }, []);
 
   async function run(e: React.FormEvent) {
     e.preventDefault();
     const files = inputRef.current?.files;
-    if (!files || files.length === 0) return;
+    if (!files || files.length === 0 || !scope) return;
     setBusy(true);
     setError(null);
     setResult(null);
     try {
-      const r = await ingestUpload(files, matter, TENANT, scope || matter, actor || "inconnu");
-      setResult(r);
-      await refreshMatters(scope || matter);
+      setResult(await ingestUpload(files, matter, scope));
+      await refreshMatters();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -54,11 +113,20 @@ export default function App() {
   const box = { padding: ".5rem" } as const;
   return (
     <main style={{ padding: "var(--apx-space-2)", maxWidth: 760, margin: "0 auto" }}>
-      <h1>APX — Inventaire d'un dossier</h1>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+        gap: "1rem", flexWrap: "wrap", borderBottom: "1px solid #e7e2d8", paddingBottom: ".6rem" }}>
+        <h1 style={{ margin: 0 }}>APX — Inventaire d'un dossier</h1>
+        <div style={{ fontSize: ".85rem", color: "#555" }}>
+          {identity.actor} · {identity.scopes.join(", ") || "aucun périmètre"}{" "}
+          <button onClick={onLogout} style={{ marginLeft: ".5rem", padding: ".2rem .6rem" }}>
+            Déconnexion
+          </button>
+        </div>
+      </header>
+
       <p style={{ color: "#555" }}>
         Déposez un dossier. Vous verrez ce qui est entré, ce qui a échoué, ce qui a été écarté —
-        rien perdu en silence. Vous ne voyez que les dossiers de votre périmètre, et chaque
-        dépôt est inscrit au journal.
+        rien perdu en silence. Vous ne voyez que les dossiers de votre périmètre.
       </p>
 
       <form onSubmit={run} style={{ display: "flex", gap: "var(--apx-space-1)", flexWrap: "wrap", alignItems: "center" }}>
@@ -66,30 +134,30 @@ export default function App() {
         <input ref={inputRef} type="file" multiple webkitdirectory=""
           onChange={(e) => setFileCount(e.target.files?.length ?? 0)} aria-label="Dossier" />
         <input aria-label="Affaire" placeholder="Affaire" value={matter}
-          onChange={(e) => setMatter(e.target.value)} style={{ ...box, flex: "0 1 10rem" }} />
-        <input aria-label="Périmètre" placeholder="Périmètre (mur)" value={scope}
-          onChange={(e) => setScope(e.target.value)} style={{ ...box, flex: "0 1 10rem" }} />
-        <input aria-label="Intervenant" placeholder="Vous (intervenant)" value={actor}
-          onChange={(e) => setActor(e.target.value)} style={{ ...box, flex: "0 1 10rem" }} />
-        <button type="submit" disabled={busy || fileCount === 0 || !matter} style={{ padding: ".5rem 1rem" }}>
+          onChange={(e) => setMatter(e.target.value)} style={{ ...box, flex: "0 1 11rem" }} />
+        <select aria-label="Périmètre" value={scope} onChange={(e) => setScope(e.target.value)}
+          style={{ ...box, flex: "0 1 11rem" }}>
+          {identity.scopes.length === 0 && <option value="">aucun périmètre</option>}
+          {identity.scopes.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+        <button type="submit" disabled={busy || fileCount === 0 || !matter || !scope}
+          style={{ padding: ".5rem 1rem" }}>
           {busy ? "Analyse…" : `Analyser${fileCount ? ` (${fileCount})` : ""}`}
         </button>
       </form>
 
       {error && <p role="alert" style={{ color: "#a3161c" }}>{error}</p>}
 
-      {result && <Inventory title={`Résultat — ${result.matter}`} r={result} />}
+      {result && <InventoryView title={`Résultat — ${result.matter}`} r={result} />}
 
-      {scope && <CorpusSearch scope={scope} />}
+      <CorpusSearch />
 
       {matters.length > 0 && (
         <section style={{ marginTop: "2rem" }}>
-          <h2>Mes dossiers — périmètre « {scope} »</h2>
+          <h2>Mes dossiers</h2>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <tbody>
-              {matters.map((m) => (
-                <MatterRow key={m.matter} m={m} scope={scope} />
-              ))}
+              {matters.map((m) => <MatterRow key={m.matter} m={m} />)}
             </tbody>
           </table>
         </section>
@@ -100,19 +168,19 @@ export default function App() {
 
 /** The safety net beneath triage: type a term, find every piece that contains it
  *  within your scope, whatever its label. Deterministic, exhaustive, scope-constrained. */
-function CorpusSearch({ scope }: { scope: string }) {
+function CorpusSearch() {
   const [q, setQ] = useState("");
   const [res, setRes] = useState<SearchResults | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  async function run(e: React.FormEvent) {
+  async function runSearch(e: React.FormEvent) {
     e.preventDefault();
     if (!q.trim()) return;
     setBusy(true);
     setErr(null);
     try {
-      setRes(await searchCorpus(TENANT, scope, q));
+      setRes(await searchCorpus(q));
     } catch (e2) {
       setErr(e2 instanceof Error ? e2.message : String(e2));
       setRes(null);
@@ -128,7 +196,7 @@ function CorpusSearch({ scope }: { scope: string }) {
         Un nom, une partie, une référence : toute pièce qui le contient, où qu'elle soit dans
         votre périmètre, quel que soit son tri. Déterministe et exhaustif — rien n'est caché.
       </p>
-      <form onSubmit={run} style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
+      <form onSubmit={runSearch} style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
         <input value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="nom de pièce, partie, référence…" aria-label="Recherche"
           style={{ padding: ".4rem .5rem", flex: "1 1 20rem" }} />
@@ -160,7 +228,7 @@ function CorpusSearch({ scope }: { scope: string }) {
 
 /** A matter, expandable to its deterministic triage, the judgment-by-criteria, and
  *  its audit journal (all fetched on demand, all scope-checked server-side). */
-function MatterRow({ m, scope }: { m: MatterSummary; scope: string }) {
+function MatterRow({ m }: { m: MatterSummary }) {
   const [open, setOpen] = useState(false);
   const [triage, setTriage] = useState<Triage | null>(null);
   const [labels, setLabels] = useState<Labels | null>(null);
@@ -171,9 +239,9 @@ function MatterRow({ m, scope }: { m: MatterSummary; scope: string }) {
 
   async function load() {
     const [tg, lb, au] = await Promise.all([
-      readTriage(m.matter, TENANT, scope),
-      readLabels(m.matter, TENANT, scope),
-      readAudit(m.matter, TENANT, scope),
+      readTriage(m.matter),
+      readLabels(m.matter),
+      readAudit(m.matter),
     ]);
     setTriage(tg);
     setLabels(lb);
@@ -197,7 +265,7 @@ function MatterRow({ m, scope }: { m: MatterSummary; scope: string }) {
     setJudging(true);
     setErr(null);
     try {
-      await judgeMatter(m.matter, TENANT, scope, question, "moi");
+      await judgeMatter(m.matter, question);
       await load(); // labels changed, and a "judge" entry was appended to the journal
     } catch (e2) {
       setErr(e2 instanceof Error ? e2.message : String(e2));
@@ -229,6 +297,27 @@ function MatterRow({ m, scope }: { m: MatterSummary; scope: string }) {
         </tr>
       )}
     </>
+  );
+}
+
+function TriageView({ t }: { t: Triage }) {
+  return (
+    <div style={{ marginBottom: ".9rem" }}>
+      <p style={{ margin: "0 0 .35rem", fontSize: ".95rem" }}>
+        <strong>{t.submitted}</strong> pièces → <strong>{t.distinct}</strong> distinctes à examiner
+        {t.duplicates > 0 && <> · <strong>{t.duplicates}</strong> doublon{t.duplicates > 1 ? "s" : ""} regroupé{t.duplicates > 1 ? "s" : ""}</>}
+      </p>
+      {t.groups.length > 0 && (
+        <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: ".85rem", color: "#444" }}>
+          {t.groups.map((g) => (
+            <li key={g.representative} style={{ marginBottom: ".15rem" }}>
+              <span style={{ fontFamily: "monospace" }}>{g.representative}</span>{" "}
+              <span style={{ color: "#777" }}>+ {g.size - 1} copie{g.size - 1 > 1 ? "s" : ""}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -284,29 +373,6 @@ function LabelChip({ label }: { label: string }) {
   );
 }
 
-/** The deterministic tier of the judgment cascade: how far the corpus collapses
- *  before any LLM. submitted → distinct, with the duplicate groups named. */
-function TriageView({ t }: { t: Triage }) {
-  return (
-    <div style={{ marginBottom: ".9rem" }}>
-      <p style={{ margin: "0 0 .35rem", fontSize: ".95rem" }}>
-        <strong>{t.submitted}</strong> pièces → <strong>{t.distinct}</strong> distinctes à examiner
-        {t.duplicates > 0 && <> · <strong>{t.duplicates}</strong> doublon{t.duplicates > 1 ? "s" : ""} regroupé{t.duplicates > 1 ? "s" : ""}</>}
-      </p>
-      {t.groups.length > 0 && (
-        <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: ".85rem", color: "#444" }}>
-          {t.groups.map((g) => (
-            <li key={g.representative} style={{ marginBottom: ".15rem" }}>
-              <span style={{ fontFamily: "monospace" }}>{g.representative}</span>{" "}
-              <span style={{ color: "#777" }}>+ {g.size - 1} copie{g.size - 1 > 1 ? "s" : ""}</span>
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
-  );
-}
-
 function Journal({ trail }: { trail: AuditTrail }) {
   return (
     <div>
@@ -328,7 +394,7 @@ function Journal({ trail }: { trail: AuditTrail }) {
   );
 }
 
-function Inventory({ title, r }: { title: string; r: IngestResponse }) {
+function InventoryView({ title, r }: { title: string; r: IngestResponse }) {
   const inv = r.inventory;
   return (
     <section aria-live="polite" style={{ marginTop: "1.5rem" }}>

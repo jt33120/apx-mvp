@@ -15,77 +15,86 @@ export type Labels = { relevant: number; uncertain: number; discarded: number; j
 export type JudgeResult = { judged: number; relevant: number; uncertain: number; discarded: number; judge: string };
 export type SearchHit = { matter: string; provenance: string; snippet: string };
 export type SearchResults = { query: string; total: number; returned: number; hits: SearchHit[] };
+export type Identity = { actor: string; tenant: string; scopes: string[] };
 
-// The one data path: HTTP to the API (AD-14). No fixtures, no fallback.
-export async function ingestUpload(
-  files: FileList, matter: string, tenant: string, scope: string, actor: string,
-): Promise<IngestResponse> {
+// The session cookie (owned auth) carries tenant + scopes; the client never sends them.
+async function detail(res: Response): Promise<string> {
+  return (await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`;
+}
+
+export async function me(): Promise<Identity | null> {
+  const res = await fetch("/api/me");
+  if (res.status === 401) return null;
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+export async function login(tenant: string, email: string, password: string): Promise<Identity> {
+  const res = await fetch("/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tenant, email, password }),
+  });
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+export async function logout(): Promise<void> {
+  await fetch("/api/logout", { method: "POST" });
+}
+
+// A lawyer drops files (or a folder) and files the matter under one of their walls.
+export async function ingestUpload(files: FileList, matter: string, scope: string): Promise<IngestResponse> {
   const form = new FormData();
   form.append("matter", matter);
-  form.append("tenant", tenant);
   form.append("scope", scope);
-  form.append("actor", actor);
   for (const file of Array.from(files)) {
     const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
     form.append("files", file, rel);
   }
   const res = await fetch("/api/ingest-upload", { method: "POST", body: form });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+  if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }
 
-// Pre-filtered by scope on the server (the Chinese wall). Empty scope -> nothing.
-export async function listMatters(tenant: string, scope: string): Promise<MatterSummary[]> {
-  const q = new URLSearchParams({ tenant, scopes: scope });
-  const res = await fetch(`/api/matters?${q}`);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+// Every matter the session's scope covers (the Chinese wall, resolved server-side).
+export async function listMatters(): Promise<MatterSummary[]> {
+  const res = await fetch("/api/matters");
+  if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }
 
-// The audit trail for a matter — scope-checked server-side (403 outside the wall).
-// `verified` is the tamper-evidence: the tenant chain recomputes cleanly.
-export async function readAudit(matter: string, tenant: string, scope: string): Promise<AuditTrail> {
-  const q = new URLSearchParams({ tenant, scopes: scope });
-  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/audit?${q}`);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+export async function readTriage(matter: string): Promise<Triage> {
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/triage`);
+  if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }
 
-// The deterministic triage — near-duplicate clustering, scope-checked (403 outside).
-// submitted = distinct + duplicates: copies collapsed to one piece to examine.
-export async function readTriage(matter: string, tenant: string, scope: string): Promise<Triage> {
-  const q = new URLSearchParams({ tenant, scopes: scope });
-  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/triage?${q}`);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
-  return res.json();
-}
-
-// Run the triage judge over the distinct band; persists reversible labels + audits.
-export async function judgeMatter(
-  matter: string, tenant: string, scope: string, question: string, actor: string,
-): Promise<JudgeResult> {
+export async function judgeMatter(matter: string, question: string): Promise<JudgeResult> {
   const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/judge`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ tenant, scopes: scope, question, actor }),
+    body: JSON.stringify({ question }),
   });
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+  if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }
 
-// The current triage labels for a matter — scope-checked (403 outside).
-export async function readLabels(matter: string, tenant: string, scope: string): Promise<Labels> {
-  const q = new URLSearchParams({ tenant, scopes: scope });
-  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/labels?${q}`);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+export async function readLabels(matter: string): Promise<Labels> {
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/labels`);
+  if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }
 
-// Deterministic exhaustive search across the caller's scope (FR-13). The server
-// constrains it to matters the scope covers — the wall pre-filters search too.
-export async function searchCorpus(tenant: string, scope: string, q: string): Promise<SearchResults> {
-  const params = new URLSearchParams({ tenant, scopes: scope, q });
-  const res = await fetch(`/api/search?${params}`);
-  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+export async function readAudit(matter: string): Promise<AuditTrail> {
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/audit`);
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+// Deterministic exhaustive search, scope-constrained server-side (the wall pre-filters it).
+export async function searchCorpus(q: string): Promise<SearchResults> {
+  const res = await fetch(`/api/search?${new URLSearchParams({ q })}`);
+  if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }

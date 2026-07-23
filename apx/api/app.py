@@ -1,24 +1,24 @@
-"""The HTTP surface (AD-6). Validate, run the use case, return.
+"""The HTTP surface (AD-6). Validate, authenticate, run the use case, return.
 
-This edge wires the Extractor adapter to the ingestion use case (the core imports
-no adapter — the composition happens here, at the edge). Slice A ships the
-inventory path: drop a folder → the denominator and the failure list. Every data
-access is an HTTP call to this one API (AD-14); there is no second data path.
-
-Two intake paths through the SAME ingestion: POST /api/ingest (a server-side
-folder — the on-prem / USB-key model) and POST /api/ingest-upload (a browser
-folder upload — the hosted model). Persistence is transparent (`persisted`).
-Not yet (their stories): RBAC (1.4/3.3), audit (5.x), idempotent job semantics,
-container expansion. No fixtures, no demo override (FR-33).
+This edge wires the adapters (extraction, judge) to the use cases — the core imports
+no adapter; composition happens here. Every data access is an HTTP call to this one
+API (AD-14). Access is by an owned session (AD-15): a signed cookie identifies the
+user, and the Chinese-wall scope (AD-13) is resolved from the authoritative
+`user_scope` grants on the server at request time — the client never supplies a
+scope, so a request cannot claim a wall it does not hold. The actor recorded on the
+audit trail is the session user. No fixtures, no demo override (FR-33).
 """
 
 from __future__ import annotations
 
+import os
 import tempfile
+import time
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import FastAPI, Form, HTTPException, UploadFile
+from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 
 from apx.adapters.extraction.files import FileExtractor
@@ -27,29 +27,80 @@ from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.triage import triage_pieces
+from apx.core.domain.auth import sign_token, verify_token
 from apx.core.ports.judge import Judge
 
 app = FastAPI(title="APX", version="0.0.0")
 
+SESSION_COOKIE = "apx_session"
+
 
 @lru_cache(maxsize=1)
 def _store() -> SqlStore | None:
-    """The durable store, built from DATABASE_URL. None when no database is
-    configured — the ingest path still computes and returns; only read-back and
-    persistence need it. This is transparent (the response says whether it
-    persisted), never a silent fixture (FR-33)."""
+    """The durable store, built from DATABASE_URL. None when unset — the stateless
+    ingest computation still runs, but persistence, read-back and auth need it."""
     try:
         return SqlStore(make_session_factory())
     except RuntimeError:
         return None
 
 
+def _require_store() -> SqlStore:
+    store = _store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    return store
+
+
+def _secret() -> str:
+    """The local key that signs sessions (APX_SECRET_KEY). Required — there is no
+    insecure default; without it, auth fails closed."""
+    secret = os.environ.get("APX_SECRET_KEY")
+    if not secret:
+        raise HTTPException(status_code=503, detail="no session secret (set APX_SECRET_KEY)")
+    return secret
+
+
+@dataclass
+class Identity:
+    user_id: str
+    tenant: str
+    actor: str            # the session user's display name — the audit actor
+    scopes: set[str]      # resolved live from user_scope; never client-supplied
+
+
+def current_identity(apx_session: str | None = Cookie(default=None)) -> Identity:
+    """Resolve the caller from their session cookie, or 401. Scopes are read from the
+    authoritative grants at request time (AD-13), so the client cannot claim a wall."""
+    secret = _secret()
+    if not apx_session:
+        raise HTTPException(status_code=401, detail="not authenticated")
+    claims = verify_token(secret, apx_session, now=int(time.time()))
+    if claims is None:
+        raise HTTPException(status_code=401, detail="invalid or expired session")
+    store = _require_store()
+    return Identity(
+        user_id=claims["user_id"], tenant=claims["tenant"], actor=claims["actor"],
+        scopes=store.scopes_for(claims["user_id"]),
+    )
+
+
+class LoginRequest(BaseModel):
+    tenant: str
+    email: str
+    password: str
+
+
+class IdentityOut(BaseModel):
+    actor: str
+    tenant: str
+    scopes: list[str]
+
+
 class IngestRequest(BaseModel):
     folder: str
     matter: str
-    tenant: str
-    scope: str = ""  # the Chinese-wall scope; defaults to the matter itself (its own wall)
-    actor: str = "unknown"  # who acted; the real identity comes from auth (story 1.5)
+    scope: str  # which wall to file the matter under — must be one you hold
     custodian: str = "custodian-undeclared"
 
 
@@ -102,10 +153,7 @@ class TriageOut(BaseModel):
 
 
 class JudgeRequest(BaseModel):
-    tenant: str
-    scopes: str              # comma-separated scopes the caller holds
     question: str            # the triage criteria (comma-separated terms for the criteria judge)
-    actor: str = "unknown"
 
 
 class JudgeResultOut(BaseModel):
@@ -166,8 +214,15 @@ def _persist(result: IngestionResult, scope: str, actor: str) -> bool:
     return True
 
 
-def _parse_scopes(scopes: str) -> set[str]:
-    return {s.strip() for s in scopes.split(",") if s.strip()}
+def _held_wall(req_scope: str, ident: Identity) -> str:
+    """The wall to file a matter under: required, and only one the caller holds — you
+    cannot file into a scope you do not have."""
+    wall = req_scope.strip()
+    if not wall:
+        raise HTTPException(status_code=400, detail="a scope (wall) is required")
+    if wall not in ident.scopes:
+        raise HTTPException(status_code=403, detail="you do not hold that scope")
+    return wall
 
 
 def _judge() -> Judge:
@@ -183,16 +238,49 @@ def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.post("/api/login", response_model=IdentityOut)
+def login(req: LoginRequest, response: Response) -> IdentityOut:
+    """Exchange credentials for a signed session cookie. Fails closed (401) on a bad
+    password or unknown user, at the same speed either way (no account enumeration)."""
+    secret = _secret()
+    store = _require_store()
+    user = store.authenticate(req.tenant, req.email, req.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="identifiants invalides")
+    token = sign_token(
+        secret, {"user_id": user.id, "tenant": user.tenant, "actor": user.display_name},
+        now=int(time.time()),
+    )
+    # HttpOnly so JS cannot read it; SameSite=Lax against CSRF. Secure should be True
+    # behind HTTPS in production (set via a reverse proxy / env in deployment).
+    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", path="/")
+    return IdentityOut(
+        actor=user.display_name, tenant=user.tenant, scopes=sorted(store.scopes_for(user.id))
+    )
+
+
+@app.post("/api/logout")
+def logout(response: Response) -> dict[str, str]:
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"status": "logged out"}
+
+
+@app.get("/api/me", response_model=IdentityOut)
+def me(ident: Identity = Depends(current_identity)) -> IdentityOut:
+    return IdentityOut(actor=ident.actor, tenant=ident.tenant, scopes=sorted(ident.scopes))
+
+
 @app.post("/api/ingest", response_model=IngestResponse)
-def ingest(req: IngestRequest) -> IngestResponse:
+def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> IngestResponse:
+    wall = _held_wall(req.scope, ident)
     folder = Path(req.folder)
     if not folder.is_dir():
         raise HTTPException(status_code=400, detail=f"not a folder: {req.folder}")
     result = ingest_folder(
-        folder, matter=req.matter, tenant=req.tenant,
+        folder, matter=req.matter, tenant=ident.tenant,
         extractor=FileExtractor(), custodian=req.custodian,
     )
-    persisted = _persist(result, req.scope or req.matter, req.actor)
+    persisted = _persist(result, wall, ident.actor)
     return IngestResponse(
         matter=req.matter,
         inventory=_inventory_out(result.inventory),
@@ -208,16 +296,16 @@ def ingest(req: IngestRequest) -> IngestResponse:
 @app.post("/api/ingest-upload", response_model=IngestResponse)
 async def ingest_upload(
     matter: str = Form(...),
-    tenant: str = Form(...),
-    scope: str = Form(""),
-    actor: str = Form("unknown"),
+    scope: str = Form(...),
     files: list[UploadFile] = Form(...),
+    ident: Identity = Depends(current_identity),
 ) -> IngestResponse:
     """The browser path: a lawyer drops files (or a folder) and sees the inventory.
     Uploaded files are written to a per-request temp directory — reconstructing the
     submitted folder tree from each file's relative path — then ingested through the
     same one path (FR-33). The temp dir is discarded; only the piece text (and
     failures) persist to the store."""
+    wall = _held_wall(scope, ident)
     if not files:
         raise HTTPException(status_code=400, detail="no files uploaded")
     with tempfile.TemporaryDirectory(prefix="apx-upload-") as tmp:
@@ -228,8 +316,8 @@ async def ingest_upload(
             dest = root / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(await f.read())
-        result = ingest_folder(root, matter=matter, tenant=tenant, extractor=FileExtractor())
-    persisted = _persist(result, scope or matter, actor)
+        result = ingest_folder(root, matter=matter, tenant=ident.tenant, extractor=FileExtractor())
+    persisted = _persist(result, wall, ident.actor)
     return IngestResponse(
         matter=matter,
         inventory=_inventory_out(result.inventory),
@@ -243,27 +331,25 @@ async def ingest_upload(
 
 
 @app.get("/api/matters", response_model=list[MatterOut])
-def list_matters(tenant: str, scopes: str) -> list[MatterOut]:
-    """Every matter the caller may see — pre-filtered by their RBAC scope (the
-    Chinese wall, AD-13/AD-14). `scopes` is comma-separated; empty means none."""
-    store = _store()
-    if store is None:
-        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+def list_matters(ident: Identity = Depends(current_identity)) -> list[MatterOut]:
+    """Every matter the caller may see — pre-filtered by their granted scope (the
+    Chinese wall, AD-13/AD-14), resolved from the session, not the request."""
+    store = _require_store()
     return [
         MatterOut(matter=m.matter, scope=m.scope, inventory=_inventory_out(m.inventory))
-        for m in store.matters(tenant, _parse_scopes(scopes))
+        for m in store.matters(ident.tenant, ident.scopes)
     ]
 
 
 @app.get("/api/search", response_model=SearchResultsOut)
-def search_corpus(tenant: str, scopes: str, q: str, limit: int = 100) -> SearchResultsOut:
+def search_corpus(
+    q: str, limit: int = 100, ident: Identity = Depends(current_identity)
+) -> SearchResultsOut:
     """Deterministic exhaustive search over the caller's scope (FR-13) — every piece
     whose stored text contains `q` (case-insensitive), scope-constrained (the wall
     pre-filters search too). `total` is honest even when the hits are capped."""
-    store = _store()
-    if store is None:
-        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
-    results = store.search(tenant, _parse_scopes(scopes), q, limit=max(1, min(limit, 500)))
+    store = _require_store()
+    results = store.search(ident.tenant, ident.scopes, q, limit=max(1, min(limit, 500)))
     return SearchResultsOut(
         query=results.query,
         total=results.total,
@@ -276,14 +362,12 @@ def search_corpus(tenant: str, scopes: str, q: str, limit: int = 100) -> SearchR
 
 
 @app.get("/api/matters/{matter}/audit", response_model=AuditTrailOut)
-def read_audit(matter: str, tenant: str, scopes: str) -> AuditTrailOut:
+def read_audit(matter: str, ident: Identity = Depends(current_identity)) -> AuditTrailOut:
     """The audit trail for a matter — 403 if its scope is not held. `verified` is
     the tamper-evidence: the tenant's audit chain recomputes cleanly."""
-    store = _store()
-    if store is None:
-        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    store = _require_store()
     try:
-        trail = store.read_audit(matter, tenant, _parse_scopes(scopes))
+        trail = store.read_audit(matter, ident.tenant, ident.scopes)
     except ScopeDenied as exc:
         raise HTTPException(status_code=403, detail="outside your scope") from exc
     return AuditTrailOut(
@@ -297,15 +381,13 @@ def read_audit(matter: str, tenant: str, scopes: str) -> AuditTrailOut:
 
 
 @app.get("/api/matters/{matter}/triage", response_model=TriageOut)
-def read_triage(matter: str, tenant: str, scopes: str) -> TriageOut:
+def read_triage(matter: str, ident: Identity = Depends(current_identity)) -> TriageOut:
     """The deterministic triage for a matter — near-duplicate clustering, the cheap
     first tier of the judgment cascade (403 outside the scope). `submitted = distinct
     + duplicates`: nothing lost, copies collapsed to one piece to examine."""
-    store = _store()
-    if store is None:
-        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    store = _require_store()
     try:
-        summary = store.deduplicate(matter, tenant, _parse_scopes(scopes))
+        summary = store.deduplicate(matter, ident.tenant, ident.scopes)
     except ScopeDenied as exc:
         raise HTTPException(status_code=403, detail="outside your scope") from exc
     return TriageOut(
@@ -320,19 +402,18 @@ def read_triage(matter: str, tenant: str, scopes: str) -> TriageOut:
 
 
 @app.post("/api/matters/{matter}/judge", response_model=JudgeResultOut)
-def judge_matter(matter: str, req: JudgeRequest) -> JudgeResultOut:
+def judge_matter(
+    matter: str, req: JudgeRequest, ident: Identity = Depends(current_identity)
+) -> JudgeResultOut:
     """Run the triage judge over the matter's distinct band, persist the reversible
-    labels, and record the act on the audit trail (403 outside scope). The response
-    names the judge that decided (transparency); a discard is never silent."""
-    store = _store()
-    if store is None:
-        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
-    scopes = _parse_scopes(req.scopes)
+    labels, and record the act on the audit trail under the session user (403 outside
+    scope). The response names the judge that decided; a discard is never silent."""
+    store = _require_store()
     judge = _judge()
     try:
-        reps = store.representatives(matter, req.tenant, scopes)
+        reps = store.representatives(matter, ident.tenant, ident.scopes)
         outcome = triage_pieces(reps, req.question, judge)
-        store.save_labels(matter, req.tenant, scopes, outcome, judge.name, req.actor)
+        store.save_labels(matter, ident.tenant, ident.scopes, outcome, judge.name, ident.actor)
     except ScopeDenied as exc:
         raise HTTPException(status_code=403, detail="outside your scope") from exc
     return JudgeResultOut(
@@ -342,14 +423,12 @@ def judge_matter(matter: str, req: JudgeRequest) -> JudgeResultOut:
 
 
 @app.get("/api/matters/{matter}/labels", response_model=LabelsOut)
-def read_labels(matter: str, tenant: str, scopes: str) -> LabelsOut:
+def read_labels(matter: str, ident: Identity = Depends(current_identity)) -> LabelsOut:
     """The current triage labels for a matter — counts plus each piece with its
     rationale (403 outside scope)."""
-    store = _store()
-    if store is None:
-        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    store = _require_store()
     try:
-        summary = store.labels(matter, tenant, _parse_scopes(scopes))
+        summary = store.labels(matter, ident.tenant, ident.scopes)
     except ScopeDenied as exc:
         raise HTTPException(status_code=403, detail="outside your scope") from exc
     return LabelsOut(
@@ -363,14 +442,12 @@ def read_labels(matter: str, tenant: str, scopes: str) -> LabelsOut:
 
 
 @app.get("/api/matters/{matter}/inventory", response_model=InventoryOut)
-def read_inventory(matter: str, tenant: str, scopes: str) -> InventoryOut:
+def read_inventory(matter: str, ident: Identity = Depends(current_identity)) -> InventoryOut:
     """The durable inventory for a matter — 403 if its scope is not held (fail
     closed, and the matter's existence is not disclosed)."""
-    store = _store()
-    if store is None:
-        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    store = _require_store()
     try:
-        inv = store.inventory(matter, tenant, _parse_scopes(scopes))
+        inv = store.inventory(matter, ident.tenant, ident.scopes)
     except ScopeDenied as exc:
         raise HTTPException(status_code=403, detail="outside your scope") from exc
     return _inventory_out(inv)
