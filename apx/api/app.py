@@ -23,6 +23,9 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
+from apx.adapters.expansion.archives import ZipExpander
+from apx.adapters.expansion.composite import CompositeExpander
+from apx.adapters.expansion.mail import EmlExpander
 from apx.adapters.extraction.files import FileExtractor
 from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
@@ -279,6 +282,12 @@ def _persist(result: IngestionResult, scope: str, actor: str) -> bool:
     return True
 
 
+def _expander() -> CompositeExpander:
+    """Container expansion composed at the edge: a .zip is unpacked and its members
+    ingested individually; an email adds its attachments (its body is a piece too)."""
+    return CompositeExpander([ZipExpander(), EmlExpander()])
+
+
 def _held_wall(req_scope: str, ident: Identity) -> str:
     """The wall to file a matter under: required, and only one the caller holds — you
     cannot file into a scope you do not have."""
@@ -449,7 +458,7 @@ def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> I
         raise HTTPException(status_code=400, detail=f"not a folder: {req.folder}")
     result = ingest_folder(
         folder, matter=req.matter, tenant=ident.tenant,
-        extractor=FileExtractor(), custodian=req.custodian,
+        extractor=FileExtractor(), custodian=req.custodian, expander=_expander(),
     )
     persisted = _persist(result, wall, ident.actor)
     return IngestResponse(
@@ -487,7 +496,8 @@ async def ingest_upload(
             dest = root / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(await f.read())
-        result = ingest_folder(root, matter=matter, tenant=ident.tenant, extractor=FileExtractor())
+        result = ingest_folder(root, matter=matter, tenant=ident.tenant,
+                               extractor=FileExtractor(), expander=_expander())
     persisted = _persist(result, wall, ident.actor)
     return IngestResponse(
         matter=matter,
