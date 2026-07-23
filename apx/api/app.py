@@ -18,7 +18,7 @@ from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 
-from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Response, UploadFile
+from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Request, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
@@ -41,6 +41,64 @@ from apx.core.ports.judge import Judge
 app = FastAPI(title="APX", version="0.1.0")
 
 SESSION_COOKIE = "apx_session"
+
+# ── hardening ──────────────────────────────────────────────────────────────────
+_MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+_CSP = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'self'; "
+    "form-action 'self'; frame-ancestors 'none'"
+)
+
+
+def _cookie_secure() -> bool:
+    """Mark the session cookie Secure behind HTTPS (APX_COOKIE_SECURE=1 in the image)."""
+    return os.environ.get("APX_COOKIE_SECURE", "").strip().lower() in ("1", "true", "yes")
+
+
+def _client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for")
+    if forwarded:
+        return forwarded.split(",")[0].strip()  # the client, in front of Railway's proxy
+    return request.client.host if request.client else "unknown"
+
+
+class _LoginRateLimiter:
+    """Per-IP sliding window over FAILED login attempts — a success clears the counter,
+    so legitimate users are never throttled, only brute force is. In-memory (single
+    instance); a shared store would be the multi-instance step."""
+
+    def __init__(self, limit: int, window_seconds: float) -> None:
+        self._limit = limit
+        self._window = window_seconds
+        self._fails: dict[str, list[float]] = {}
+
+    def blocked(self, key: str) -> bool:
+        now = time.time()
+        recent = [t for t in self._fails.get(key, []) if now - t < self._window]
+        self._fails[key] = recent
+        return len(recent) >= self._limit
+
+    def record_failure(self, key: str) -> None:
+        self._fails.setdefault(key, []).append(time.time())
+
+    def reset(self, key: str) -> None:
+        self._fails.pop(key, None)
+
+
+_login_limiter = _LoginRateLimiter(limit=10, window_seconds=300.0)
+
+
+@app.middleware("http")
+async def _security_headers(request: Request, call_next):  # noqa: ANN001, ANN201
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Content-Security-Policy"] = _CSP
+    if _cookie_secure():  # behind HTTPS
+        response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    return response
 
 
 @lru_cache(maxsize=1)
@@ -351,21 +409,27 @@ def health() -> dict[str, str]:
 
 
 @app.post("/api/login", response_model=IdentityOut)
-def login(req: LoginRequest, response: Response) -> IdentityOut:
-    """Exchange credentials for a signed session cookie. Fails closed (401) on a bad
-    password or unknown user, at the same speed either way (no account enumeration)."""
+def login(req: LoginRequest, request: Request, response: Response) -> IdentityOut:
+    """Exchange credentials for a signed session cookie. Rate-limited per IP on failed
+    attempts (429 once too many); fails closed (401) at the same speed whether or not
+    the account exists (no enumeration)."""
+    ip = _client_ip(request)
+    if _login_limiter.blocked(ip):
+        raise HTTPException(status_code=429, detail="trop de tentatives — réessayez plus tard")
     secret = _secret()
     store = _require_store()
     user = store.authenticate(req.tenant, req.email, req.password)
     if user is None:
+        _login_limiter.record_failure(ip)
         raise HTTPException(status_code=401, detail="identifiants invalides")
+    _login_limiter.reset(ip)  # a success clears the counter — legitimate use is never throttled
     token = sign_token(
         secret, {"user_id": user.id, "tenant": user.tenant, "actor": user.display_name},
         now=int(time.time()),
     )
-    # HttpOnly so JS cannot read it; SameSite=Lax against CSRF. Secure should be True
-    # behind HTTPS in production (set via a reverse proxy / env in deployment).
-    response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", path="/")
+    # HttpOnly so JS cannot read it; SameSite=Lax against CSRF; Secure behind HTTPS.
+    response.set_cookie(
+        SESSION_COOKIE, token, httponly=True, samesite="lax", secure=_cookie_secure(), path="/")
     is_admin, scopes = store.identity(user.id)
     return IdentityOut(
         actor=user.display_name, tenant=user.tenant, scopes=sorted(scopes), is_admin=is_admin
@@ -487,6 +551,7 @@ def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> I
 
 @app.post("/api/ingest-upload", response_model=IngestResponse)
 async def ingest_upload(
+    request: Request,
     matter: str = Form(...),
     scope: str = Form(...),
     files: list[UploadFile] = Form(...),
@@ -497,6 +562,9 @@ async def ingest_upload(
     submitted folder tree from each file's relative path — then ingested through the
     same one path (FR-33). The temp dir is discarded; only the piece text (and
     failures) persist to the store."""
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="dépôt trop volumineux")
     wall = _held_wall(scope, ident)
     if not files:
         raise HTTPException(status_code=400, detail="no files uploaded")

@@ -32,6 +32,8 @@ COPY --from=web /web/dist ./apx/web/dist
 ENV APX_WEB_DIST=/app/apx/web/dist
 # OCR is available in this image (Tesseract installed above), so enable the fallback.
 ENV APX_OCR=1
+# Behind HTTPS in deployment: mark the session cookie Secure and send HSTS.
+ENV APX_COOKIE_SECURE=1
 
 COPY alembic.ini ./
 COPY docker/entrypoint.sh /entrypoint.sh

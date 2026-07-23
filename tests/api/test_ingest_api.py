@@ -30,10 +30,12 @@ def _matter(root: Path) -> None:
 
 
 @pytest.fixture(autouse=True)
-def _reset_store_cache():
+def _reset_state():
     app_module._store.cache_clear()
+    app_module._login_limiter._fails.clear()
     yield
     app_module._store.cache_clear()
+    app_module._login_limiter._fails.clear()
 
 
 def _prepare(tmp_path: Path, monkeypatch) -> SqlStore:
@@ -63,6 +65,29 @@ def test_spa_is_served_at_root_when_built() -> None:
     with TestClient(app) as c:
         r = c.get("/")
     assert r.status_code == 200 and "text/html" in r.headers.get("content-type", "")
+
+
+def test_security_headers_are_present() -> None:
+    with TestClient(app) as c:
+        r = c.get("/api/health")
+    assert r.headers["x-content-type-options"] == "nosniff"
+    assert r.headers["x-frame-options"] == "DENY"
+    assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
+
+
+def test_login_is_rate_limited_after_repeated_failures(tmp_path: Path, monkeypatch) -> None:
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "right-pass", "Me", {"wall-A"})
+    with TestClient(app) as c:
+        for _ in range(10):
+            bad = c.post("/api/login", json={"tenant": "t", "email": "me@cab.fr", "password": "X"})
+            assert bad.status_code == 401
+        # the 11th attempt is blocked — even correct credentials are refused while blocked
+        blocked = c.post("/api/login", json={"tenant": "t", "email": "me@cab.fr", "password": "X"})
+        assert blocked.status_code == 429
+        good = c.post("/api/login",
+                      json={"tenant": "t", "email": "me@cab.fr", "password": "right-pass"})
+        assert good.status_code == 429
 
 
 def test_protected_endpoint_requires_authentication(tmp_path: Path, monkeypatch) -> None:
