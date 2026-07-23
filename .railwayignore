@@ -1,0 +1,15 @@
+# What `railway up` should NOT upload (mirrors .dockerignore; the image rebuilds the web).
+.git
+.venv
+**/__pycache__
+*.db
+.scratch-*
+apx/web/node_modules
+apx/web/dist
+_bmad
+_bmad-output
+docs
+design-artifacts
+Archives-legacy
+.claude
+maquettes

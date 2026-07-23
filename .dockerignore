@@ -1,0 +1,20 @@
+# Keep the build context (and the Railway upload) to the product only.
+.git
+.venv
+**/__pycache__
+**/*.pyc
+*.db
+.scratch-*
+
+# The web is rebuilt inside the image; never ship node_modules or a stale dist.
+apx/web/node_modules
+apx/web/dist
+
+# Planning, tooling and reference trees — not part of the runtime.
+_bmad
+_bmad-output
+docs
+design-artifacts
+Archives-legacy
+.claude
+maquettes

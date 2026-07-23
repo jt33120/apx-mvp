@@ -10,5 +10,7 @@ fi
 echo "apx: applying migrations…"
 alembic upgrade head
 
-echo "apx: starting on :8000"
-exec uvicorn apx.api.app:app --host 0.0.0.0 --port 8000
+# Railway (and most hosts) inject $PORT; fall back to 8000 for local/compose.
+PORT="${PORT:-8000}"
+echo "apx: starting on :$PORT"
+exec uvicorn apx.api.app:app --host 0.0.0.0 --port "$PORT"
