@@ -10,6 +10,9 @@ export type AuditEntry = { seq: number; actor: string; action: string; detail: s
 export type AuditTrail = { entries: AuditEntry[]; verified: boolean };
 export type DuplicateGroup = { representative: string; members: string[]; size: number };
 export type Triage = { submitted: number; distinct: number; duplicates: number; groups: DuplicateGroup[] };
+export type LabelledPiece = { provenance: string; label: string; rationale: string };
+export type Labels = { relevant: number; uncertain: number; discarded: number; judged: number; pieces: LabelledPiece[] };
+export type JudgeResult = { judged: number; relevant: number; uncertain: number; discarded: number; judge: string };
 
 // The one data path: HTTP to the API (AD-14). No fixtures, no fallback.
 export async function ingestUpload(
@@ -51,6 +54,27 @@ export async function readAudit(matter: string, tenant: string, scope: string): 
 export async function readTriage(matter: string, tenant: string, scope: string): Promise<Triage> {
   const q = new URLSearchParams({ tenant, scopes: scope });
   const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/triage?${q}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+  return res.json();
+}
+
+// Run the triage judge over the distinct band; persists reversible labels + audits.
+export async function judgeMatter(
+  matter: string, tenant: string, scope: string, question: string, actor: string,
+): Promise<JudgeResult> {
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/judge`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ tenant, scopes: scope, question, actor }),
+  });
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+  return res.json();
+}
+
+// The current triage labels for a matter — scope-checked (403 outside).
+export async function readLabels(matter: string, tenant: string, scope: string): Promise<Labels> {
+  const q = new URLSearchParams({ tenant, scopes: scope });
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/labels?${q}`);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
   return res.json();
 }

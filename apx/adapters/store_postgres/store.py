@@ -20,10 +20,17 @@ from datetime import UTC, datetime
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
 
-from apx.adapters.store_postgres.models import AuditRecord, Failure, MatterScope, Piece
+from apx.adapters.store_postgres.models import (
+    AuditRecord,
+    Failure,
+    LabelRecord,
+    MatterScope,
+    Piece,
+)
 from apx.core.app.ingest import IngestionResult
 from apx.core.domain.dedup import cluster
 from apx.core.domain.inventory import Inventory
+from apx.core.domain.triage import TriageOutcome
 
 
 class ScopeDenied(Exception):
@@ -72,6 +79,22 @@ class DedupSummary:
     distinct: int    # what remains to examine (clusters, singletons included)
     duplicates: int  # copies collapsed into a representative (kept, not deleted)
     groups: tuple[DuplicateGroup, ...]  # multi-member groups only
+
+
+@dataclass(frozen=True)
+class LabelledPiece:
+    provenance: str
+    label: str
+    rationale: str
+
+
+@dataclass(frozen=True)
+class LabelSummary:
+    relevant: int
+    uncertain: int
+    discarded: int
+    judged: int
+    pieces: tuple[LabelledPiece, ...]
 
 
 def _failure_id(matter: str, submitted_path: str) -> str:
@@ -243,6 +266,80 @@ class SqlStore:
             for c in report.clusters
         )
         return DedupSummary(report.submitted, report.distinct, report.duplicates, groups)
+
+    def representatives(self, matter: str, tenant: str, scopes: set[str]) -> list[tuple[str, str]]:
+        """The distinct pieces to judge — one representative per near-duplicate cluster,
+        with its text (a representative's verdict stands for its whole cluster).
+        Scope-checked; deterministic (the smallest piece_id per key)."""
+        with self._sf() as session:
+            scope = session.scalar(
+                select(MatterScope.scope).where(
+                    MatterScope.matter == matter, MatterScope.tenant == tenant
+                )
+            )
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)
+            rows = session.execute(
+                select(Piece.id, Piece.text_key, Piece.full_text).where(
+                    Piece.matter == matter, Piece.tenant == tenant
+                )
+            ).all()
+        text = {pid: full for pid, _key, full in rows}
+        groups: dict[str, list[str]] = {}
+        for pid, key, _full in rows:
+            groups.setdefault(key, []).append(pid)
+        reps = sorted(min(pids) for pids in groups.values())
+        return [(rid, text[rid]) for rid in reps]
+
+    def save_labels(self, matter: str, tenant: str, scopes: set[str],
+                    outcome: TriageOutcome, judge: str, actor: str) -> None:
+        """Persist the triage verdicts — reversible (overwrite the current label) and
+        atomic with ONE audit entry recording the act (FR-53). Scope-checked."""
+        now = datetime.now(UTC)
+        with self._sf() as session, session.begin():
+            scope = session.scalar(
+                select(MatterScope.scope).where(
+                    MatterScope.matter == matter, MatterScope.tenant == tenant
+                )
+            )
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)
+            for x in outcome.labels:
+                session.merge(
+                    LabelRecord(
+                        piece_id=x.piece_id, tenant=tenant, matter=matter,
+                        label=x.label.value, rationale=x.rationale, judge=judge, judged_at=now,
+                    )
+                )
+            detail = (
+                f"relevant={outcome.relevant} uncertain={outcome.uncertain} "
+                f"discard={outcome.discarded} judge={judge}"
+            )
+            self._append_audit(session, tenant, matter, actor, "judge", detail, now)
+
+    def labels(self, matter: str, tenant: str, scopes: set[str]) -> LabelSummary:
+        """The current triage labels for a matter — scope-checked. Counts plus each
+        labelled piece by its provenance path and rationale (a discard is shown, with
+        its reason — never silent)."""
+        with self._sf() as session:
+            scope = session.scalar(
+                select(MatterScope.scope).where(
+                    MatterScope.matter == matter, MatterScope.tenant == tenant
+                )
+            )
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)
+            rows = session.execute(
+                select(LabelRecord.label, LabelRecord.rationale, Piece.provenance_path)
+                .join(Piece, Piece.id == LabelRecord.piece_id)
+                .where(LabelRecord.matter == matter, LabelRecord.tenant == tenant)
+                .order_by(Piece.provenance_path)
+            ).all()
+        pieces = tuple(LabelledPiece(prov, label, rat) for label, rat, prov in rows)
+        relevant = sum(1 for p in pieces if p.label == "relevant")
+        uncertain = sum(1 for p in pieces if p.label == "uncertain")
+        discarded = sum(1 for p in pieces if p.label == "discard")
+        return LabelSummary(relevant, uncertain, discarded, len(pieces), pieces)
 
     def read_audit(self, matter: str, tenant: str, scopes: set[str]) -> AuditTrail:
         """The audit trail for a matter — scope-checked. The chain is per-tenant

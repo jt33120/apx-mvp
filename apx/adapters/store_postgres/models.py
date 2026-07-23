@@ -101,3 +101,21 @@ class AuditRecord(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
     __table_args__ = (UniqueConstraint("tenant", "seq", name="uq_audit_tenant_seq"),)
+
+
+class LabelRecord(Base):
+    """A piece's CURRENT triage label (FR-…, the judgment cascade). Reversible
+    labelling, never deletion: one row per piece, overwritten on a re-judge; the
+    history of the act lives on the append-only audit trail, not here. No cascade FK
+    (AD-7). The judge that produced it is recorded for transparency (FR-33).
+    """
+
+    __tablename__ = "piece_label"
+
+    piece_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String, nullable=False)  # relevant | uncertain | discard
+    rationale: Mapped[str] = mapped_column(Text, nullable=False)  # why — never empty
+    judge: Mapped[str] = mapped_column(String, nullable=False)  # which judge decided (transparency)
+    judged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

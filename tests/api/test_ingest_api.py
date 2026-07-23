@@ -148,6 +148,38 @@ def test_triage_deduplicates_over_http(tmp_path: Path, monkeypatch) -> None:
         assert denied.status_code == 403
 
 
+def test_judge_and_labels_over_http(tmp_path: Path, monkeypatch) -> None:
+    url = f"sqlite:///{tmp_path / 'apx.db'}"
+    Base.metadata.create_all(create_engine(url))
+    monkeypatch.setenv("DATABASE_URL", url)
+    matter_dir = tmp_path / "matter"
+    matter_dir.mkdir()
+    (matter_dir / "bail.txt").write_text("Contrat de bail commercial signé.", encoding="utf-8")
+    (matter_dir / "facture.txt").write_text("Facture EDF, 150 euros.", encoding="utf-8")
+
+    with TestClient(app) as c:
+        c.post("/api/ingest", json={"folder": str(matter_dir), "matter": "m",
+                                    "tenant": "t", "scope": "wall-A"})
+        r = c.post("/api/matters/m/judge",
+                   json={"tenant": "t", "scopes": "wall-A", "question": "bail", "actor": "me"})
+        body = r.json()
+        assert r.status_code == 200
+        assert body["judged"] == 2 and body["relevant"] == 1 and body["uncertain"] == 1
+        assert body["discarded"] == 0 and body["judge"] == "criteria"  # transparent
+
+        labels = c.get("/api/matters/m/labels", params={"tenant": "t", "scopes": "wall-A"}).json()
+        assert labels["relevant"] == 1
+        provs = {p["provenance"]: p["label"] for p in labels["pieces"]}
+        assert provs["bail.txt"] == "relevant" and provs["facture.txt"] == "uncertain"
+
+        # scope-checked like every read and write
+        blocked = c.post("/api/matters/m/judge",
+                         json={"tenant": "t", "scopes": "wall-Z", "question": "x"})
+        assert blocked.status_code == 403
+        assert c.get("/api/matters/m/labels",
+                     params={"tenant": "t", "scopes": "wall-Z"}).status_code == 403
+
+
 def test_audit_trail_over_http(tmp_path: Path, monkeypatch) -> None:
     url = f"sqlite:///{tmp_path / 'apx.db'}"
     Base.metadata.create_all(create_engine(url))

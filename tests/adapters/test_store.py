@@ -12,9 +12,11 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from apx.adapters.extraction.files import FileExtractor
+from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.store_postgres.models import Base
 from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
 from apx.core.app.ingest import ingest_folder
+from apx.core.app.triage import triage_pieces
 
 
 @pytest.fixture
@@ -95,3 +97,40 @@ def test_deduplicate_is_scope_checked(tmp_path: Path, store: SqlStore) -> None:
     store.save(_ingest(tmp_path, "m-b"), scope="wall-B")
     with pytest.raises(ScopeDenied):
         store.deduplicate("m-b", "t", {"wall-A"})  # the wall pre-filters triage too
+
+
+def test_judge_persists_reversible_labels_and_audits(tmp_path: Path, store: SqlStore) -> None:
+    (tmp_path / "bail.txt").write_text("Contrat de bail commercial signé.", encoding="utf-8")
+    (tmp_path / "facture.txt").write_text("Facture EDF, 150 euros.", encoding="utf-8")
+    store.save(_ingest(tmp_path, "m"), scope="wall-1")
+
+    reps = store.representatives("m", "t", {"wall-1"})
+    assert len(reps) == 2  # two distinct pieces to judge
+    store.save_labels("m", "t", {"wall-1"}, triage_pieces(reps, "bail", CriteriaJudge()),
+                      "criteria", actor="me")
+
+    summ = store.labels("m", "t", {"wall-1"})
+    assert summ.judged == 2 and summ.relevant == 1 and summ.uncertain == 1 and summ.discarded == 0
+    by = {p.provenance: p.label for p in summ.pieces}
+    assert by["bail.txt"] == "relevant" and by["facture.txt"] == "uncertain"
+
+    # reversible: re-judge with a criterion that matches the other piece — the label is overwritten
+    reps2 = store.representatives("m", "t", {"wall-1"})
+    store.save_labels("m", "t", {"wall-1"}, triage_pieces(reps2, "facture", CriteriaJudge()),
+                      "criteria", actor="me")
+    by2 = {p.provenance: p.label for p in store.labels("m", "t", {"wall-1"}).pieces}
+    assert by2["facture.txt"] == "relevant" and by2["bail.txt"] == "uncertain"
+
+    # the act is on the audit trail (two judgments + the ingestion), and it verifies
+    trail = store.read_audit("m", "t", {"wall-1"})
+    actions = [e.action for e in trail.entries]
+    assert actions.count("judge") == 2 and "ingest" in actions and trail.verified
+
+
+def test_labels_are_scope_checked(tmp_path: Path, store: SqlStore) -> None:
+    (tmp_path / "a.txt").write_text("pièce", encoding="utf-8")
+    store.save(_ingest(tmp_path, "m-b"), scope="wall-B")
+    with pytest.raises(ScopeDenied):
+        store.representatives("m-b", "t", {"wall-A"})
+    with pytest.raises(ScopeDenied):
+        store.labels("m-b", "t", {"wall-A"})

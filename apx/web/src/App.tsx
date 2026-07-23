@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ingestUpload, listMatters, readAudit, readTriage,
-  type AuditTrail, type IngestResponse, type MatterSummary, type Triage,
+  ingestUpload, judgeMatter, listMatters, readAudit, readLabels, readTriage,
+  type AuditTrail, type IngestResponse, type Labels, type MatterSummary, type Triage,
 } from "./api";
 
 const TENANT = "cabinet";
@@ -95,28 +95,51 @@ export default function App() {
   );
 }
 
-/** A matter, expandable to its deterministic triage and its audit journal
- *  (fetched on demand, both scope-checked server-side). */
+/** A matter, expandable to its deterministic triage, the judgment-by-criteria, and
+ *  its audit journal (all fetched on demand, all scope-checked server-side). */
 function MatterRow({ m, scope }: { m: MatterSummary; scope: string }) {
   const [open, setOpen] = useState(false);
   const [triage, setTriage] = useState<Triage | null>(null);
+  const [labels, setLabels] = useState<Labels | null>(null);
   const [trail, setTrail] = useState<AuditTrail | null>(null);
+  const [question, setQuestion] = useState("");
+  const [judging, setJudging] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  async function load() {
+    const [tg, lb, au] = await Promise.all([
+      readTriage(m.matter, TENANT, scope),
+      readLabels(m.matter, TENANT, scope),
+      readAudit(m.matter, TENANT, scope),
+    ]);
+    setTriage(tg);
+    setLabels(lb);
+    setTrail(au);
+  }
 
   async function toggle() {
     const next = !open;
     setOpen(next);
     if (next && !triage) {
       try {
-        const [tg, au] = await Promise.all([
-          readTriage(m.matter, TENANT, scope),
-          readAudit(m.matter, TENANT, scope),
-        ]);
-        setTriage(tg);
-        setTrail(au);
+        await load();
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
       }
+    }
+  }
+
+  async function judge(e: React.FormEvent) {
+    e.preventDefault();
+    setJudging(true);
+    setErr(null);
+    try {
+      await judgeMatter(m.matter, TENANT, scope, question, "moi");
+      await load(); // labels changed, and a "judge" entry was appended to the journal
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setJudging(false);
     }
   }
 
@@ -136,11 +159,65 @@ function MatterRow({ m, scope }: { m: MatterSummary; scope: string }) {
           <td colSpan={2} style={{ padding: ".25rem 0 1rem 1.4rem" }}>
             {err && <p role="alert" style={{ color: "#a3161c", margin: 0 }}>{err}</p>}
             {triage && <TriageView t={triage} />}
+            <Judging question={question} setQuestion={setQuestion} judging={judging}
+              onJudge={judge} labels={labels} />
             {trail && <Journal trail={trail} />}
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/** Judge the distinct band by declared criteria (recall-first: a match is relevant,
+ *  the rest stays "à juger" — never auto-discarded). Every label shows its reason. */
+function Judging({ question, setQuestion, judging, onJudge, labels }: {
+  question: string; setQuestion: (s: string) => void; judging: boolean;
+  onJudge: (e: React.FormEvent) => void; labels: Labels | null;
+}) {
+  return (
+    <div style={{ marginBottom: ".9rem" }}>
+      <form onSubmit={onJudge} style={{ display: "flex", gap: ".4rem", marginBottom: ".5rem", flexWrap: "wrap" }}>
+        <input value={question} onChange={(e) => setQuestion(e.target.value)}
+          placeholder="critères de tri (ex : bail, résiliation)" aria-label="Critères de tri"
+          style={{ padding: ".35rem .5rem", flex: "1 1 16rem" }} />
+        <button type="submit" disabled={judging} style={{ padding: ".35rem .8rem" }}>
+          {judging ? "Jugement…" : "Juger"}
+        </button>
+      </form>
+      {labels && labels.judged > 0 && (
+        <>
+          <p style={{ margin: "0 0 .35rem", fontSize: ".9rem" }}>
+            <strong style={{ color: "#2f6f4f" }}>{labels.relevant}</strong> pertinentes ·{" "}
+            <strong style={{ color: "#9a5a12" }}>{labels.uncertain}</strong> à juger ·{" "}
+            <strong style={{ color: "#7a7364" }}>{labels.discarded}</strong> écartées
+          </p>
+          <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: ".85rem", color: "#444" }}>
+            {labels.pieces.map((p) => (
+              <li key={p.provenance} style={{ marginBottom: ".15rem" }}>
+                <span style={{ fontFamily: "monospace" }}>{p.provenance}</span>{" "}
+                <LabelChip label={p.label} />{" "}
+                <span style={{ color: "#777" }}>{p.rationale}</span>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </div>
+  );
+}
+
+function LabelChip({ label }: { label: string }) {
+  const map: Record<string, [string, string, string]> = {
+    relevant: ["#2f6f4f", "#e8f1eb", "pertinente"],
+    uncertain: ["#9a5a12", "#f6ecdd", "à juger"],
+    discard: ["#7a7364", "#efece5", "écartée"],
+  };
+  const [fg, bg, txt] = map[label] ?? ["#555", "#eee", label];
+  return (
+    <span style={{ color: fg, background: bg, borderRadius: 999, padding: ".05rem .45rem", fontSize: ".76rem" }}>
+      {txt}
+    </span>
   );
 }
 

@@ -22,9 +22,12 @@ from fastapi import FastAPI, Form, HTTPException, UploadFile
 from pydantic import BaseModel
 
 from apx.adapters.extraction.files import FileExtractor
+from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
 from apx.core.app.ingest import IngestionResult, ingest_folder
+from apx.core.app.triage import triage_pieces
+from apx.core.ports.judge import Judge
 
 app = FastAPI(title="APX", version="0.0.0")
 
@@ -98,6 +101,35 @@ class TriageOut(BaseModel):
     groups: list[DuplicateGroupOut]
 
 
+class JudgeRequest(BaseModel):
+    tenant: str
+    scopes: str              # comma-separated scopes the caller holds
+    question: str            # the triage criteria (comma-separated terms for the criteria judge)
+    actor: str = "unknown"
+
+
+class JudgeResultOut(BaseModel):
+    judged: int              # distinct pieces judged (one per near-duplicate cluster)
+    relevant: int
+    uncertain: int
+    discarded: int
+    judge: str               # which judge decided (transparency, FR-33)
+
+
+class LabelledPieceOut(BaseModel):
+    provenance: str
+    label: str
+    rationale: str
+
+
+class LabelsOut(BaseModel):
+    relevant: int
+    uncertain: int
+    discarded: int
+    judged: int
+    pieces: list[LabelledPieceOut]
+
+
 class MatterOut(BaseModel):
     matter: str
     scope: str
@@ -123,6 +155,14 @@ def _persist(result: IngestionResult, scope: str, actor: str) -> bool:
 
 def _parse_scopes(scopes: str) -> set[str]:
     return {s.strip() for s in scopes.split(",") if s.strip()}
+
+
+def _judge() -> Judge:
+    """The judge composed at the edge. The deterministic criteria filter is the
+    default and needs no configuration; a provider-agnostic LLM judge (AD-27) slots
+    in here for the uncertain band once one is configured — the core imports neither
+    an LLM SDK nor this adapter."""
+    return CriteriaJudge()
 
 
 @app.get("/api/health")
@@ -242,6 +282,49 @@ def read_triage(matter: str, tenant: str, scopes: str) -> TriageOut:
         groups=[
             DuplicateGroupOut(representative=g.representative, members=list(g.members), size=g.size)
             for g in summary.groups
+        ],
+    )
+
+
+@app.post("/api/matters/{matter}/judge", response_model=JudgeResultOut)
+def judge_matter(matter: str, req: JudgeRequest) -> JudgeResultOut:
+    """Run the triage judge over the matter's distinct band, persist the reversible
+    labels, and record the act on the audit trail (403 outside scope). The response
+    names the judge that decided (transparency); a discard is never silent."""
+    store = _store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    scopes = _parse_scopes(req.scopes)
+    judge = _judge()
+    try:
+        reps = store.representatives(matter, req.tenant, scopes)
+        outcome = triage_pieces(reps, req.question, judge)
+        store.save_labels(matter, req.tenant, scopes, outcome, judge.name, req.actor)
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    return JudgeResultOut(
+        judged=outcome.judged, relevant=outcome.relevant,
+        uncertain=outcome.uncertain, discarded=outcome.discarded, judge=judge.name,
+    )
+
+
+@app.get("/api/matters/{matter}/labels", response_model=LabelsOut)
+def read_labels(matter: str, tenant: str, scopes: str) -> LabelsOut:
+    """The current triage labels for a matter — counts plus each piece with its
+    rationale (403 outside scope)."""
+    store = _store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    try:
+        summary = store.labels(matter, tenant, _parse_scopes(scopes))
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    return LabelsOut(
+        relevant=summary.relevant, uncertain=summary.uncertain,
+        discarded=summary.discarded, judged=summary.judged,
+        pieces=[
+            LabelledPieceOut(provenance=p.provenance, label=p.label, rationale=p.rationale)
+            for p in summary.pieces
         ],
     )
 
