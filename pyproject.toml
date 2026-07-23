@@ -27,6 +27,13 @@ dependencies = [
     "procrastinate>=3.9,<3.10",
     "pypdf==6.14.2",
     "python-multipart==0.0.20",
+    # OCR adapter (the ocr_tesseract story): Pillow + pytesseract drive the Tesseract
+    # binary; pdf2image rasterises scanned PDFs via poppler. The binaries (tesseract,
+    # tesseract-ocr-fra, poppler-utils) ship in the Docker image, not here. Imported
+    # lazily in the adapter, so the app runs even where OCR is not installed.
+    "pillow>=11,<12",
+    "pytesseract>=0.3.13,<0.4",
+    "pdf2image>=1.17,<2",
 ]
 
 [project.optional-dependencies]

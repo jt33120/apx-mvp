@@ -13,7 +13,13 @@ RUN npm run build
 FROM python:3.13-slim
 WORKDIR /app
 
-# psycopg[binary] bundles libpq, so no system libpq is needed.
+# OCR system dependencies: the Tesseract engine + French language data, and poppler
+# (pdf2image rasterises scanned PDFs). Everything else is psycopg[binary]'s bundled
+# libpq, so no system libpq is needed.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        tesseract-ocr tesseract-ocr-fra poppler-utils \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN pip install --no-cache-dir uv
 
 # Install pinned dependencies (uv resolves from pyproject); then the package.
@@ -24,6 +30,8 @@ RUN uv pip install --system --no-cache .
 # The built SPA, served by the app at APX_WEB_DIST (its default path).
 COPY --from=web /web/dist ./apx/web/dist
 ENV APX_WEB_DIST=/app/apx/web/dist
+# OCR is available in this image (Tesseract installed above), so enable the fallback.
+ENV APX_OCR=1
 
 COPY alembic.ini ./
 COPY docker/entrypoint.sh /entrypoint.sh

@@ -29,11 +29,13 @@ from apx.adapters.expansion.mail import EmlExpander
 from apx.adapters.extraction.files import FileExtractor
 from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
+from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.triage import triage_pieces
 from apx.core.domain.auth import sign_token, verify_token
+from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
 
 app = FastAPI(title="APX", version="0.1.0")
@@ -282,6 +284,16 @@ def _persist(result: IngestionResult, scope: str, actor: str) -> bool:
     return True
 
 
+def _extractor() -> Extractor:
+    """The text extractor composed at the edge. With APX_OCR enabled (the Docker image
+    sets it, where Tesseract is installed), scans and images fall back to OCR; the fast
+    born-digital path is unchanged and never pays the OCR cost."""
+    base = FileExtractor()
+    if os.environ.get("APX_OCR", "").strip().lower() in ("1", "true", "yes"):
+        return WithOcr(base, TesseractExtractor())
+    return base
+
+
 def _expander() -> CompositeExpander:
     """Container expansion composed at the edge: a .zip is unpacked and its members
     ingested individually; an email adds its attachments (its body is a piece too)."""
@@ -458,7 +470,7 @@ def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> I
         raise HTTPException(status_code=400, detail=f"not a folder: {req.folder}")
     result = ingest_folder(
         folder, matter=req.matter, tenant=ident.tenant,
-        extractor=FileExtractor(), custodian=req.custodian, expander=_expander(),
+        extractor=_extractor(), custodian=req.custodian, expander=_expander(),
     )
     persisted = _persist(result, wall, ident.actor)
     return IngestResponse(
@@ -497,7 +509,7 @@ async def ingest_upload(
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(await f.read())
         result = ingest_folder(root, matter=matter, tenant=ident.tenant,
-                               extractor=FileExtractor(), expander=_expander())
+                               extractor=_extractor(), expander=_expander())
     persisted = _persist(result, wall, ident.actor)
     return IngestResponse(
         matter=matter,
