@@ -23,6 +23,7 @@ from pydantic import BaseModel
 
 from apx.adapters.extraction.files import FileExtractor
 from apx.adapters.judge.criteria import CriteriaJudge
+from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
 from apx.core.app.ingest import IngestionResult, ingest_folder
@@ -225,12 +226,29 @@ def _held_wall(req_scope: str, ident: Identity) -> str:
     return wall
 
 
+def _llm_judge() -> Judge | None:
+    """The LLM tier, configured from the environment (provider-agnostic). None when no
+    model is configured — then the cascade is the deterministic filter alone and the
+    system stays fully offline. LLM_BASE_URL / LLM_MODEL default to Mistral (EU-hosted);
+    LLM_API_KEY (or MISTRAL_API_KEY) is the credential, read from the environment only
+    and never stored in the repo. Point LLM_BASE_URL at an on-prem model to stay offline."""
+    key = os.environ.get("LLM_API_KEY") or os.environ.get("MISTRAL_API_KEY")
+    if not key:
+        return None
+    return LLMJudge(
+        base_url=os.environ.get("LLM_BASE_URL", "https://api.mistral.ai/v1/chat/completions"),
+        api_key=key,
+        model=os.environ.get("LLM_MODEL", "mistral-small-latest"),
+    )
+
+
 def _judge() -> Judge:
-    """The judge composed at the edge. The deterministic criteria filter is the
-    default and needs no configuration; a provider-agnostic LLM judge (AD-27) slots
-    in here for the uncertain band once one is configured — the core imports neither
-    an LLM SDK nor this adapter."""
-    return CriteriaJudge()
+    """The judgment cascade, composed at the edge: the deterministic criteria filter
+    first, and — when a model is configured — the LLM only on the uncertain band it
+    leaves. The core imports neither an LLM SDK nor these adapters (AD-27)."""
+    criteria = CriteriaJudge()
+    llm = _llm_judge()
+    return CascadeJudge(criteria, llm) if llm is not None else criteria
 
 
 @app.get("/api/health")
