@@ -37,7 +37,7 @@ development_status:
   1-2-the-offline-fitness-function-running-in-ci-from-week-one: done
   1-3-the-frozen-payload-schema: done
   1-4-tenant-isolation-enforced-at-the-boundary: done
-  1-5-authentication-and-sessions-the-application-owns: backlog
+  1-5-authentication-and-sessions-the-application-owns: in-progress
   1-6-grant-time-authorisation-and-scope-administration: backlog
   1-7-encryption-at-rest-and-in-transit-with-a-fail-closed-start: backlog
   1-8-secret-and-key-management: backlog

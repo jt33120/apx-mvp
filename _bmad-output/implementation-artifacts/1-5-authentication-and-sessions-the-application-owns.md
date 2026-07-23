@@ -1,0 +1,86 @@
+---
+baseline_commit: 13f1497
+---
+
+# Story 1.5: Authentication and sessions the application owns
+
+Status: ready-for-dev
+
+## Story
+
+As a lawyer signing in to a tool holding privileged material,
+I want authentication and sessions handled by the application itself, not by a hosting provider,
+so that the same identity model works air-gapped and hosted, and no third party stands between me and the wall.
+
+**Scope in one line:** migrate the owned auth to AD-15's adopted stack — **Argon2id via `pwdlib[argon2]`** for passwords and **opaque server-side sessions in PostgreSQL** (replacing the ad-hoc scrypt + stateless-HMAC tokens) — with lifetimes and invalidation (password change, scope revocation, sign-out), lockout recorded in the *audit record*, `Principal` resolution behind **one** interface, and the **no-reversible-credential-storage** structural check. MFA is *configuration-as-data per tenant* (`[ASSUMPTION]` carried, minimal). **Not** the grant-administration UX (1.6), **not** encryption-at-rest (1.7).
+
+> AD-15 is `[ADOPTED]` and specific. The ad-hoc build chose scrypt + stateless signed tokens — reasonable, but not the adopted stack. This story brings the code to AD-15 exactly, because the security core is where "reasonable but divergent" is most expensive later.
+
+## Acceptance Criteria
+
+> **Given** the authentication surface, **When** a credential is stored, **Then** it uses **Argon2id via `pwdlib[argon2]` 0.3.0** with a per-credential salt, and a **static check asserts no reversible credential storage exists anywhere** (FR-48, FR-56).
+> **And** sessions are **opaque, server-side (PostgreSQL)**, with a configured **absolute and idle lifetime**, invalidated on **password change**, on **scope revocation**, and on **explicit sign-out**, with identifiers that are **not guessable and not reusable** (FR-48; no JWT for user sessions).
+> **And** a configured **lockout / rate limit** applies to repeated authentication failure, and **every failure and lockout is recorded in the *audit record*** (FR-48).
+> **And** **multi-factor authentication exists and is *configuration-as-data* per tenant** (FR-48, TOTP via `pyotp`; `[ASSUMPTION]` carried — minimal).
+> **And** *(failure path)* a **revoked scope invalidates the live session** that held it, at the **next request**, not at the next login (ties FR-14, FR-49).
+
+1. **AC1 — Argon2id passwords.** `hash_password`/`verify_password` use `pwdlib[argon2]` 0.3.0 (Argon2id, per-credential salt, self-describing PHC string). No password plaintext is ever stored. Legacy scrypt hashes verify during a transition **and are re-hashed to Argon2id on the next successful login** (upgrade-on-verify), OR the sole bootstrap admin is re-created with an Argon2id hash — pick the migration path and document it. The domain module still imports only its dependency (no hosted SDK).
+2. **AC2 — Opaque server-side sessions.** A `session` table in PostgreSQL holds: an **opaque, unguessable** id (`secrets.token_urlsafe`, ≥128 bits), `user_id`, `tenant`, `created_at`, `last_seen_at`, and the configured **absolute expiry**; a session is valid iff not past its absolute expiry **and** not idle beyond the configured idle window. Sign-in creates a row and sets an opaque cookie (the id, never a signed claim blob); each request **looks up** the session (there is no stateless self-verifying token for user sessions — no JWT). Sign-out **deletes** the row (the id is not reusable). Lifetimes are configuration-as-data.
+3. **AC3 — Invalidation.** A **password change** deletes all of that user's sessions; an **explicit sign-out** deletes the current one; a session past absolute/idle expiry is treated as absent and its row is reaped. Each is covered by a test.
+4. **AC4 — Scope revocation reaches live sessions (AC/FR-14, FR-49).** Because scopes are resolved **live** at each request from the grant store (AD-13), a session re-resolves the caller's current scopes every request — a revoked scope is gone on the **next request**, not the next login. A test grants A a scope, opens a session, revokes it, and asserts the very next authorised read fails closed.
+5. **AC5 — Lockout recorded in the audit.** A configured threshold of consecutive failures for an identity/IP triggers a lockout window; **every failed attempt and every lockout is written to the *audit record*** under a system actor (the existing per-tenant audit chain). The in-memory rate-limiter added during hardening is folded into this (or replaced) so failures are durably audited, not only throttled in memory.
+6. **AC6 — Principal behind one interface; no reversible storage (structural).** `Principal` resolution (tenant + held scopes + admin flag from a session) sits behind **one** interface; **no route imports the session table directly**. A **structural check** asserts **no reversible credential storage** exists — no plaintext password column, no reversible cipher/encoding applied to a credential — with a failure-path fixture. A second (cheap, forward-looking) structural check asserts every `jwt.decode` passes a **literal `algorithms=` list** and that `PyJWK`/`PyJWKClient`/`jwks` appear in no runtime module (AD-15) — it passes vacuously today (no user-session JWT) and is ready when internal service tokens land.
+7. **AC7 — MFA is configuration-as-data (`[ASSUMPTION]`, minimal).** A per-tenant config flag enables TOTP (`pyotp` 2.10.0) as a second factor; when enabled, a correct TOTP is required after the password. Enrollment/recovery UX is minimal and the assumption is carried forward (WebAuthn via `py_webauthn` is additive and **deferred**). Keep this lean — do not build a full MFA management surface here.
+8. **AC8 — Green and honest.** New deps pinned exactly (AD-30) and load offline; migration up/down; all checks (incl. the two new) registered and green; the SPA login still works end-to-end; no grant-admin UX (1.6) or encryption (1.7) built here.
+
+## Tasks / Subtasks
+
+- [ ] **Task 1 — Dependencies** (AC: #1, #7) — add to `pyproject` **exact** pins per AD-15/Stack: `pwdlib[argon2]==0.3.0`, `pyotp==2.10.0`. (`PyJWT==2.13.0` and `py_webauthn==3.0.0` are AD-15's stack but are **not** needed by user sessions here — add PyJWT only if the jwt.decode check needs an import target; otherwise defer.) Confirm they resolve and load with the offline env set. Record any environment substitution per the 1.1 deviation convention.
+- [ ] **Task 2 — Argon2id** (AC: #1) — rewrite `apx/core/domain/auth.py`'s `hash_password`/`verify_password` over `pwdlib` (Argon2id). Self-describing PHC output; constant-time verify; per-credential salt (pwdlib default). Decide + implement the legacy path (upgrade-on-verify for scrypt, or admin re-bootstrap) and document it. Keep the module import-clean (pwdlib only).
+- [ ] **Task 3 — The session store** (AC: #2, #3) — `apx/adapters/store_postgres`: a `session` model (opaque id PK, user_id, tenant, created_at, last_seen_at, absolute_expiry; no cascade FK — AD-7) + a `SessionStore`/store methods `create_session`, `resolve_session` (validate absolute+idle, touch `last_seen_at`), `delete_session`, `delete_user_sessions`. Opaque id via `secrets.token_urlsafe(32)`. Migration `0011`. Lifetimes from config-as-data (env/config, with sane defaults).
+- [ ] **Task 4 — Principal behind one interface** (AC: #2, #4, #6) — a single `Principal` resolution entry point (tenant + live scopes + admin) used by the API; **no route touches the session table directly**. Rewire `apx/api/app.py` login to create a server-side session and set an **opaque** cookie (Secure, HttpOnly, SameSite — the hardening cookie flags), `me`/authenticated routes to resolve via the session store and **re-resolve scopes live** each request, `logout` to delete the session, and `change_password` to delete all the user's sessions. Remove the stateless `sign_token`/`verify_token` user-session path (keep those functions only if reused for internal service tokens; else delete).
+- [ ] **Task 5 — Lockout in the audit** (AC: #5) — a configured consecutive-failure threshold + window; every failed login and every lockout written to the *audit record* under a system actor (per-tenant chain, AD-22/AD-44 shape). Fold in / replace the in-memory `_LoginRateLimiter`.
+- [ ] **Task 6 — MFA config-as-data (minimal)** (AC: #7) — a per-tenant config flag; when on, require a correct `pyotp` TOTP after the password. Minimal enrollment (a stored TOTP secret per user, set at create/first-login); no recovery-code UX (assumption carried). Keep lean.
+- [ ] **Task 7 — Structural checks** (AC: #6) — `apx/checks`: (a) **no reversible credential storage** — assert no plaintext-password column and no reversible cipher/encoding of a credential field (AST/name-based over models + store), fail closed, with a failure fixture; (b) **jwt.decode algorithm list** — every `jwt.decode` call passes a literal `algorithms=[...]`, and `PyJWK`/`PyJWKClient`/`jwks` appear in no runtime module (passes vacuously today), with a failure fixture. Register both in the harness.
+- [ ] **Task 8 — Tests + green** (AC: all) — domain (Argon2id round-trip, legacy verify/upgrade, TOTP); adapter (session create/resolve/expire/delete, invalidation on password-change and revocation, PostgreSQL leg); API (login→session cookie, me, logout, change_password invalidates, lockout audited); checks (both fire on fixtures). Migration up/down. `ruff` + `python -m apx.checks` + `pytest` + fitness green.
+
+## Dev Notes
+
+- **AD-15 is the contract, verbatim.** Opaque server-side sessions in PostgreSQL; Argon2id via `pwdlib[argon2]` 0.3.0; PyJWT 2.13.0 **internal service tokens only, never user sessions**; `pyotp` 2.10.0 TOTP; `py_webauthn` 3.0.0 additive (deferred); **no reversible credential storage** (structural); `Principal` behind one interface, no route imports the session table; and — when any `jwt.decode` exists — an explicit literal `algorithms=` list (structural), with `PyJWK`/`PyJWKClient`/`jwks` absent from runtime. [Source: ARCHITECTURE-SPINE.md#AD-15]
+- **What exists today and must change** (read these before editing): `apx/core/domain/auth.py` hashes with **scrypt** and issues **stateless HMAC-SHA256 tokens** (`sign_token`/`verify_token`) — both diverge from AD-15. `apx/api/app.py` sets a cookie from `sign_token` and resolves the caller in `current_identity` from `verify_token`; there is an in-memory `_LoginRateLimiter` (hardening). `apx/adapters/store_postgres/store.py` has `authenticate`, `create_user`, `set_password`, `verify_user_password`, `scopes_for`, `identity`, and the User/UserScope models. Story 1.5 swaps scrypt→Argon2id and stateless-token→server-side-session **without** changing the RBAC/tenant model (1.4) or the audit chain (keep them intact). [Source: apx/core/domain/auth.py; apx/api/app.py; apx/adapters/store_postgres/store.py]
+- **The migration path for existing credentials.** No real *corpus*/users exist (CLAUDE.md), but the deployed demo admin has a scrypt hash. Prefer **upgrade-on-verify** (verify accepts a legacy scrypt hash once, then re-hashes to Argon2id) so nothing locks out; or re-bootstrap the admin with Argon2id via `ensure-admin`. Document the choice. Do not keep scrypt as a *new-credential* path — Argon2id is the only forward hasher.
+- **Sessions are looked up, not self-verified.** The whole point of "opaque server-side" is that the cookie carries an unguessable **id**, and authority comes from the row — so revocation, sign-out and password-change are immediate (delete the row) rather than "wait for the token to expire". This is why AD-15 rejects JWT for user sessions. Re-resolve **scopes** live each request (AD-13) so 1.4's revocation-reaches-live-sessions holds. [Source: ARCHITECTURE-SPINE.md#AD-13, #AD-15]
+- **No route imports the session table.** Put session lifecycle behind the store's `SessionStore` methods and Principal resolution behind one function; the API calls that, never `select(Session)`. A future check (or the AD-14 unit) can enforce it; here, keep the discipline and note it.
+- **Structural-check pattern (AD-33).** Reuse the 1.3/1.4 pattern: `CheckResult`, registered in `CHECKS`, explicit `roots`, fail closed on unparseable (reuse `_load_trees`), fixtures AST-parsed only and `ruff`-clean. The no-reversible-storage check is the load-bearing one (FR-56); the jwt.decode check is cheap insurance that pays off when service tokens land.
+- **Dependencies load offline.** `pwdlib[argon2]` pulls `argon2-cffi` (a C ext) — confirm it builds/loads in the slim runtime image and under the offline env; record any substitution per the 1.1 convention. `pyotp` is pure-Python. Pin exactly (AD-30).
+- **Testing standards.** Domain pure/fast (Argon2id is slow by design — keep hashing tests few, or use low params for tests); adapter session tests on SQLite everywhere + a PostgreSQL leg (skip locally); API tests via the TestClient. Tests unreachable from runtime (AD-16). [Source: tests/adapters/test_chunk_writer.py]
+
+### Project Structure Notes
+
+- New: `apx/adapters/store_postgres/migrations/versions/0011_session.py`; a `Session` model + `SessionStore` methods in `store_postgres`; `apx/checks/credential_storage.py` (the two checks); tests + fixtures.
+- Modified: `apx/core/domain/auth.py` (Argon2id; session helpers if any move here), `apx/api/app.py` (server-side session wiring), `apx/checks/__main__.py`, `pyproject.toml`, `README.md`.
+- Naming per the tree; `Session` is a glossary-neutral technical term (not a domain entity) — fine.
+
+### References
+
+- [Source: PRD FR-48] — owned auth, Argon2id, server-side sessions, lockout, MFA config-as-data.
+- [Source: ARCHITECTURE-SPINE.md#AD-15] — the adopted auth stack + the no-reversible-storage and algorithm-list structural properties.
+- [Source: ARCHITECTURE-SPINE.md#AD-13] — scopes resolved live at query time (why revocation reaches live sessions).
+- [Source: PRD FR-14, FR-49] — revocation reaches open sessions within a bounded interval / at the next request.
+- [Source: implementation-artifacts/1-3, 1-4] — the structural-check + failure-fixture + fail-closed pattern; the tenant/audit model to preserve.
+
+## Dev Agent Record
+
+### Agent Model Used
+
+### Debug Log References
+
+### Completion Notes List
+
+### File List
+
+## Open Questions for the human
+
+1. **Credential migration path:** upgrade-on-verify (accept a legacy scrypt hash once, re-hash to Argon2id) vs. re-bootstrap the demo admin with Argon2id. Recommend upgrade-on-verify (nothing locks out). Confirm.
+2. **MFA depth:** 1.5 delivers TOTP as per-tenant config-as-data with *minimal* enrollment (assumption carried). Confirm that's the right line, vs. a fuller MFA surface (enrollment QR, recovery codes) as its own later story.
+3. **PyJWT now or later:** user sessions need no JWT (opaque server-side). Add `PyJWT==2.13.0` now only to give the algorithm-list check a real import target, or defer it until internal service tokens are introduced? Recommend defer; keep the check vacuous-but-ready.

@@ -34,6 +34,8 @@ dependencies = [
     "pillow>=11,<12",
     "pytesseract>=0.3.13,<0.4",
     "pdf2image>=1.17,<2",
+    "pwdlib[argon2]==0.3.0",
+    "pyotp==2.10.0",
 ]
 
 [project.optional-dependencies]
