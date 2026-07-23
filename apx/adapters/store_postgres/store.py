@@ -30,6 +30,7 @@ from apx.adapters.store_postgres.models import (
 from apx.core.app.ingest import IngestionResult
 from apx.core.domain.dedup import cluster
 from apx.core.domain.inventory import Inventory
+from apx.core.domain.search import snippet
 from apx.core.domain.triage import TriageOutcome
 
 
@@ -95,6 +96,25 @@ class LabelSummary:
     discarded: int
     judged: int
     pieces: tuple[LabelledPiece, ...]
+
+
+@dataclass(frozen=True)
+class SearchHit:
+    matter: str
+    provenance: str
+    snippet: str
+
+
+@dataclass(frozen=True)
+class SearchResults:
+    query: str
+    total: int                       # true count of matching pieces, even when hits is capped
+    hits: tuple[SearchHit, ...]
+
+
+def _like_escape(s: str) -> str:
+    """Escape LIKE wildcards so a query is matched literally (escape char: backslash)."""
+    return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def _failure_id(matter: str, submitted_path: str) -> str:
@@ -340,6 +360,38 @@ class SqlStore:
         uncertain = sum(1 for p in pieces if p.label == "uncertain")
         discarded = sum(1 for p in pieces if p.label == "discard")
         return LabelSummary(relevant, uncertain, discarded, len(pieces), pieces)
+
+    def search(
+        self, tenant: str, scopes: set[str], query: str, *, limit: int = 100
+    ) -> SearchResults:
+        """Deterministic exhaustive search over the caller's scope (FR-13): every piece
+        whose stored text contains ``query`` (case-insensitive substring), constrained
+        to matters the held scopes cover — the Chinese wall pre-filters search too, so
+        it cannot leak across the wall. ``total`` is the true match count even when the
+        returned ``hits`` are capped at ``limit`` (no silent truncation)."""
+        q = query.strip()
+        if not scopes or not q:
+            return SearchResults(q, 0, ())  # fail closed: no scope or empty query -> nothing
+        pattern = f"%{_like_escape(q.lower())}%"
+        join_on = (MatterScope.matter == Piece.matter) & (MatterScope.tenant == Piece.tenant)
+        conds = [
+            Piece.tenant == tenant,
+            MatterScope.scope.in_(scopes),
+            func.lower(Piece.full_text).like(pattern, escape="\\"),
+        ]
+        with self._sf() as session:
+            total = session.scalar(
+                select(func.count()).select_from(Piece).join(MatterScope, join_on).where(*conds)
+            ) or 0
+            rows = session.execute(
+                select(Piece.matter, Piece.provenance_path, Piece.full_text)
+                .join(MatterScope, join_on)
+                .where(*conds)
+                .order_by(Piece.matter, Piece.provenance_path)
+                .limit(limit)
+            ).all()
+        hits = tuple(SearchHit(matter, prov, snippet(full, q)) for matter, prov, full in rows)
+        return SearchResults(q, total, hits)
 
     def read_audit(self, matter: str, tenant: str, scopes: set[str]) -> AuditTrail:
         """The audit trail for a matter — scope-checked. The chain is per-tenant

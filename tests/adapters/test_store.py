@@ -134,3 +134,35 @@ def test_labels_are_scope_checked(tmp_path: Path, store: SqlStore) -> None:
         store.representatives("m-b", "t", {"wall-A"})
     with pytest.raises(ScopeDenied):
         store.labels("m-b", "t", {"wall-A"})
+
+
+def test_search_finds_pieces_by_term_case_insensitively(tmp_path: Path, store: SqlStore) -> None:
+    (tmp_path / "a.txt").write_text("Le contrat de bail commercial.", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("Facture EDF, 150 euros.", encoding="utf-8")
+    store.save(_ingest(tmp_path, "m"), scope="wall-1")
+    res = store.search("t", {"wall-1"}, "BAIL")  # case-insensitive
+    assert res.total == 1
+    assert res.hits[0].provenance == "a.txt" and "bail" in res.hits[0].snippet.lower()
+
+
+def test_search_is_scope_constrained_and_does_not_leak(tmp_path: Path, store: SqlStore) -> None:
+    da, db = tmp_path / "a", tmp_path / "b"
+    da.mkdir()
+    db.mkdir()
+    (da / "x.txt").write_text("un secret terme partage", encoding="utf-8")
+    (db / "y.txt").write_text("un autre secret terme partage", encoding="utf-8")
+    store.save(_ingest(da, "m-a"), scope="wall-A")
+    store.save(_ingest(db, "m-b"), scope="wall-B")
+
+    # Holding only wall-A: the shared term is found in m-a, never in m-b (the wall).
+    res = store.search("t", {"wall-A"}, "partage")
+    assert res.total == 1 and {h.matter for h in res.hits} == {"m-a"}
+    # Both walls -> both; no scope -> nothing (fail closed).
+    assert store.search("t", {"wall-A", "wall-B"}, "partage").total == 2
+    assert store.search("t", set(), "partage").total == 0
+
+
+def test_search_empty_query_returns_nothing(tmp_path: Path, store: SqlStore) -> None:
+    (tmp_path / "a.txt").write_text("un texte", encoding="utf-8")
+    store.save(_ingest(tmp_path, "m"), scope="wall-1")
+    assert store.search("t", {"wall-1"}, "   ").total == 0

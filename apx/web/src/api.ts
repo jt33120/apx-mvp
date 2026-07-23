@@ -13,6 +13,8 @@ export type Triage = { submitted: number; distinct: number; duplicates: number; 
 export type LabelledPiece = { provenance: string; label: string; rationale: string };
 export type Labels = { relevant: number; uncertain: number; discarded: number; judged: number; pieces: LabelledPiece[] };
 export type JudgeResult = { judged: number; relevant: number; uncertain: number; discarded: number; judge: string };
+export type SearchHit = { matter: string; provenance: string; snippet: string };
+export type SearchResults = { query: string; total: number; returned: number; hits: SearchHit[] };
 
 // The one data path: HTTP to the API (AD-14). No fixtures, no fallback.
 export async function ingestUpload(
@@ -75,6 +77,15 @@ export async function judgeMatter(
 export async function readLabels(matter: string, tenant: string, scope: string): Promise<Labels> {
   const q = new URLSearchParams({ tenant, scopes: scope });
   const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/labels?${q}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+  return res.json();
+}
+
+// Deterministic exhaustive search across the caller's scope (FR-13). The server
+// constrains it to matters the scope covers — the wall pre-filters search too.
+export async function searchCorpus(tenant: string, scope: string, q: string): Promise<SearchResults> {
+  const params = new URLSearchParams({ tenant, scopes: scope, q });
+  const res = await fetch(`/api/search?${params}`);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
   return res.json();
 }

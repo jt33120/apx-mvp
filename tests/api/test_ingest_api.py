@@ -148,6 +148,35 @@ def test_triage_deduplicates_over_http(tmp_path: Path, monkeypatch) -> None:
         assert denied.status_code == 403
 
 
+def test_search_over_http_is_scope_constrained(tmp_path: Path, monkeypatch) -> None:
+    url = f"sqlite:///{tmp_path / 'apx.db'}"
+    Base.metadata.create_all(create_engine(url))
+    monkeypatch.setenv("DATABASE_URL", url)
+    da, db = tmp_path / "a", tmp_path / "b"
+    da.mkdir()
+    db.mkdir()
+    (da / "x.txt").write_text("terme confidentiel alpha", encoding="utf-8")
+    (db / "y.txt").write_text("terme confidentiel beta", encoding="utf-8")
+
+    def _ingest(c, folder, matter, scope):
+        c.post("/api/ingest",
+               json={"folder": str(folder), "matter": matter, "tenant": "t", "scope": scope})
+
+    def _search(c, scopes):
+        return c.get("/api/search",
+                     params={"tenant": "t", "scopes": scopes, "q": "confidentiel"}).json()
+
+    with TestClient(app) as c:
+        _ingest(c, da, "m-a", "wall-A")
+        _ingest(c, db, "m-b", "wall-B")
+
+        a = _search(c, "wall-A")
+        assert a["total"] == 1 and a["returned"] == 1 and a["hits"][0]["matter"] == "m-a"
+        # wall-A must NOT surface m-b's piece (no leak across the wall)
+        assert all(h["matter"] != "m-b" for h in a["hits"])
+        assert _search(c, "wall-A,wall-B")["total"] == 2
+
+
 def test_judge_and_labels_over_http(tmp_path: Path, monkeypatch) -> None:
     url = f"sqlite:///{tmp_path / 'apx.db'}"
     Base.metadata.create_all(create_engine(url))

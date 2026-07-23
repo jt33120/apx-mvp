@@ -130,6 +130,19 @@ class LabelsOut(BaseModel):
     pieces: list[LabelledPieceOut]
 
 
+class SearchHitOut(BaseModel):
+    matter: str
+    provenance: str
+    snippet: str
+
+
+class SearchResultsOut(BaseModel):
+    query: str
+    total: int               # true number of matching pieces, even if `hits` is capped
+    returned: int            # how many hits are in this response
+    hits: list[SearchHitOut]
+
+
 class MatterOut(BaseModel):
     matter: str
     scope: str
@@ -240,6 +253,26 @@ def list_matters(tenant: str, scopes: str) -> list[MatterOut]:
         MatterOut(matter=m.matter, scope=m.scope, inventory=_inventory_out(m.inventory))
         for m in store.matters(tenant, _parse_scopes(scopes))
     ]
+
+
+@app.get("/api/search", response_model=SearchResultsOut)
+def search_corpus(tenant: str, scopes: str, q: str, limit: int = 100) -> SearchResultsOut:
+    """Deterministic exhaustive search over the caller's scope (FR-13) — every piece
+    whose stored text contains `q` (case-insensitive), scope-constrained (the wall
+    pre-filters search too). `total` is honest even when the hits are capped."""
+    store = _store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    results = store.search(tenant, _parse_scopes(scopes), q, limit=max(1, min(limit, 500)))
+    return SearchResultsOut(
+        query=results.query,
+        total=results.total,
+        returned=len(results.hits),
+        hits=[
+            SearchHitOut(matter=h.matter, provenance=h.provenance, snippet=h.snippet)
+            for h in results.hits
+        ],
+    )
 
 
 @app.get("/api/matters/{matter}/audit", response_model=AuditTrailOut)

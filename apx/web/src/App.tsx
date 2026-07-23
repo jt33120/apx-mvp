@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ingestUpload, judgeMatter, listMatters, readAudit, readLabels, readTriage,
-  type AuditTrail, type IngestResponse, type Labels, type MatterSummary, type Triage,
+  ingestUpload, judgeMatter, listMatters, readAudit, readLabels, readTriage, searchCorpus,
+  type AuditTrail, type IngestResponse, type Labels, type MatterSummary,
+  type SearchResults, type Triage,
 } from "./api";
 
 const TENANT = "cabinet";
@@ -79,6 +80,8 @@ export default function App() {
 
       {result && <Inventory title={`Résultat — ${result.matter}`} r={result} />}
 
+      {scope && <CorpusSearch scope={scope} />}
+
       {matters.length > 0 && (
         <section style={{ marginTop: "2rem" }}>
           <h2>Mes dossiers — périmètre « {scope} »</h2>
@@ -92,6 +95,66 @@ export default function App() {
         </section>
       )}
     </main>
+  );
+}
+
+/** The safety net beneath triage: type a term, find every piece that contains it
+ *  within your scope, whatever its label. Deterministic, exhaustive, scope-constrained. */
+function CorpusSearch({ scope }: { scope: string }) {
+  const [q, setQ] = useState("");
+  const [res, setRes] = useState<SearchResults | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function run(e: React.FormEvent) {
+    e.preventDefault();
+    if (!q.trim()) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      setRes(await searchCorpus(TENANT, scope, q));
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : String(e2));
+      setRes(null);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section style={{ marginTop: "2rem" }}>
+      <h2>Recherche — dans votre périmètre</h2>
+      <p style={{ color: "#555", fontSize: ".9rem", margin: "0 0 .6rem" }}>
+        Un nom, une partie, une référence : toute pièce qui le contient, où qu'elle soit dans
+        votre périmètre, quel que soit son tri. Déterministe et exhaustif — rien n'est caché.
+      </p>
+      <form onSubmit={run} style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
+        <input value={q} onChange={(e) => setQ(e.target.value)}
+          placeholder="nom de pièce, partie, référence…" aria-label="Recherche"
+          style={{ padding: ".4rem .5rem", flex: "1 1 20rem" }} />
+        <button type="submit" disabled={busy || !q.trim()} style={{ padding: ".4rem .9rem" }}>
+          {busy ? "Recherche…" : "Chercher"}
+        </button>
+      </form>
+      {err && <p role="alert" style={{ color: "#a3161c" }}>{err}</p>}
+      {res && (
+        <div style={{ marginTop: ".8rem" }}>
+          <p style={{ fontSize: ".9rem", color: "#333", margin: "0 0 .4rem" }}>
+            <strong>{res.total}</strong> pièce{res.total > 1 ? "s" : ""} pour « {res.query} »
+            {res.returned < res.total && <span style={{ color: "#777" }}> · {res.returned} affichées</span>}
+          </p>
+          {res.hits.map((h) => (
+            <div key={`${h.matter}/${h.provenance}`}
+              style={{ borderTop: "1px solid #eee", padding: ".45rem 0" }}>
+              <div style={{ fontSize: ".8rem", color: "#777" }}>
+                {h.matter} · <span style={{ fontFamily: "monospace" }}>{h.provenance}</span>
+              </div>
+              <div style={{ fontSize: ".88rem", color: "#333" }}>{h.snippet}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </section>
   );
 }
 
