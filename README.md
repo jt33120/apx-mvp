@@ -4,10 +4,11 @@ Mass-document triage for law firms. Hexagonal core, adapters at the edges, **one
 stateful service** (PostgreSQL). Runs the same one artefact hosted, in CI, and
 air-gapped inside a firm (AD-3).
 
-> **Status: story 1.3 — the frozen payload schema.** The `piece`/`chunk` tables, the
-> single `chunk` writer and its structural guards now exist (the increment's one
-> irreversible decision); ingestion, retrieval and the model tiers do not yet. What is
-> deliberately absent, and which story owns it, is listed at the bottom.
+> **Status: story 1.4 — tenant isolation.** The frozen `piece`/`chunk` payload schema and
+> its one writer (1.3), and now the *tenant* wall — enforced at the write boundary,
+> tenant-first on every read, proven by an adversarial cross-tenant suite (1.4) — exist;
+> auth/sessions, ingestion, retrieval and the model tiers do not yet. What is deliberately
+> absent, and which story owns it, is listed at the bottom.
 
 Planning artefacts (PRD, architecture spine, epics, stories) live under
 `_bmad-output/planning-artifacts/`. The previous implementation at
@@ -122,6 +123,24 @@ Four static checks defend this at build time (`python -m apx.checks`): one write
 failure-path fixture proving it fires. The migration is exercised up **and** down against
 real PostgreSQL in CI.
 
+## Tenant isolation (AD-12)
+
+The wall between firms is the product's premise, and a cross-*tenant* leak is silent — no
+error, no message. So it is a **proven, checked** property, not a hope. Every *tenant*-owned
+table pins a non-nullable `tenant` (a record without one cannot be written); every read is
+constrained by `tenant` **before** *RBAC scope* (scope is applied after tenant, never
+instead of it); a user with no scope gets an **empty** corpus, not the whole one; and an
+unknown *tenant* or a foreign *matter* fails closed (empty / `ScopeDenied`), never another
+firm's rows.
+
+Two build-time guards (`python -m apx.checks`) keep it from regressing: `tenant` is NOT
+NULL on every owned table, and no store method applies a `scopes` filter without a
+`tenant`. An **adversarial suite** (`tests/adapters/test_tenant_isolation.py`) seeds two
+tenants sharing a common word and asserts zero cross-*tenant* results, counts or metadata
+across every read surface. *(The full AD-14 single-read-entry-point consolidation — one
+`core/app/read/` path plus a grep forbidding tenant-table queries elsewhere — is a
+separate, larger unit; 1.4 delivers the tenant guarantee and a store-scoped check.)*
+
 ## What does NOT belong in this repo yet
 
 Scaffolding only. Each item below has an owning story; building it here is a
@@ -131,7 +150,7 @@ scope violation.
 |---|---|
 | Authentication, sessions, password hashing, PyJWT | 1.5 / 1.8 |
 | Encryption + fail-closed start-up gate | 1.7 |
-| Tenant write-boundary / read-path enforcement | 1.4 |
+| Single read entry point (`core/app/read/`) + outside-read grep (AD-14) | later (1.12 / epic 3) |
 | Config / provisioning surface | 1.9 |
 | Content-free projection, egress check | 1.10 / 1.12 |
 | Backup, restore, `upgrade.sh`, cosign packaging | 1.11 / deploy |

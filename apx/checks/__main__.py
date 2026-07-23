@@ -16,7 +16,7 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 
-from apx.checks import import_contracts, payload_schema
+from apx.checks import import_contracts, payload_schema, tenant_isolation
 from apx.checks.import_contracts import CheckResult
 
 # The registry. Each entry names its pattern and the AD it enforces (AD-33).
@@ -28,6 +28,9 @@ CHECKS: list[Callable[[], CheckResult]] = [
     payload_schema.scope_arg_required,
     payload_schema.chunk_columns_enumerated,
     payload_schema.no_cascade_delete,
+    # story 1.4 — tenant isolation at the boundary (AD-12).
+    tenant_isolation.tenant_not_null_on_owned_tables,
+    tenant_isolation.scoped_access_carries_tenant,
 ]
 
 
