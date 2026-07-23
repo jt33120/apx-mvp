@@ -249,7 +249,9 @@ class SqlStore:
                         extractor_version=p.extractor_version,
                         schema_version=p.schema_version, ingestion_timestamp=p.ingestion_timestamp,
                         piece_date=None, piece_date_status="undetermined",
-                        full_text=p.full_text, text_version=p.text_version,
+                        full_text=p.full_text,
+                        text_identity=hashlib.sha256(p.full_text.encode()).hexdigest(),
+                        text_version=p.text_version,
                     )
                 )
             for f in result.failures:

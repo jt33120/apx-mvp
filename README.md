@@ -4,9 +4,10 @@ Mass-document triage for law firms. Hexagonal core, adapters at the edges, **one
 stateful service** (PostgreSQL). Runs the same one artefact hosted, in CI, and
 air-gapped inside a firm (AD-3).
 
-> **Status: story 1.1 — repository scaffolding.** The *shape* and the *guardrail*
-> exist; no feature runs yet. What is deliberately absent, and which story owns
-> it, is listed at the bottom.
+> **Status: story 1.3 — the frozen payload schema.** The `piece`/`chunk` tables, the
+> single `chunk` writer and its structural guards now exist (the increment's one
+> irreversible decision); ingestion, retrieval and the model tiers do not yet. What is
+> deliberately absent, and which story owns it, is listed at the bottom.
 
 Planning artefacts (PRD, architecture spine, epics, stories) live under
 `_bmad-output/planning-artifacts/`. The previous implementation at
@@ -96,6 +97,31 @@ uv run python -m apx.checks     # -> FAIL, non-zero exit
 uv run python -m apx.checks     # -> PASS
 ```
 
+## The frozen payload schema (AD-9)
+
+The increment's one irreversible decision: what travels on every indexed *chunk*. A
+`piece` holds a document's full extracted text once — the target of exhaustive search —
+with its own `text_identity` and `text_version`. A `chunk` carries only the enumerated
+provenance: `chunk_id`, `piece_id`, `tenant`, `matter`, `position`, `full_text_version`,
+`chunking_config_version`, `schema_version`, and a reserved external-authority reference.
+The embedding vector and its `model_id`/`model_version` are added by the embedder story
+(2.8); adding a *mandatory* field later would mean re-indexing every installed site blind,
+so the set is fixed here.
+
+Two things are deliberately **not** columns (AD-9/AD-13/AD-40): *RBAC scope* and
+*custodian*. Scope is a **required write-time argument** the writer checks against the
+matter's authoritative `matter_scope` — never persisted — so a re-scope takes effect at
+the next read with nothing to propagate. There is exactly **one** `chunk` writer; it
+defaults nothing and rejects, with a typed error, an incomplete payload, an unauthorised
+or empty scope, or a schema/chunking version that differs from the import job's (one
+*matter* never holds two generations).
+
+Four static checks defend this at build time (`python -m apx.checks`): one writer,
+`rbac_scope` required with no default, no scope/custodian column on `chunk`, and no
+`ON DELETE CASCADE` on the piece FK (a *retired* state instead — AD-7). Each has a
+failure-path fixture proving it fires. The migration is exercised up **and** down against
+real PostgreSQL in CI.
+
 ## What does NOT belong in this repo yet
 
 Scaffolding only. Each item below has an owning story; building it here is a
@@ -103,7 +129,6 @@ scope violation.
 
 | Not yet | Owner |
 |---|---|
-| Payload schema, `chunk` writer, tables, migrations | 1.3 |
 | Authentication, sessions, password hashing, PyJWT | 1.5 / 1.8 |
 | Encryption + fail-closed start-up gate | 1.7 |
 | Tenant write-boundary / read-path enforcement | 1.4 |

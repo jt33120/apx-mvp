@@ -12,7 +12,16 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from sqlalchemy import Boolean, CheckConstraint, DateTime, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 
@@ -47,7 +56,50 @@ class Piece(Base):
     # determined | undetermined
     piece_date_status: Mapped[str] = mapped_column(String, nullable=False)
     full_text: Mapped[str] = mapped_column(Text, nullable=False)  # FR-13's target, stored once
+    # AD-10: the full text is a first-class artefact with its OWN identity and version,
+    # separate from the raw-content identity (content_hash) — two scans of one page can
+    # share a text_identity though their content_hash differs. `text_version` records
+    # how it was produced; `text_identity` records what it IS (a hash of the text).
+    text_identity: Mapped[str] = mapped_column(String(64), nullable=False)
     text_version: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class Chunk(Base):
+    """A chunk of a *pièce*'s full text — the unit the semantic engine indexes. Its
+    columns are EXACTLY the enumerated payload-schema set (AD-9); any other column fails
+    the build (Task 5 asserts it). Absent by design: **no** ``rbac_scope``/``scope``
+    column — scope is a write-time check resolved from ``matter_scope`` at query time
+    (AD-13/AD-40) — and **no** ``custodian`` column — custodianship is a set on the
+    *pièce* (AD-9). The embedding trio (the ``halfvec`` vector and its
+    ``model_id``/``model_version``) is added by the embedder story (2.8); 1.3 freezes the
+    non-embedding provenance. No cascade FK (AD-7): a *pièce* is retired, never
+    hard-deleted out from under its chunks.
+    """
+
+    __tablename__ = "chunk"
+    __table_args__ = (
+        UniqueConstraint(
+            "piece_id", "position", "chunking_config_version",
+            name="uq_chunk_piece_position_cfg",
+        ),
+    )
+
+    # chunk_id(piece_id, position, chunking_config_version) — deterministic, never a counter
+    chunk_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    # no ON DELETE anywhere on this FK — a retired state, never a cascade (AD-7)
+    piece_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("piece.id"), nullable=False, index=True
+    )
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)  # source position in the piece
+    # the version of the piece's full text this chunk was derived from (AD-10/AD-23)
+    full_text_version: Mapped[str] = mapped_column(String, nullable=False)
+    chunking_config_version: Mapped[str] = mapped_column(String, nullable=False)
+    schema_version: Mapped[str] = mapped_column(String, nullable=False)
+    # the reserved external-authority reference (AD-9) — nullable, unused until a court
+    # or bâtonnier reference is attached; present so its later use is not a migration.
+    external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class Failure(Base):

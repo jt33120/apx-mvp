@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-07-22
+last_updated: 2026-07-23
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -35,7 +35,7 @@ development_status:
   epic-1: in-progress
   1-1-the-repository-born-from-empty-with-the-layering-rule-enforced: done
   1-2-the-offline-fitness-function-running-in-ci-from-week-one: done
-  1-3-the-frozen-payload-schema: ready-for-dev
+  1-3-the-frozen-payload-schema: review
   1-4-tenant-isolation-enforced-at-the-boundary: backlog
   1-5-authentication-and-sessions-the-application-owns: backlog
   1-6-grant-time-authorisation-and-scope-administration: backlog

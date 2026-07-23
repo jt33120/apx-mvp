@@ -16,13 +16,18 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 
-from apx.checks import import_contracts
+from apx.checks import import_contracts, payload_schema
 from apx.checks.import_contracts import CheckResult
 
 # The registry. Each entry names its pattern and the AD it enforces (AD-33).
 # Later stories append here; they do not rewrite the runner.
 CHECKS: list[Callable[[], CheckResult]] = [
     import_contracts.run,
+    # story 1.3 — the frozen payload schema (AD-9, AD-40, AD-7).
+    payload_schema.one_chunk_writer,
+    payload_schema.scope_arg_required,
+    payload_schema.chunk_columns_enumerated,
+    payload_schema.no_cascade_delete,
 ]
 
 

@@ -55,7 +55,8 @@ def test_date_status_check_constraint_is_enforced_on_postgres(pg_store: SqlStore
             text(
                 "INSERT INTO piece (id,tenant,matter,content_hash,provenance_path,custodian,"
                 "extraction_method,extractor_version,schema_version,ingestion_timestamp,"
-                "piece_date,piece_date_status,full_text,text_version) VALUES "
-                "('x','t','m','h','p','c','text','v','s',now(),'2024-01-01','undetermined','t','v')"
+                "piece_date,piece_date_status,full_text,text_identity,text_version) VALUES "
+                "('x','t','m','h','p','c','text','v','s',now(),'2024-01-01','undetermined',"
+                "'t','ti','v')"
             )
         )

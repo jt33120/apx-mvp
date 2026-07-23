@@ -1,6 +1,10 @@
+---
+baseline_commit: 493b8c8c32f58c7ca718bcd983951498a767223a
+---
+
 # Story 1.3: The frozen payload schema
 
-Status: ready-for-dev
+Status: review
 
 ## Story
 
@@ -31,13 +35,13 @@ so that the one decision that cannot be undone later — what travels on every *
 
 ## Tasks / Subtasks
 
-- [ ] **Task 1 — Domain: the payload record and identity functions** (AC: #1, #2, #4) — pure `apx/core/domain`, no DB. The `PayloadRecord` dataclass (the enumerated mandatory fields, no `rbac_scope`); the deterministic `piece_id(content_hash, matter)` and `chunk_id(piece_id, position, chunking_config_version)`; the `piece_date`/`piece_date_status` invariant as a domain validation.
-- [ ] **Task 2 — Port: the Store write contract** (AC: #2, #5) — `apx/core/ports`: a `ChunkWriter` protocol whose single method takes the payload **and** `rbac_scope` as a required argument (no default). The port is where "one writer, scope required" is expressed; the adapter implements it.
-- [ ] **Task 3 — Adapter: SQLAlchemy models + the one writer** (AC: #1–#6) — `apx/adapters/store_postgres`: the `piece`, `chunk`, `matter_scope` models (enumerated columns, NOT NULL, the CHECK constraint, no cascade FK, no `rbac_scope` column on `chunk`); the **single** `write_chunk(...)` implementation that validates completeness, checks scope authorisation against `matter_scope`, and enforces the version guard. Full text on `piece`.
-- [ ] **Task 4 — The first Alembic migration** (AC: #7) — a real migration creating the three tables + constraints; runs up and down; `DATABASE_URL` from env (already wired in 1.1).
-- [ ] **Task 5 — Structural checks** (AC: #5) — extend `apx/checks`: (a) exactly one `chunk` writer (import-graph / AST — the only caller-visible write path); (b) `rbac_scope` is a required param with no default (AST scan of the writer signature); (c) the `chunk` model carries none of a forbidden column set (`rbac_scope`); (d) no `ON DELETE CASCADE` on `chunk`/`piece` FKs. Each with a failure-path fixture proving it fires (the 1.1/1.2 pattern). Register in the harness with the per-contract floor.
-- [ ] **Task 6 — Tests** (AC: all) — domain unit tests (identity determinism, the date invariant); an integration test against a real PostgreSQL (via the compose service or a CI service container) that writes a chunk, rejects an incomplete one, rejects an unauthorised scope, and rejects a version-mismatched write; a migration up/down test.
-- [ ] **Task 7 — Fitness `schema` stage + verify + commit** (AC: #7) — add a `schema` assertion to the fitness driver (tables exist post-migration); full green (checks, harness, tests, migration, web, compose); README schema section; the three-reviewer pass.
+- [x] **Task 1 — Domain: the payload record and identity functions** (AC: #1, #2, #4) — pure `apx/core/domain`, no DB. The `PayloadRecord` dataclass (the enumerated mandatory fields, no `rbac_scope`); the deterministic `piece_id(content_hash, matter)` and `chunk_id(piece_id, position, chunking_config_version)`; the `piece_date`/`piece_date_status` invariant as a domain validation.
+- [x] **Task 2 — Port: the Store write contract** (AC: #2, #5) — `apx/core/ports`: a `ChunkWriter` protocol whose single method takes the payload **and** `rbac_scope` as a required argument (no default). The port is where "one writer, scope required" is expressed; the adapter implements it.
+- [x] **Task 3 — Adapter: SQLAlchemy models + the one writer** (AC: #1–#6) — `apx/adapters/store_postgres`: the `piece`, `chunk`, `matter_scope` models (enumerated columns, NOT NULL, the CHECK constraint, no cascade FK, no `rbac_scope` column on `chunk`); the **single** `write_chunk(...)` implementation that validates completeness, checks scope authorisation against `matter_scope`, and enforces the version guard. Full text on `piece`.
+- [x] **Task 4 — The first Alembic migration** (AC: #7) — a real migration creating the three tables + constraints; runs up and down; `DATABASE_URL` from env (already wired in 1.1).
+- [x] **Task 5 — Structural checks** (AC: #5) — extend `apx/checks`: (a) exactly one `chunk` writer (import-graph / AST — the only caller-visible write path); (b) `rbac_scope` is a required param with no default (AST scan of the writer signature); (c) the `chunk` model carries none of a forbidden column set (`rbac_scope`); (d) no `ON DELETE CASCADE` on `chunk`/`piece` FKs. Each with a failure-path fixture proving it fires (the 1.1/1.2 pattern). Register in the harness with the per-contract floor.
+- [x] **Task 6 — Tests** (AC: all) — domain unit tests (identity determinism, the date invariant); an integration test against a real PostgreSQL (via the compose service or a CI service container) that writes a chunk, rejects an incomplete one, rejects an unauthorised scope, and rejects a version-mismatched write; a migration up/down test.
+- [x] **Task 7 — Fitness `schema` stage + verify + commit** (AC: #7) — add a `schema` assertion to the fitness driver (tables exist post-migration); full green (checks, harness, tests, migration, web, compose); README schema section; the three-reviewer pass.
 
 ## Dev Notes
 
@@ -68,11 +72,50 @@ Domain tests pure and fast; the DB integration test gated on a reachable Postgre
 
 ### Agent Model Used
 
+Claude Opus 4.8 (1M context) — Claude Code dev-story workflow.
+
 ### Debug Log References
+
+- `uv run pytest -q` → **182 passed, 8 skipped** (the 8 skips = PostgreSQL-gated tests, run in the CI `db` job).
+- `uv run python -m apx.checks` → **5 passed** (import contracts + the 4 new frozen-schema checks).
+- `uv run python -m apx.fitness` → **3 asserted, 9 pending** (new ASSERTED stage: *frozen payload schema defined*).
+- `uv run ruff check .` → clean. `alembic heads` → single head `0009_chunk_payload_schema`.
 
 ### Completion Notes List
 
+- **The scope/custodian reconciliation (AC2, generalised — the subtlety the story flags).** FR-8 lists both *RBAC scope* and *custodian* among a chunk's "mandatory fields", but AD-9 states plainly that **no column named or aliased as a scope or a custodian exists on `chunk`, `piece` or `full_text`**, and AD-13/AD-40 make scope a query-time resolution. AC2 spells the reconciliation out for scope only; I extended the *same* reading to custodian, since AD-9 treats them identically. Locked: `rbac_scope` is a **required write-time argument** the writer checks against `matter_scope` and never persists; *custodian* is piece-level provenance (kept on the existing `piece`, never a `chunk` column). "Carries X" (FR-8) means *written under an authorised/attributed X*, not *stored as a chunk field*. A raw scope/custodian column on `chunk` fails the build (check `chunk_columns_enumerated`).
+- **Environment reconciliation (recorded per the 1.1 deviation convention).** `piece` and `matter_scope` already existed from the pre-BMAD ad-hoc build (migrations 0001/0002) and already satisfied most of AC1/AC3/AC4 (piece identity `(content_hash, matter)`, the `piece_date`/`piece_date_status` CHECK, full text on the piece). Story 1.3's real work against the live tree was therefore: the **`chunk` table**, the **one `write_chunk` writer**, the **domain payload record + `chunk_id`**, the **`ChunkWriter` port**, the **structural checks**, and the missing **`text_identity`** on `piece` (AC3). The "first Alembic migration" (AC7) is delivered *in substance* as `0009` — the first migration to create the frozen `chunk` schema — rather than re-creating tables that already exist.
+- **`text_identity` (AC3).** Added to `piece` (AD-10: the full text is a first-class artefact with its own identity beside its version). Migration `0009` adds the column, backfills existing rows with the exact hash the writer computes (`encode(sha256(convert_to(full_text,'UTF8')),'hex')`), then sets `NOT NULL`. The ad-hoc `save` path was updated to set it (kept green).
+- **Embedding trio deferred (per story scope).** `chunk` carries AD-9's non-embedding enumeration plus the reserved `external_ref`; the `halfvec` vector and `model_id`/`model_version` are the embedder story (2.8). The structural column check permits the full AD-9 set and forbids anything else (esp. scope/custodian), so 2.8 adds them without a schema fight.
+- **The writer writes only the `chunk` row** (the piece pre-exists via the FK), but validates the **whole** payload for completeness — so a chunk can never be indexed under incomplete provenance (AC6) — and enforces the version guard against the versions it was stamped with at construction (the import job's generation, AD-40). Idempotent by deterministic `chunk_id` (`merge`, never a duplicate).
+- **Migration up/down (AC7 / Task 6).** Reversibility is exercised by the existing CI `db` job steps (`alembic upgrade head → downgrade base → upgrade head`), which now include `0009`; the pytest DDL assertions (enumerated columns, no-cascade FK, `text_identity NOT NULL`, FK-refuses-missing-piece) run there too against `pgvector/pgvector:pg18`.
+- **Open Questions 1–3 resolved with the story's recommended defaults:** (1) `1.3` reuses/extends the minimal `matter_scope` (matter, tenant, scope); (2) chunks store no own text copy — the span is derivable from `piece.full_text` + `position`; (3) the integration tests run against a real PostgreSQL in CI and skip locally with a clear message. A SQLite pass additionally covers the writer's guard logic on every machine.
+
 ### File List
+
+**New**
+- `apx/core/domain/payload.py` — `PayloadRecord` + validation + typed `IncompletePayload`.
+- `apx/core/ports/store.py` — the `ChunkWriter` protocol.
+- `apx/adapters/store_postgres/chunk_writer.py` — the one `write_chunk` (`ChunkStore`), `UnauthorizedScope`, `VersionMismatch`.
+- `apx/adapters/store_postgres/migrations/versions/0009_chunk_payload_schema.py` — the migration.
+- `apx/checks/payload_schema.py` — the four structural checks.
+- `tests/domain/test_payload.py`, `tests/adapters/test_chunk_writer.py`, `tests/adapters/test_chunk_writer_postgres.py`, `tests/checks/test_payload_schema_checks.py`.
+- `tests/_fixtures/payload_schema_violations/{two_writers,scope_defaulted,forbidden_column,cascade_fk}/*.py` — the failure-path fixtures.
+
+**Modified**
+- `apx/core/domain/identity.py` — added `chunk_id(piece_id, position, chunking_config_version)`.
+- `apx/adapters/store_postgres/models.py` — the `Chunk` model; `piece.text_identity`; imports.
+- `apx/adapters/store_postgres/store.py` — `save` sets `text_identity`.
+- `apx/checks/__main__.py` — registered the four payload-schema checks.
+- `apx/fitness/driver.py` — new `schema` ASSERTED stage; the checks stage runs the full registry.
+- `tests/adapters/test_store_postgres.py` — the direct INSERT includes `text_identity`.
+- `README.md` — the frozen-payload-schema section; status; the not-yet table.
+
+### Change Log
+
+| Date | Change |
+|---|---|
+| 2026-07-23 | Implemented story 1.3 — the frozen payload schema: `chunk` table + one `write_chunk` writer (completeness / scope / version guards), `PayloadRecord` domain + `chunk_id`, `ChunkWriter` port, `piece.text_identity`, migration `0009`, four structural checks with failure fixtures, fitness `schema` stage. 182 passed / 8 skipped, checks + ruff green. Status → review. |
 
 ## Open Questions for the human
 

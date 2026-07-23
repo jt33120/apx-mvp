@@ -41,11 +41,31 @@ def _app_boots() -> None:
 
 
 def _checks_pass() -> None:
-    """The structural-property checks hold — the 'checks-green' stage."""
-    from apx.checks import import_contracts
+    """Every registered structural-property check holds — the 'checks-green' stage. Runs
+    the same registry as ``python -m apx.checks`` so a new guard (story 1.3's payload-schema
+    checks included) is part of the fitness frame, not only the standalone runner."""
+    from apx.checks.__main__ import CHECKS
 
-    result = import_contracts.run()
-    assert result.ok, f"structural checks failed:\n{result.detail}"
+    failed = [r for r in (check() for check in CHECKS) if not r.ok]
+    assert not failed, "structural checks failed: " + "; ".join(
+        f"{r.name} ({r.ad})" for r in failed
+    )
+
+
+def _schema_frozen() -> None:
+    """The frozen payload schema is defined (story 1.3): the ``piece``, ``chunk`` and
+    ``matter_scope`` tables exist and ``chunk`` carries no scope/custodian column. This is
+    the offline, static half of AC7 — the migration that creates them in a *real* database
+    is exercised by the CI ``db`` job (``alembic upgrade head``), which this frame does not
+    reach (it runs with no database)."""
+    from apx.adapters.store_postgres.models import Base
+
+    tables = set(Base.metadata.tables)
+    for required in ("piece", "chunk", "matter_scope"):
+        assert required in tables, f"the frozen schema is missing the {required!r} table"
+    chunk_cols = {c.name for c in Base.metadata.tables["chunk"].columns}
+    forbidden = {c for c in chunk_cols if "scope" in c.lower() or "custodian" in c.lower()}
+    assert not forbidden, f"chunk carries a forbidden scope/custodian column: {forbidden}"
 
 
 # The pipeline. Order is the FR-55 sequence. `needs_model=True` marks a capability
@@ -53,6 +73,7 @@ def _checks_pass() -> None:
 STAGES: list[Stage] = [
     Stage("start (app boots offline)", "1.1/1.2", ASSERTED, check=_app_boots),
     Stage("structural checks pass", "1.1/1.2", ASSERTED, check=_checks_pass),
+    Stage("frozen payload schema defined", "1.3", ASSERTED, check=_schema_frozen),
     Stage("ingest a folder", "2.1", PENDING),
     Stage("index the corpus", "2.8", PENDING),
     Stage("retrieve over both engines", "3.1/3.2", PENDING),
