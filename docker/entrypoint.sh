@@ -10,6 +10,11 @@ fi
 echo "apx: applying migrations…"
 alembic upgrade head
 
+# First-admin bootstrap (idempotent): runs only when APX_BOOTSTRAP_ADMIN_EMAIL is set.
+if [ -n "$APX_BOOTSTRAP_ADMIN_EMAIL" ]; then
+  python -m apx.manage ensure-admin
+fi
+
 # Railway (and most hosts) inject $PORT; fall back to 8000 for local/compose.
 PORT="${PORT:-8000}"
 echo "apx: starting on :$PORT"

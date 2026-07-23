@@ -15,6 +15,8 @@ import getpass
 import os
 from collections.abc import Sequence
 
+from sqlalchemy.exc import IntegrityError
+
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.store import SqlStore
 
@@ -23,6 +25,26 @@ def _create_user(store: SqlStore, args: argparse.Namespace, password: str) -> st
     return store.create_user(
         args.tenant, args.email, password, args.name, set(args.scope or []), is_admin=args.admin,
     )
+
+
+def ensure_admin(store: SqlStore) -> str:
+    """Idempotent first-admin bootstrap from the environment — for a fresh deployment,
+    run once on boot (the entrypoint calls this). Creates the admin only if it does not
+    already exist; a no-op thereafter. Reads APX_BOOTSTRAP_ADMIN_EMAIL / _PASSWORD (both
+    required to do anything) / _NAME / _TENANT / _SCOPES (comma-separated)."""
+    email = os.environ.get("APX_BOOTSTRAP_ADMIN_EMAIL")
+    password = os.environ.get("APX_BOOTSTRAP_ADMIN_PASSWORD")
+    if not email or not password:
+        return "bootstrap: APX_BOOTSTRAP_ADMIN_EMAIL/_PASSWORD not set — nothing to do"
+    tenant = os.environ.get("APX_BOOTSTRAP_ADMIN_TENANT", "cabinet")
+    name = os.environ.get("APX_BOOTSTRAP_ADMIN_NAME", email)
+    raw_scopes = os.environ.get("APX_BOOTSTRAP_ADMIN_SCOPES", "").split(",")
+    scopes = {s.strip() for s in raw_scopes if s.strip()}
+    try:
+        store.create_user(tenant, email, password, name, scopes, is_admin=True)
+        return f"bootstrap: admin {email} created (tenant={tenant}, scopes={sorted(scopes)})"
+    except IntegrityError:
+        return f"bootstrap: admin {email} already exists — no change"
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -34,6 +56,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--name", required=True)
     create.add_argument("--admin", action="store_true")
     create.add_argument("--scope", action="append", default=[], help="repeatable")
+    sub.add_parser("ensure-admin", help="idempotent first-admin bootstrap from the environment")
     return parser
 
 
@@ -47,6 +70,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         uid = _create_user(store, args, password)
         scopes = sorted(args.scope or [])
         print(f"créé : {uid} · {args.email} · admin={args.admin} · scopes={scopes}")
+    elif args.cmd == "ensure-admin":
+        print(ensure_admin(SqlStore(make_session_factory())))
 
 
 if __name__ == "__main__":
