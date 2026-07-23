@@ -409,7 +409,7 @@ class SqlStore:
                 raise ScopeDenied(matter)
             rows = session.execute(
                 select(LabelRecord.label, LabelRecord.rationale, Piece.provenance_path)
-                .join(Piece, Piece.id == LabelRecord.piece_id)
+                .join(Piece, (Piece.id == LabelRecord.piece_id) & (Piece.tenant == tenant))
                 .where(LabelRecord.matter == matter, LabelRecord.tenant == tenant)
                 .order_by(Piece.provenance_path)
             ).all()
@@ -434,7 +434,7 @@ class SqlStore:
                 raise ScopeDenied(matter)
             rows = session.execute(
                 select(LabelRecord.piece_id, Piece.provenance_path, Piece.full_text)
-                .join(Piece, Piece.id == LabelRecord.piece_id)
+                .join(Piece, (Piece.id == LabelRecord.piece_id) & (Piece.tenant == tenant))
                 .where(
                     LabelRecord.matter == matter, LabelRecord.tenant == tenant,
                     LabelRecord.label == "discard",

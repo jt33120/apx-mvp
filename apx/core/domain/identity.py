@@ -1,9 +1,13 @@
-"""Deterministic piece identity (AD-40).
+"""Deterministic piece identity (AD-40, AD-12).
 
-A piece's identity is a function of (content, matter) — never of its provenance
-path. The same file imported into two matters is two pieces; confidentiality
-follows the matter. Identity is stable across runs, processes and installations,
-and is never allocated from a restarting counter (the v1 defect).
+A piece's identity is a function of (tenant, matter, content) — never of its
+provenance path. A *matter* belongs to exactly one *tenant* (the spine's
+`TENANT ||--o{ MATTER` ownership; audit chains are per `(tenant, matter)`, AD-43),
+and matter names are tenant-local free strings — so *tenant* is inside the identity:
+two firms that both name a matter "dupont" and hold the same file are two distinct
+pieces, never a silent collision that would let one firm's ingest seize or overwrite
+the other's (AD-12, tenant-first, fail-closed). Identity is stable across runs,
+processes and installations, and is never allocated from a restarting counter.
 """
 
 from __future__ import annotations
@@ -16,13 +20,17 @@ def content_hash(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
-def piece_id(content_hash_hex: str, matter: str) -> str:
-    """Deterministic piece id from (content, matter). Path is NOT part of identity."""
+def piece_id(tenant: str, content_hash_hex: str, matter: str) -> str:
+    """Deterministic piece id from (tenant, content, matter). Path is NOT part of
+    identity; tenant IS (AD-12) — a matter is tenant-local, so the same file under the
+    same matter name in two tenants is two distinct pieces."""
+    if not tenant:
+        raise ValueError("tenant is required")
     if not content_hash_hex:
         raise ValueError("content_hash_hex is required")
     if not matter:
         raise ValueError("matter is required")
-    return hashlib.sha256(f"{matter}\x00{content_hash_hex}".encode()).hexdigest()
+    return hashlib.sha256(f"{tenant}\x00{matter}\x00{content_hash_hex}".encode()).hexdigest()
 
 
 def chunk_id(

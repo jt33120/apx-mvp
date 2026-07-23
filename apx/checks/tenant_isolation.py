@@ -20,7 +20,7 @@ import ast
 from collections.abc import Iterable
 from pathlib import Path
 
-from sqlalchemy import MetaData
+from sqlalchemy import MetaData, UniqueConstraint
 
 from apx.checks.import_contracts import CheckResult
 from apx.checks.payload_schema import _fail_closed, _load_trees, _param_has_default
@@ -98,6 +98,34 @@ def scoped_access_carries_tenant(roots: Iterable[Path] | None = None) -> CheckRe
     return CheckResult(name, ad, True, "every scoped access also carries a tenant")
 
 
+def identity_is_tenant_qualified(metadata: MetaData | None = None) -> CheckResult:
+    """The matter/piece identity carries *tenant* (AD-12; AD-43 chains per (tenant, matter)):
+    ``matter_scope``'s primary key includes ``tenant``, and ``piece`` has a unique constraint
+    that includes ``tenant`` — so a matter is tenant-local and two firms' same-named matter
+    with the same file cannot collide into one silently-overwritten row."""
+    name, ad = "matter/piece identity is tenant-qualified", "AD-12"
+    tables = (metadata if metadata is not None else _base_metadata()).tables
+    ms = tables.get("matter_scope")
+    if ms is not None:
+        pk_cols = {c.name for c in ms.primary_key.columns}
+        if "tenant" not in pk_cols:
+            return CheckResult(name, ad, False,
+                               f"matter_scope PK {sorted(pk_cols)} omits tenant — a matter is "
+                               "not bound to its tenant (a same-named matter could be seized)")
+    piece = tables.get("piece")
+    if piece is not None:
+        uniques = [c for c in piece.constraints if isinstance(c, UniqueConstraint)]
+        if uniques and not any("tenant" in {col.name for col in uc.columns} for uc in uniques):
+            return CheckResult(name, ad, False,
+                               "piece has no unique constraint including tenant — the same file "
+                               "under a same-named matter could collide across tenants")
+    return CheckResult(name, ad, True, "matter/piece identity carries tenant")
+
+
 def run() -> list[CheckResult]:
-    """Both tenant-isolation checks, for the harness to fan out over."""
-    return [tenant_not_null_on_owned_tables(), scoped_access_carries_tenant()]
+    """The tenant-isolation checks, for the harness to fan out over."""
+    return [
+        tenant_not_null_on_owned_tables(),
+        scoped_access_carries_tenant(),
+        identity_is_tenant_qualified(),
+    ]

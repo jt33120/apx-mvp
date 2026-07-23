@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from sqlalchemy import Column, MetaData, String, Table
+from sqlalchemy import Column, MetaData, String, Table, UniqueConstraint
 
 from apx.checks import tenant_isolation
 
@@ -43,3 +43,20 @@ def test_scoped_access_check_fails_closed_on_an_unparseable_file(tmp_path: Path)
     (tmp_path / "broken.py").write_text("def oops(:\n")
     result = tenant_isolation.scoped_access_carries_tenant([tmp_path])
     assert not result.ok and "parse" in result.detail.lower()
+
+
+def test_identity_check_fires_on_a_tenantless_matter_scope_pk() -> None:
+    md = MetaData()
+    Table("matter_scope", md, Column("matter", String, primary_key=True),
+          Column("tenant", String), Column("scope", String))
+    result = tenant_isolation.identity_is_tenant_qualified(md)
+    assert not result.ok and "matter_scope" in result.detail
+
+
+def test_identity_check_fires_on_a_tenantless_piece_unique() -> None:
+    md = MetaData()
+    Table("piece", md, Column("id", String, primary_key=True), Column("matter", String),
+          Column("content_hash", String),
+          UniqueConstraint("matter", "content_hash", name="uq_piece_matter_content"))
+    result = tenant_isolation.identity_is_tenant_qualified(md)
+    assert not result.ok and "piece" in result.detail

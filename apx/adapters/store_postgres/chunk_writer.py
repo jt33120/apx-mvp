@@ -76,11 +76,11 @@ class ChunkStore:
         # 1b. The referenced pièce must be the one this payload describes. piece_id encodes
         #     (content, matter) (AD-40), so a mismatch means the chunk would point at another
         #     matter's pièce — a Chinese-wall hazard the single seam refuses (AD-12).
-        expected_piece = piece_id(payload.content_hash, payload.matter)
+        expected_piece = piece_id(payload.tenant, payload.content_hash, payload.matter)
         if payload.source_piece_id != expected_piece:
             raise PieceIdentityMismatch(
                 f"source_piece_id {payload.source_piece_id!r} != "
-                f"piece_id(content_hash, matter) {expected_piece!r}"
+                f"piece_id(tenant, content_hash, matter) {expected_piece!r}"
             )
 
         # 3. Version guard — refuse a chunk from a different generation (AD-40). Checked
@@ -108,7 +108,10 @@ class ChunkStore:
         )
         with self._sf() as session, session.begin():
             # 2b. Scope is checked against the matter's authoritative row, never persisted.
-            authorised = session.get(MatterScope, payload.matter)
+            # keyed by the composite (tenant, matter) PK — a matter is tenant-local (AD-12)
+            authorised = session.get(
+                MatterScope, {"tenant": payload.tenant, "matter": payload.matter}
+            )
             if (
                 authorised is None
                 or authorised.scope != rbac_scope

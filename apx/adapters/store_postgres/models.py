@@ -32,14 +32,17 @@ class Base(DeclarativeBase):
 class Piece(Base):
     __tablename__ = "piece"
     __table_args__ = (
-        UniqueConstraint("matter", "content_hash", name="uq_piece_matter_content"),
+        # tenant is IN the identity (AD-12): a matter is tenant-local, so the same file
+        # under the same matter name in two tenants is two distinct pieces, never a
+        # silent collision that lets one firm overwrite the other's row.
+        UniqueConstraint("tenant", "matter", "content_hash", name="uq_piece_tenant_matter_content"),
         CheckConstraint(
             "(piece_date IS NOT NULL) = (piece_date_status = 'determined')",
             name="ck_piece_date_status",
         ),
     )
 
-    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # piece_id(content_hash, matter)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # the tenant-qualified piece_id
     tenant: Mapped[str] = mapped_column(String, nullable=False)
     matter: Mapped[str] = mapped_column(String, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -131,8 +134,11 @@ class MatterScope(Base):
 
     __tablename__ = "matter_scope"
 
+    # composite PK (tenant, matter): a matter belongs to exactly one tenant (AD-12;
+    # the spine's TENANT-owns-MATTER, AD-43 chains per (tenant, matter)). Two tenants may
+    # each hold a matter of the same name — distinct rows, never one overwriting the other.
+    tenant: Mapped[str] = mapped_column(String, primary_key=True)
     matter: Mapped[str] = mapped_column(String, primary_key=True)
-    tenant: Mapped[str] = mapped_column(String, nullable=False)
     scope: Mapped[str] = mapped_column(String, nullable=False)
 
 

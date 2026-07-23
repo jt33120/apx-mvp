@@ -80,7 +80,7 @@ def test_chunk_id_and_piece_id_reject_empty_inputs() -> None:
     with pytest.raises(ValueError):
         chunk_id("p", "tv1", -1, "c1")
     with pytest.raises(ValueError):
-        piece_id("", "m")
+        piece_id("", "h", "m")  # empty tenant
 
 
 # ── the payload is complete and non-nullable (AC1) ──

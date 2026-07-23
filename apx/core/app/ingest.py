@@ -141,7 +141,7 @@ def ingest_folder(
                 raw = path.read_bytes()
                 ch = content_hash(raw)
                 result.pieces.append(IngestedPiece(
-                    id=piece_id(ch, matter),
+                    id=piece_id(tenant, ch, matter),
                     matter=matter,
                     tenant=tenant,
                     content_hash=ch,

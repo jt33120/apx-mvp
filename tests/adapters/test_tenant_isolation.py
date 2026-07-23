@@ -17,6 +17,7 @@ from sqlalchemy.orm import sessionmaker
 from apx.adapters.store_postgres.models import Base
 from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
 from apx.core.app.ingest import IngestedPiece, IngestionResult
+from apx.core.domain.identity import content_hash, piece_id
 
 A_TENANT, A_MATTER, A_SCOPE = "cabinet-a", "m-a", "wall-a"
 B_TENANT, B_MATTER, B_SCOPE = "cabinet-b", "m-b", "wall-b"
@@ -130,3 +131,38 @@ def test_an_unknown_tenant_sees_no_matters_and_no_search(store: SqlStore) -> Non
 def test_no_scope_yields_an_empty_world(store: SqlStore) -> None:
     assert store.matters(A_TENANT, set()) == []
     assert store.search(A_TENANT, set(), _SHARED).total == 0
+
+
+# ── the review's HIGH: a same-named matter across tenants must NOT collide ──
+
+
+def test_two_tenants_may_hold_a_same_named_matter_with_the_same_file() -> None:
+    # Matter names are tenant-local (AD-12; AD-43 chains per (tenant, matter)). Two firms
+    # both name a matter "dupont" and ingest the SAME file — must be two distinct, isolated
+    # pièces, never one firm's ingest overwriting or seizing the other's. With ids computed
+    # from (tenant, content, matter), a leak of the tenant term would make both ids equal
+    # and B's save would clobber A's row (in_corpus would drop to 0/wrong owner).
+    engine = create_engine("sqlite://", future=True)
+    Base.metadata.create_all(engine)
+    s = SqlStore(sessionmaker(bind=engine, future=True))
+    text = "un contrat de bail identique mot pour mot"
+    ch = content_hash(text.encode())
+
+    def ingested(tenant: str) -> IngestedPiece:
+        return IngestedPiece(
+            id=piece_id(tenant, ch, "dupont"), matter="dupont", tenant=tenant,
+            content_hash=ch, text_key=ch, provenance_path=f"/{tenant}/dupont.pdf",
+            custodian="c", extraction_method="text", extractor_version="v",
+            schema_version="s", ingestion_timestamp=datetime.now(UTC),
+            full_text=text, text_version="v",
+        )
+
+    s.save(IngestionResult(pieces=[ingested(A_TENANT)]), scope=A_SCOPE, actor="a")
+    s.save(IngestionResult(pieces=[ingested(B_TENANT)]), scope=B_SCOPE, actor="b")
+
+    # both firms still own "dupont", each with exactly its own one pièce — no overwrite,
+    # and A's scope binding was not silently reassigned to B's.
+    assert s.inventory("dupont", A_TENANT, {A_SCOPE}).in_corpus == 1
+    assert s.inventory("dupont", B_TENANT, {B_SCOPE}).in_corpus == 1
+    assert [m.matter for m in s.matters(A_TENANT, {A_SCOPE})] == ["dupont"]
+    assert [m.matter for m in s.matters(B_TENANT, {B_SCOPE})] == ["dupont"]

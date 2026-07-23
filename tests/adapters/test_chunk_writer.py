@@ -39,7 +39,7 @@ def sf() -> sessionmaker[Session]:
 
 def _seed(sf: sessionmaker[Session]) -> str:
     """A matter behind a wall, and one piece in it — the ground a chunk needs."""
-    pid = piece_id("h", "pole-penal")
+    pid = piece_id("cabinet", "h", "pole-penal")
     with sf() as s, s.begin():
         s.add(MatterScope(matter="pole-penal", tenant="cabinet", scope=_SCOPE))
         s.add(Piece(
@@ -122,17 +122,20 @@ def test_rejects_a_source_piece_id_not_matching_its_provenance(sf: sessionmaker[
     _seed(sf)
     # a pièce id derived from ANOTHER matter — piece_id encodes the matter (AD-40), so a
     # chunk carrying it would cross the Chinese wall. The single seam refuses it.
-    foreign_pid = piece_id("h", "pole-assurance")
+    foreign_pid = piece_id("cabinet", "h", "pole-assurance")
     with pytest.raises(PieceIdentityMismatch):
         _store(sf).write_chunk(_payload(foreign_pid), rbac_scope=_SCOPE)
     assert _chunk_count(sf) == 0
 
 
 def test_rejects_a_scope_from_another_tenant(sf: sessionmaker[Session]) -> None:
-    pid = _seed(sf)
+    _seed(sf)
+    # a payload consistent for ANOTHER tenant (its own tenant-qualified piece id); that
+    # tenant holds no matter_scope row here, so the write is refused at the scope check
+    # (tenant-first, fail closed — AD-12).
+    foreign = _payload(piece_id("autre-cabinet", "h", "pole-penal"), tenant="autre-cabinet")
     with pytest.raises(UnauthorizedScope):
-        # right scope string, wrong tenant — fail closed (AD-12, tenant-first)
-        _store(sf).write_chunk(_payload(pid, tenant="autre-cabinet"), rbac_scope=_SCOPE)
+        _store(sf).write_chunk(foreign, rbac_scope=_SCOPE)
     assert _chunk_count(sf) == 0
 
 

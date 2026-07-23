@@ -4,7 +4,7 @@ baseline_commit: 576796d
 
 # Story 1.4: Tenant isolation, enforced at the boundary
 
-Status: review
+Status: done
 
 ## Story
 
@@ -101,6 +101,20 @@ Claude Opus 4.8 (1M context) — Claude Code dev-story workflow.
 | Date | Change |
 |---|---|
 | 2026-07-23 | Implemented story 1.4 — tenant isolation: adversarial cross-tenant suite (20 assertions across every read surface + fail-closed), two structural checks (tenant NOT NULL on owned tables; scope-never-without-tenant), README section. No leak found — reads were already tenant-first — so no store code changed. 214 passed / 8 skipped, checks + ruff green. Status → review. |
+| 2026-07-23 | Addressed the adversarial code review: fixed 1 High (tenant-qualified the matter/piece identity — see below) + defense-in-depth + a third structural check + a collision test. 217 passed / 8 skipped; 8 checks green. Status → done. |
+
+## Senior Developer Review (AI)
+
+**Date:** 2026-07-23 · **Reviewers:** Blind Hunter + Edge-Case Hunter + Acceptance Auditor (parallel, blind, same model tier) · **Outcome:** CHANGES-REQUESTED → resolved.
+
+### Findings and resolutions
+
+- [x] **[High] The matter/piece identity was not tenant-qualified — a silent cross-tenant collision the suite structurally missed.** `matter_scope` PK was `matter` alone and `piece_id = f(content, matter)` (no tenant), while the architecture makes a *matter* tenant-owned (spine `TENANT ||--o{ MATTER`; AD-43 chains per `(tenant, matter)`). Two firms both naming a matter "dupont": `save`'s `merge(MatterScope(matter="dupont", …))` silently overwrote one firm's scope binding (the other is locked out / seized); with a shared file, `merge(Piece(...))` overwrote the piece row cross-tenant, and `labels()`/`sample_discards()` joined `Piece` without `Piece.tenant`, so B's text could surface into A's view. **My adversarial suite used distinct matter names (`m-a`/`m-b`), so it could not exercise this.** **Fixed:** `piece_id = f(tenant, content, matter)`; `matter_scope` PK → `(tenant, matter)`; `Piece` unique → `(tenant, matter, content_hash)`; migration `0010`; the `labels`/`sample_discards` joins now carry `Piece.tenant` (defense-in-depth); a new structural check `identity_is_tenant_qualified` guards it; and a collision test (two tenants, same matter name, same file → two distinct isolated pièces, no overwrite). The fix **aligns** the code with AD-43/AD-12 — not a deviation; it re-touched 1.3's frozen `piece_id` as a correction.
+- [x] **[Med] The structural checks proved signature/DDL, not that tenant is used in the query.** `scoped_access_carries_tenant` matches the exact param `scopes` and scans only the store dir; `tenant_not_null` is a hand-maintained allowlist. **Partially addressed:** added `identity_is_tenant_qualified` (the concrete regression that mattered). A general "prove tenant is in the predicate" needs dataflow analysis beyond a static check — the adversarial suite is the real proof; documented as a known limitation, and subsumed by the deferred AD-14 single-read-path + outside-read grep.
+- [x] **[Low] `identity()`/`scopes_for()` are identifier-only reads (AC2's "no identifier-only read" literally contradicted).** Safe today (uuid4 ids, tenant-bound); the session-resolution primitives are intentionally `user_id`-keyed. Noted; a documented allowlist / the AD-14 unit will formalise it.
+- [x] **[Low] Some denial assertions were vacuous w.r.t. the tenant term** (the scope string did the separating). The `tenant-applied-before-scope` and `unknown-tenant` tests were already non-vacuous; the new same-matter collision test is a direct tenant-term proof.
+
+**Post-fix verification:** `ruff` clean · `python -m apx.checks` **8/8** · `pytest` **217 passed, 8 skipped** · migration head `0010`.
 
 ## Open Questions for the human
 

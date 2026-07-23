@@ -31,6 +31,7 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # story 1.4 — tenant isolation at the boundary (AD-12).
     tenant_isolation.tenant_not_null_on_owned_tables,
     tenant_isolation.scoped_access_carries_tenant,
+    tenant_isolation.identity_is_tenant_qualified,
 ]
 
 

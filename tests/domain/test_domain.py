@@ -13,25 +13,30 @@ def test_content_hash_is_stable() -> None:
     assert content_hash(b"hello") != content_hash(b"world")
 
 
-def test_piece_id_is_deterministic_and_matter_scoped() -> None:
+def test_piece_id_is_deterministic_and_tenant_matter_scoped() -> None:
     h = content_hash(b"the same document")
-    # Same content, same matter -> same id (stable across runs/processes).
-    assert piece_id(h, "matter-A") == piece_id(h, "matter-A")
-    # Same content, DIFFERENT matter -> DIFFERENT id (confidentiality follows the matter, AD-40).
-    assert piece_id(h, "matter-A") != piece_id(h, "matter-B")
+    # Same tenant, content, matter -> same id (stable across runs/processes).
+    assert piece_id("t", h, "matter-A") == piece_id("t", h, "matter-A")
+    # Same content, DIFFERENT matter -> DIFFERENT id (confidentiality follows the matter).
+    assert piece_id("t", h, "matter-A") != piece_id("t", h, "matter-B")
+    # Same content and matter, DIFFERENT tenant -> DIFFERENT id (AD-12: a matter is
+    # tenant-local, so two firms' same-named matter + same file are two distinct pieces).
+    assert piece_id("t1", h, "matter-A") != piece_id("t2", h, "matter-A")
 
 
 def test_piece_id_ignores_provenance_path() -> None:
-    # Identity is (content, matter); the path a file arrived by is not part of it.
+    # Identity is (tenant, content, matter); the path a file arrived by is not part of it.
     h = content_hash(b"same bytes")
-    assert piece_id(h, "m") == piece_id(h, "m")  # no path input at all
+    assert piece_id("t", h, "m") == piece_id("t", h, "m")  # no path input at all
 
 
-def test_piece_id_requires_content_and_matter() -> None:
+def test_piece_id_requires_tenant_content_and_matter() -> None:
     with pytest.raises(ValueError):
-        piece_id("", "m")
+        piece_id("", "h", "m")  # empty tenant
     with pytest.raises(ValueError):
-        piece_id("abc", "")
+        piece_id("t", "", "m")  # empty content
+    with pytest.raises(ValueError):
+        piece_id("t", "abc", "")  # empty matter
 
 
 def test_inventory_invariant_holds_when_terms_sum() -> None:

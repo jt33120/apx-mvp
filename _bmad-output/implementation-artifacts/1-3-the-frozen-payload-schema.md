@@ -117,6 +117,7 @@ Claude Opus 4.8 (1M context) — Claude Code dev-story workflow.
 |---|---|
 | 2026-07-23 | Implemented story 1.3 — the frozen payload schema: `chunk` table + one `write_chunk` writer (completeness / scope / version guards), `PayloadRecord` domain + `chunk_id`, `ChunkWriter` port, `piece.text_identity`, migration `0009`, four structural checks with failure fixtures, fitness `schema` stage. 182 passed / 8 skipped, checks + ruff green. Status → review. |
 | 2026-07-23 | Addressed the adversarial code review (three-reviewer pass): fixed 1 High + 5 Med findings; re-verified green (189 passed / 8 skipped). Status → done. |
+| 2026-07-23 | Identity correction (during the **story 1.4** review): `piece_id` is now tenant-qualified — `f(tenant, content, matter)` — and the `Piece` unique key is `(tenant, matter, content_hash)` (migration 0010), because a *matter* is tenant-owned (AD-43; spine `TENANT ||--o{ MATTER`). This reopened the 1.3 "frozen" identity as an architecture-aligning correction — see story 1.4's Senior Developer Review. |
 
 ## Senior Developer Review (AI)
 

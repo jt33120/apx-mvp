@@ -47,7 +47,7 @@ def sf(engine: Engine) -> sessionmaker[Session]:
 
 
 def _seed(sf: sessionmaker[Session]) -> str:
-    pid = piece_id("h", "pole-penal")
+    pid = piece_id("cabinet", "h", "pole-penal")
     with sf() as s, s.begin():
         s.add(MatterScope(matter="pole-penal", tenant="cabinet", scope=_SCOPE))
         s.add(Piece(
@@ -103,4 +103,4 @@ def test_a_chunk_for_a_missing_piece_is_refused_by_the_fk(sf: sessionmaker[Sessi
         s.add(MatterScope(matter="pole-penal", tenant="cabinet", scope=_SCOPE))
     store = ChunkStore(sf, schema_version=_SCHEMA, chunking_config_version=_CFG)
     with pytest.raises(IntegrityError):
-        store.write_chunk(_payload(piece_id("h", "pole-penal")), rbac_scope=_SCOPE)
+        store.write_chunk(_payload(piece_id("cabinet", "h", "pole-penal")), rbac_scope=_SCOPE)
