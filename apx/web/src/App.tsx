@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import {
   ingestUpload, judgeMatter, listMatters, login, logout, me,
-  readAudit, readLabels, readTriage, searchCorpus,
+  readAudit, readLabels, readTriage, recallReview, recallSample, searchCorpus,
   type AuditTrail, type Identity, type IngestResponse, type Labels,
-  type MatterSummary, type SearchResults, type Triage,
+  type MatterSummary, type RecallBound, type RecallSample, type SearchResults, type Triage,
 } from "./api";
 
 /** Owned auth gate (AD-15): the session — not the request — carries the tenant and
@@ -292,6 +292,9 @@ function MatterRow({ m }: { m: MatterSummary }) {
             {triage && <TriageView t={triage} />}
             <Judging question={question} setQuestion={setQuestion} judging={judging}
               onJudge={judge} labels={labels} />
+            {labels && labels.discarded > 0 && (
+              <RecallPanel matter={m.matter} discarded={labels.discarded} />
+            )}
             {trail && <Journal trail={trail} />}
           </td>
         </tr>
@@ -354,6 +357,80 @@ function Judging({ question, setQuestion, judging, onJudge, labels }: {
             ))}
           </ul>
         </>
+      )}
+    </div>
+  );
+}
+
+/** The recall guarantee, from the UI: sample the discard pile, mark any wrongly
+ *  discarded, and get the provable bound ("at most X% discarded in error, at 95%"). */
+function RecallPanel({ matter, discarded }: { matter: string; discarded: number }) {
+  const [sample, setSample] = useState<RecallSample | null>(null);
+  const [marks, setMarks] = useState<Record<string, boolean>>({});
+  const [bound, setBound] = useState<RecallBound | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  async function draw() {
+    setBusy(true);
+    setErr(null);
+    setBound(null);
+    try {
+      setSample(await recallSample(matter, Math.min(30, discarded)));
+      setMarks({});
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function compute() {
+    if (!sample) return;
+    setBusy(true);
+    setErr(null);
+    try {
+      const verdicts = sample.sample.map((s) => ({ piece_id: s.piece_id, relevant: !!marks[s.piece_id] }));
+      setBound(await recallReview(matter, verdicts));
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div style={{ marginBottom: ".9rem", borderTop: "1px dashed #ddd", paddingTop: ".6rem" }}>
+      <button onClick={draw} disabled={busy} style={{ padding: ".3rem .7rem" }}>
+        Vérifier le rappel ({discarded} écartées)
+      </button>
+      {err && <p role="alert" style={{ color: "#a3161c", margin: ".4rem 0" }}>{err}</p>}
+      {sample && (
+        <div style={{ marginTop: ".5rem" }}>
+          <p style={{ fontSize: ".85rem", color: "#555", margin: "0 0 .3rem" }}>
+            Cochez les pièces écartées <strong>à tort</strong> (population {sample.population},
+            échantillon {sample.sample.length}) :
+          </p>
+          {sample.sample.map((s) => (
+            <label key={s.piece_id}
+              style={{ display: "block", fontSize: ".85rem", marginBottom: ".2rem", cursor: "pointer" }}>
+              <input type="checkbox" checked={!!marks[s.piece_id]}
+                onChange={(e) => setMarks((m) => ({ ...m, [s.piece_id]: e.target.checked }))} />{" "}
+              <span style={{ fontFamily: "monospace" }}>{s.provenance}</span>{" "}
+              <span style={{ color: "#777" }}>— {s.excerpt}</span>
+            </label>
+          ))}
+          <button onClick={compute} disabled={busy} style={{ padding: ".3rem .7rem", marginTop: ".3rem" }}>
+            {busy ? "Calcul…" : "Calculer la garantie"}
+          </button>
+        </div>
+      )}
+      {bound && (
+        <p style={{ marginTop: ".5rem", fontSize: ".9rem", color: "#2f6f4f" }}>
+          🛡 Relu {bound.sample_size}/{bound.population} · {bound.relevant_found} à tort → au plus{" "}
+          <strong>{bound.count_upper}</strong> pièces ({(bound.prevalence_upper * 100).toFixed(1)}%)
+          écartées à tort, à {Math.round(bound.confidence * 100)}%.
+        </p>
       )}
     </div>
   );

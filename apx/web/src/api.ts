@@ -16,6 +16,12 @@ export type JudgeResult = { judged: number; relevant: number; uncertain: number;
 export type SearchHit = { matter: string; provenance: string; snippet: string };
 export type SearchResults = { query: string; total: number; returned: number; hits: SearchHit[] };
 export type Identity = { actor: string; tenant: string; scopes: string[] };
+export type SampledDiscard = { piece_id: string; provenance: string; excerpt: string };
+export type RecallSample = { population: number; sample: SampledDiscard[] };
+export type RecallBound = {
+  population: number; sample_size: number; relevant_found: number;
+  confidence: number; count_upper: number; prevalence_upper: number;
+};
 
 // The session cookie (owned auth) carries tenant + scopes; the client never sends them.
 async function detail(res: Response): Promise<string> {
@@ -95,6 +101,27 @@ export async function readAudit(matter: string): Promise<AuditTrail> {
 // Deterministic exhaustive search, scope-constrained server-side (the wall pre-filters it).
 export async function searchCorpus(q: string): Promise<SearchResults> {
   const res = await fetch(`/api/search?${new URLSearchParams({ q })}`);
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+// Draw a random sample of a matter's discard pile to review (the recall guarantee).
+export async function recallSample(matter: string, n = 30): Promise<RecallSample> {
+  const params = new URLSearchParams({ n: String(n) });
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/recall/sample?${params}`);
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+// Record the reviewed sample and get the recall bound (persisted + audited server-side).
+export async function recallReview(
+  matter: string, verdicts: { piece_id: string; relevant: boolean }[], confidence = 0.95,
+): Promise<RecallBound> {
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/recall/review`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ verdicts, confidence }),
+  });
   if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }
