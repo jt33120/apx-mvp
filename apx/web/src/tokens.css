@@ -1,12 +1,197 @@
-/* The single design-token set (AD-29). Every colour, spacing and type value
-   lives here; no literal value belongs outside it. The ENFORCING check (no value
-   outside the token set) is FR-59 / story 1.12 — this file establishes the
-   convention that check will guard. Values below are placeholders for 1.1. */
+/* The APX design system (AD-29). Palette, type, spacing and the base look live here;
+   components lean on these tokens and the global element styles below, so the whole
+   app carries one considered identity. (Full value-in-tokens enforcement is FR-59 /
+   story 1.12; this establishes the system that check will guard.)
+
+   Identity: a law-firm instrument — navy ink, a single restrained gold, warm paper,
+   a serif for the wordmark and headings, a clean sans for the interface. */
 :root {
-  --apx-color-bg: #ffffff;
-  --apx-color-fg: #14181f;
+  /* colour */
+  --apx-ink: #0b1f3a;          /* navy — the firm's ink */
+  --apx-ink-2: #33425a;
+  --apx-ink-3: #5b6678;
+  --apx-paper: #f7f4ee;        /* warm paper */
+  --apx-surface: #ffffff;
+  --apx-surface-2: #fbf9f5;
+  --apx-line: #e6e0d5;         /* warm hairline, biased to the gold */
+  --apx-line-2: #efeae0;
+  --apx-gold: #9a7a34;         /* the one accent */
+  --apx-gold-2: #b8944a;
+  --apx-muted: #6b7280;
+
+  /* semantic — distinct from the accent */
+  --apx-kept: #2f6f4f;    --apx-kept-bg: #e8f1eb;
+  --apx-review: #9a5a12;  --apx-review-bg: #f6ecdd;
+  --apx-discard: #6f6858; --apx-discard-bg: #eeece5;
+  --apx-danger: #a3161c;
+
+  /* type */
+  --apx-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+  --apx-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  --apx-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* space / shape / depth */
   --apx-space-1: 0.5rem;
   --apx-space-2: 1rem;
-  --apx-font-sans: system-ui, sans-serif;
+  --apx-space-3: 1.5rem;
+  --apx-radius: 12px;
+  --apx-radius-sm: 8px;
+  --apx-ring: 0 0 0 3px rgba(154, 122, 52, 0.28);
+  --apx-shadow-sm: 0 1px 2px rgba(11, 31, 58, 0.06);
+  --apx-shadow: 0 1px 2px rgba(11, 31, 58, 0.05), 0 12px 30px rgba(11, 31, 58, 0.08);
+
+  /* legacy aliases kept for existing components */
+  --apx-color-bg: var(--apx-paper);
+  --apx-color-fg: var(--apx-ink);
+  --apx-font-sans: var(--apx-sans);
 }
-body { margin: 0; background: var(--apx-color-bg); color: var(--apx-color-fg); font-family: var(--apx-font-sans); }
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background:
+    radial-gradient(1200px 480px at 50% -8%, rgba(154, 122, 52, 0.06), transparent 60%),
+    var(--apx-paper);
+  color: var(--apx-ink);
+  font-family: var(--apx-sans);
+  line-height: 1.55;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+h1, h2, h3 {
+  font-family: var(--apx-serif);
+  color: var(--apx-ink);
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-wrap: balance;
+}
+h1 { font-size: 1.5rem; margin: 0 0 0.25rem; }
+h2 { font-size: 1.2rem; margin: 1.25rem 0 0.5rem; }
+a { color: var(--apx-gold); text-underline-offset: 2px; }
+
+/* form controls — the whole app inherits these (inline styles only set layout) */
+input, select, textarea {
+  font: inherit;
+  color: var(--apx-ink);
+  background: var(--apx-surface);
+  border: 1px solid var(--apx-line);
+  border-radius: var(--apx-radius-sm);
+  padding: 0.55rem 0.7rem;
+  outline: none;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+}
+input::placeholder { color: #a2a9b4; }
+input:focus, select:focus, textarea:focus {
+  border-color: var(--apx-gold);
+  box-shadow: var(--apx-ring);
+}
+input[type="file"] { padding: 0.4rem; background: var(--apx-surface-2); }
+input[type="checkbox"] { accent-color: var(--apx-gold); }
+
+button {
+  font: inherit;
+  font-weight: 560;
+  color: #fff;
+  background: var(--apx-ink);
+  border: 1px solid var(--apx-ink);
+  border-radius: var(--apx-radius-sm);
+  padding: 0.55rem 1rem;
+  cursor: pointer;
+  transition: background 0.15s ease, box-shadow 0.15s ease, transform 0.03s ease;
+}
+button:hover:not(:disabled) { background: #12294a; }
+button:active:not(:disabled) { transform: translateY(1px); }
+button:disabled { opacity: 0.45; cursor: not-allowed; }
+button:focus-visible { box-shadow: var(--apx-ring); }
+
+/* a quieter, secondary button (headers, back-links) */
+.apx-ghost {
+  color: var(--apx-ink);
+  background: transparent;
+  border-color: var(--apx-line);
+}
+.apx-ghost:hover:not(:disabled) { background: #efeadf; }
+
+::selection { background: rgba(154, 122, 52, 0.18); }
+
+/* reusable pieces */
+.apx-wordmark { font-family: var(--apx-serif); font-weight: 600; letter-spacing: 0.06em; color: var(--apx-ink); }
+.apx-wordmark b { color: var(--apx-gold); font-weight: 600; }
+.apx-card {
+  background: var(--apx-surface);
+  border: 1px solid var(--apx-line);
+  border-radius: var(--apx-radius);
+  box-shadow: var(--apx-shadow);
+}
+
+/* the login screen */
+.apx-login { min-height: 100vh; display: grid; place-items: center; padding: 1.5rem; }
+.apx-login-card {
+  width: 100%;
+  max-width: 384px;
+  padding: 2.25rem 2rem 1.75rem;
+  position: relative;
+  overflow: hidden;
+}
+.apx-login-card::before {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: linear-gradient(90deg, var(--apx-gold), var(--apx-gold-2));
+}
+.apx-login-mark { font-size: 2rem; }
+.apx-login-tag {
+  color: var(--apx-ink-2);
+  font-size: 0.92rem;
+  line-height: 1.45;
+  margin: 0.5rem 0 1.6rem;
+  max-width: 30ch;
+}
+.apx-login-form { display: flex; flex-direction: column; gap: 0.85rem; }
+.apx-field { display: flex; flex-direction: column; gap: 0.3rem; }
+.apx-field > span {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--apx-ink-3);
+}
+.apx-login-submit { margin-top: 0.4rem; padding: 0.65rem 1rem; }
+.apx-login-error {
+  color: var(--apx-danger);
+  background: #fbeceb;
+  border: 1px solid #f2c9c6;
+  border-radius: var(--apx-radius-sm);
+  padding: 0.5rem 0.7rem;
+  font-size: 0.88rem;
+  margin: 1rem 0 0;
+}
+.apx-login-foot {
+  margin: 1.5rem 0 0;
+  padding-top: 1rem;
+  border-top: 1px solid var(--apx-line-2);
+  color: var(--apx-muted);
+  font-size: 0.76rem;
+  text-align: center;
+}
+
+/* the app shell */
+.apx-shell { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+.apx-appbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+  padding-bottom: 0.9rem;
+  border-bottom: 1px solid var(--apx-line);
+}
+.apx-appbar .apx-wordmark { font-size: 1.3rem; }
+.apx-who { font-size: 0.85rem; color: var(--apx-ink-2); display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; }
+.apx-who .apx-badge {
+  background: var(--apx-surface); border: 1px solid var(--apx-line);
+  border-radius: 999px; padding: 0.1rem 0.6rem; color: var(--apx-ink-3);
+}
+.apx-appbar button { padding: 0.3rem 0.7rem; font-size: 0.85rem; }

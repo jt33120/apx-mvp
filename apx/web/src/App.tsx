@@ -54,24 +54,37 @@ function Login({ onLogin }: { onLogin: (id: Identity) => void }) {
     }
   }
 
-  const box = { padding: ".5rem", width: "100%", boxSizing: "border-box" as const };
   return (
-    <main style={{ padding: "3rem 1.25rem", maxWidth: 360, margin: "0 auto" }}>
-      <h1>A P<span style={{ color: "#9a7a34" }}>X</span></h1>
-      <p style={{ color: "#555", fontSize: ".9rem" }}>Accès au cabinet — identifiez-vous.</p>
-      <form onSubmit={submit} style={{ display: "flex", flexDirection: "column", gap: ".6rem" }}>
-        <input aria-label="Cabinet" placeholder="Cabinet" value={tenant}
-          onChange={(e) => setTenant(e.target.value)} style={box} />
-        <input aria-label="Courriel" placeholder="Courriel" type="email" value={email}
-          onChange={(e) => setEmail(e.target.value)} style={box} />
-        <input aria-label="Mot de passe" placeholder="Mot de passe" type="password" value={password}
-          onChange={(e) => setPassword(e.target.value)} style={box} />
-        <button type="submit" disabled={busy || !email || !password} style={{ padding: ".5rem 1rem" }}>
-          {busy ? "Connexion…" : "Se connecter"}
-        </button>
-      </form>
-      {err && <p role="alert" style={{ color: "#a3161c" }}>{err}</p>}
-    </main>
+    <div className="apx-login">
+      <div className="apx-card apx-login-card">
+        <div className="apx-wordmark apx-login-mark">A&nbsp;P<b>X</b></div>
+        <p className="apx-login-tag">
+          Le triage documentaire des cabinets — confidentiel, à l'échelle, et prouvable.
+        </p>
+        <form onSubmit={submit} className="apx-login-form">
+          <label className="apx-field">
+            <span>Cabinet</span>
+            <input aria-label="Cabinet" placeholder="cabinet" value={tenant}
+              onChange={(e) => setTenant(e.target.value)} autoComplete="organization" />
+          </label>
+          <label className="apx-field">
+            <span>Courriel</span>
+            <input aria-label="Courriel" type="email" placeholder="vous@cabinet.fr" value={email}
+              onChange={(e) => setEmail(e.target.value)} autoComplete="username" />
+          </label>
+          <label className="apx-field">
+            <span>Mot de passe</span>
+            <input aria-label="Mot de passe" type="password" placeholder="••••••••" value={password}
+              onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" />
+          </label>
+          <button type="submit" className="apx-login-submit" disabled={busy || !email || !password}>
+            {busy ? "Connexion…" : "Se connecter"}
+          </button>
+        </form>
+        {err && <p className="apx-login-error" role="alert">{err}</p>}
+        <p className="apx-login-foot">Hébergé en Europe · zéro rétention · accès cloisonné par affaire</p>
+      </div>
+    </div>
   );
 }
 
@@ -119,24 +132,22 @@ function Console({ identity, onLogout, onCockpit }: {
 
   const box = { padding: ".5rem" } as const;
   return (
-    <main style={{ padding: "var(--apx-space-2)", maxWidth: 760, margin: "0 auto" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
-        gap: "1rem", flexWrap: "wrap", borderBottom: "1px solid #e7e2d8", paddingBottom: ".6rem" }}>
-        <h1 style={{ margin: 0 }}>APX — Inventaire d'un dossier</h1>
-        <div style={{ fontSize: ".85rem", color: "#555" }}>
-          {identity.actor} · {identity.scopes.join(", ") || "aucun périmètre"}{" "}
-          {onCockpit && (
-            <button onClick={onCockpit} style={{ marginLeft: ".5rem", padding: ".2rem .6rem" }}>
-              Cockpit
-            </button>
-          )}
-          <button onClick={onLogout} style={{ marginLeft: ".5rem", padding: ".2rem .6rem" }}>
-            Déconnexion
-          </button>
+    <main className="apx-shell">
+      <header className="apx-appbar">
+        <div className="apx-wordmark">
+          A&nbsp;P<b>X</b>{" "}
+          <span style={{ fontFamily: "var(--apx-sans)", fontSize: ".68rem", letterSpacing: ".14em",
+            textTransform: "uppercase", color: "var(--apx-ink-3)", marginLeft: ".3rem" }}>Triage</span>
+        </div>
+        <div className="apx-who">
+          <span className="apx-badge">{identity.actor}</span>
+          <span>{identity.scopes.join(" · ") || "aucun périmètre"}</span>
+          {onCockpit && <button className="apx-ghost" onClick={onCockpit}>Cockpit</button>}
+          <button className="apx-ghost" onClick={onLogout}>Déconnexion</button>
         </div>
       </header>
 
-      <p style={{ color: "#555" }}>
+      <p style={{ color: "var(--apx-ink-2)", maxWidth: "58ch" }}>
         Déposez un dossier. Vous verrez ce qui est entré, ce qui a échoué, ce qui a été écarté —
         rien perdu en silence. Vous ne voyez que les dossiers de votre périmètre.
       </p>
@@ -240,13 +251,16 @@ function Cockpit({ onBack, onLogout }: { onBack: () => void; onLogout: () => voi
 
   const box = { padding: ".4rem" } as const;
   return (
-    <main style={{ padding: "var(--apx-space-2)", maxWidth: 760, margin: "0 auto" }}>
-      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
-        borderBottom: "1px solid #e7e2d8", paddingBottom: ".6rem" }}>
-        <h1 style={{ margin: 0 }}>Cockpit — utilisateurs &amp; périmètres</h1>
-        <div style={{ fontSize: ".85rem" }}>
-          <button onClick={onBack} style={{ padding: ".2rem .6rem" }}>← Console</button>{" "}
-          <button onClick={onLogout} style={{ padding: ".2rem .6rem" }}>Déconnexion</button>
+    <main className="apx-shell">
+      <header className="apx-appbar">
+        <div className="apx-wordmark">
+          A&nbsp;P<b>X</b>{" "}
+          <span style={{ fontFamily: "var(--apx-sans)", fontSize: ".68rem", letterSpacing: ".14em",
+            textTransform: "uppercase", color: "var(--apx-ink-3)", marginLeft: ".3rem" }}>Cockpit</span>
+        </div>
+        <div className="apx-who">
+          <button className="apx-ghost" onClick={onBack}>← Console</button>
+          <button className="apx-ghost" onClick={onLogout}>Déconnexion</button>
         </div>
       </header>
 
