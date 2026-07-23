@@ -192,6 +192,36 @@ class SearchResultsOut(BaseModel):
     hits: list[SearchHitOut]
 
 
+class SampledDiscardOut(BaseModel):
+    piece_id: str
+    provenance: str
+    excerpt: str
+
+
+class RecallSampleOut(BaseModel):
+    population: int          # the whole discard pile
+    sample: list[SampledDiscardOut]
+
+
+class RecallVerdictIn(BaseModel):
+    piece_id: str
+    relevant: bool           # true = the piece was actually relevant (a false discard)
+
+
+class RecallReviewIn(BaseModel):
+    verdicts: list[RecallVerdictIn]
+    confidence: float = 0.95
+
+
+class RecallBoundOut(BaseModel):
+    population: int
+    sample_size: int
+    relevant_found: int
+    confidence: float
+    count_upper: int         # at most this many of the pile were wrongly discarded
+    prevalence_upper: float
+
+
 class MatterOut(BaseModel):
     matter: str
     scope: str
@@ -456,6 +486,50 @@ def read_labels(matter: str, ident: Identity = Depends(current_identity)) -> Lab
             LabelledPieceOut(provenance=p.provenance, label=p.label, rationale=p.rationale)
             for p in summary.pieces
         ],
+    )
+
+
+@app.get("/api/matters/{matter}/recall/sample", response_model=RecallSampleOut)
+def recall_sample(
+    matter: str, n: int = 30, ident: Identity = Depends(current_identity)
+) -> RecallSampleOut:
+    """Draw a random sample of the matter's discard pile to review (403 outside scope).
+    A sound recall bound needs a random sample, so the server draws it."""
+    store = _require_store()
+    try:
+        result = store.sample_discards(matter, ident.tenant, ident.scopes, max(1, min(n, 500)))
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    return RecallSampleOut(
+        population=result.population,
+        sample=[
+            SampledDiscardOut(piece_id=s.piece_id, provenance=s.provenance, excerpt=s.excerpt)
+            for s in result.sample
+        ],
+    )
+
+
+@app.post("/api/matters/{matter}/recall/review", response_model=RecallBoundOut)
+def recall_review(
+    matter: str, req: RecallReviewIn, ident: Identity = Depends(current_identity)
+) -> RecallBoundOut:
+    """Record a reviewed sample of the discard pile and return the recall bound: with
+    confidence c, at most `count_upper` of the discards were wrongly discarded. The act
+    is audited (403 outside scope; 400 if a reviewed piece is not discarded)."""
+    store = _require_store()
+    verdicts = {v.piece_id: v.relevant for v in req.verdicts}
+    try:
+        result = store.record_recall_review(
+            matter, ident.tenant, ident.scopes, verdicts, ident.actor, confidence=req.confidence
+        )
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RecallBoundOut(
+        population=result.population, sample_size=result.sample_size,
+        relevant_found=result.relevant_found, confidence=result.confidence,
+        count_upper=result.count_upper, prevalence_upper=result.prevalence_upper,
     )
 
 

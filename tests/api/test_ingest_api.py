@@ -214,6 +214,34 @@ def test_judge_labels_and_scope_over_http(tmp_path: Path, monkeypatch) -> None:
         assert c.post("/api/matters/m-b/judge", json={"question": "x"}).status_code == 403
 
 
+def test_recall_sample_and_bound_over_http(tmp_path: Path, monkeypatch) -> None:
+    from apx.adapters.extraction.files import FileExtractor
+    from apx.core.app.ingest import ingest_folder
+    from apx.core.domain.triage import Label, PieceLabel, TriageOutcome
+
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    mdir = tmp_path / "m"  # NOT tmp_path itself — the sqlite file lives there
+    mdir.mkdir()
+    for i in range(8):
+        (mdir / f"p{i}.txt").write_text(f"pièce {i}", encoding="utf-8")
+    result = ingest_folder(mdir, matter="m", tenant="t", extractor=FileExtractor())
+    store.save(result, scope="wall-A")
+    reps = store.representatives("m", "t", {"wall-A"})
+    labels = tuple(PieceLabel(pid, Label.DISCARD, "x") for pid, _ in reps)
+    store.save_labels("m", "t", {"wall-A"}, TriageOutcome(labels), "criteria", actor="seed")
+
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        s = c.get("/api/matters/m/recall/sample", params={"n": 4}).json()
+        assert s["population"] == 8 and len(s["sample"]) == 4
+        verdicts = [{"piece_id": sd["piece_id"], "relevant": False} for sd in s["sample"]]
+        b = c.post("/api/matters/m/recall/review",
+                   json={"verdicts": verdicts, "confidence": 0.95}).json()
+        assert b["population"] == 8 and b["sample_size"] == 4 and b["relevant_found"] == 0
+        assert 0 < b["prevalence_upper"] <= 1
+
+
 def test_audit_trail_over_http(tmp_path: Path, monkeypatch) -> None:
     store = _prepare(tmp_path, monkeypatch)
     store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})

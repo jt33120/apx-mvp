@@ -146,3 +146,25 @@ class UserScope(Base):
 
     user_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     scope: Mapped[str] = mapped_column(String, primary_key=True)
+
+
+class RecallReview(Base):
+    """A recorded recall check on a matter's discard pile (the FR-… guarantee). A
+    sample of the discards was reviewed; this stores the finite-population upper
+    confidence bound computed from it — evidence that discarding at scale did not
+    silently lose the decisive piece. The act is also on the audit trail.
+    """
+
+    __tablename__ = "recall_review"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    population: Mapped[int] = mapped_column(nullable=False)       # discards at review time
+    sample_size: Mapped[int] = mapped_column(nullable=False)      # how many were reviewed
+    relevant_found: Mapped[int] = mapped_column(nullable=False)   # false discards in the sample
+    confidence: Mapped[float] = mapped_column(nullable=False)
+    count_upper: Mapped[int] = mapped_column(nullable=False)      # <= this many wrongly discarded
+    prevalence_upper: Mapped[float] = mapped_column(nullable=False)
+    reviewer: Mapped[str] = mapped_column(String, nullable=False)
+    reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

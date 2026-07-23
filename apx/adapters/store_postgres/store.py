@@ -14,6 +14,7 @@ check are stories 1.3 / 3.3; this slice carries the working pre-filter.
 from __future__ import annotations
 
 import hashlib
+import random
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -27,11 +28,13 @@ from apx.adapters.store_postgres.models import (
     LabelRecord,
     MatterScope,
     Piece,
+    RecallReview,
     User,
     UserScope,
 )
 from apx.core.app.ingest import IngestionResult
 from apx.core.domain.auth import hash_password, verify_password
+from apx.core.domain.confidence import prevalence_upper_bound
 from apx.core.domain.dedup import cluster
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.search import snippet
@@ -131,6 +134,34 @@ class SearchResults:
 def _like_escape(s: str) -> str:
     """Escape LIKE wildcards so a query is matched literally (escape char: backslash)."""
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+@dataclass(frozen=True)
+class SampledDiscard:
+    piece_id: str
+    provenance: str
+    excerpt: str
+
+
+@dataclass(frozen=True)
+class RecallSample:
+    population: int                       # the whole discard pile
+    sample: tuple[SampledDiscard, ...]    # the pieces drawn for review
+
+
+@dataclass(frozen=True)
+class RecallResult:
+    population: int
+    sample_size: int
+    relevant_found: int      # false discards found in the sample
+    confidence: float
+    count_upper: int         # at most this many of the pile were wrongly discarded
+    prevalence_upper: float
+
+
+def _excerpt(text: str, width: int = 240) -> str:
+    flat = " ".join(text.split())
+    return flat[:width] + ("…" if len(flat) > width else "")
 
 
 def _failure_id(matter: str, submitted_path: str) -> str:
@@ -376,6 +407,81 @@ class SqlStore:
         uncertain = sum(1 for p in pieces if p.label == "uncertain")
         discarded = sum(1 for p in pieces if p.label == "discard")
         return LabelSummary(relevant, uncertain, discarded, len(pieces), pieces)
+
+    def sample_discards(self, matter: str, tenant: str, scopes: set[str], n: int,
+                        *, seed: int | None = None) -> RecallSample:
+        """Draw a random sample of the matter's discard pile for review — scope-checked.
+        A review's bound is only sound if the sample is random w.r.t. relevance, so this
+        samples uniformly (seedable, for reproducible tests)."""
+        with self._sf() as session:
+            scope = session.scalar(
+                select(MatterScope.scope).where(
+                    MatterScope.matter == matter, MatterScope.tenant == tenant
+                )
+            )
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)
+            rows = session.execute(
+                select(LabelRecord.piece_id, Piece.provenance_path, Piece.full_text)
+                .join(Piece, Piece.id == LabelRecord.piece_id)
+                .where(
+                    LabelRecord.matter == matter, LabelRecord.tenant == tenant,
+                    LabelRecord.label == "discard",
+                )
+            ).all()
+        chosen = random.Random(seed).sample(rows, min(n, len(rows))) if rows else []
+        sample = tuple(SampledDiscard(pid, prov, _excerpt(full)) for pid, prov, full in chosen)
+        return RecallSample(population=len(rows), sample=sample)
+
+    def record_recall_review(self, matter: str, tenant: str, scopes: set[str],
+                             verdicts: dict[str, bool], actor: str,
+                             *, confidence: float = 0.95) -> RecallResult:
+        """Record a recall check: from the reviewed sample of the discard pile, compute
+        the finite-population upper confidence bound on wrongly-discarded pieces, persist
+        it, and append the act to the audit trail (atomic). ``verdicts`` maps a sampled
+        piece_id to whether it was actually relevant (a false discard). Scope-checked;
+        rejects any reviewed piece that is not currently discarded."""
+        now = datetime.now(UTC)
+        with self._sf() as session, session.begin():
+            scope = session.scalar(
+                select(MatterScope.scope).where(
+                    MatterScope.matter == matter, MatterScope.tenant == tenant
+                )
+            )
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)
+            discard_ids = {
+                pid for (pid,) in session.execute(
+                    select(LabelRecord.piece_id).where(
+                        LabelRecord.matter == matter, LabelRecord.tenant == tenant,
+                        LabelRecord.label == "discard",
+                    )
+                ).all()
+            }
+            unknown = set(verdicts) - discard_ids
+            if unknown:
+                raise ValueError(f"reviewed pieces are not discarded: {sorted(unknown)}")
+            population = len(discard_ids)
+            sample_size = len(verdicts)
+            relevant_found = sum(1 for v in verdicts.values() if v)
+            bound = prevalence_upper_bound(
+                population, sample_size, relevant_found, confidence=confidence
+            )
+            session.add(RecallReview(
+                id=uuid4().hex, tenant=tenant, matter=matter, population=population,
+                sample_size=sample_size, relevant_found=relevant_found, confidence=confidence,
+                count_upper=bound.count_upper, prevalence_upper=bound.prevalence_upper,
+                reviewer=actor, reviewed_at=now,
+            ))
+            detail = (
+                f"population={population} sample={sample_size} relevant={relevant_found} "
+                f"bound={bound.prevalence_upper:.4f}@{confidence}"
+            )
+            self._append_audit(session, tenant, matter, actor, "recall-review", detail, now)
+        return RecallResult(
+            population, sample_size, relevant_found, confidence,
+            bound.count_upper, bound.prevalence_upper,
+        )
 
     def search(
         self, tenant: str, scopes: set[str], query: str, *, limit: int = 100
