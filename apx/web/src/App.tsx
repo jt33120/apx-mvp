@@ -17,7 +17,7 @@ export default function App() {
     me().then(setIdentity).catch(() => setIdentity(null)).finally(() => setReady(true));
   }, []);
 
-  if (!ready) return <main style={{ padding: "2rem", maxWidth: 760, margin: "0 auto" }}>…</main>;
+  if (!ready) return <main className="apx-shell">…</main>;
   if (!identity) return <Login onLogin={setIdentity} />;
 
   const onLogout = async () => {
@@ -31,6 +31,16 @@ export default function App() {
   return (
     <Console identity={identity} onLogout={onLogout}
       onCockpit={identity.is_admin ? () => setView("cockpit") : undefined} />
+  );
+}
+
+function Wordmark({ tag }: { tag: string }) {
+  return (
+    <div className="apx-wordmark">
+      A&nbsp;P<b>X</b>{" "}
+      <span style={{ fontFamily: "var(--apx-sans)", fontSize: ".68rem", letterSpacing: ".14em",
+        textTransform: "uppercase", color: "var(--apx-ink-3)", marginLeft: ".3rem" }}>{tag}</span>
+    </div>
   );
 }
 
@@ -130,15 +140,10 @@ function Console({ identity, onLogout, onCockpit }: {
     }
   }
 
-  const box = { padding: ".5rem" } as const;
   return (
     <main className="apx-shell">
       <header className="apx-appbar">
-        <div className="apx-wordmark">
-          A&nbsp;P<b>X</b>{" "}
-          <span style={{ fontFamily: "var(--apx-sans)", fontSize: ".68rem", letterSpacing: ".14em",
-            textTransform: "uppercase", color: "var(--apx-ink-3)", marginLeft: ".3rem" }}>Triage</span>
-        </div>
+        <Wordmark tag="Triage" />
         <div className="apx-who">
           <span className="apx-badge">{identity.actor}</span>
           <span>{identity.scopes.join(" · ") || "aucun périmètre"}</span>
@@ -147,42 +152,40 @@ function Console({ identity, onLogout, onCockpit }: {
         </div>
       </header>
 
-      <p style={{ color: "var(--apx-ink-2)", maxWidth: "58ch" }}>
+      <p className="apx-lede">
         Déposez un dossier. Vous verrez ce qui est entré, ce qui a échoué, ce qui a été écarté —
         rien perdu en silence. Vous ne voyez que les dossiers de votre périmètre.
       </p>
 
-      <form onSubmit={run} style={{ display: "flex", gap: "var(--apx-space-1)", flexWrap: "wrap", alignItems: "center" }}>
-        {/* @ts-expect-error non-standard but supported: pick a whole folder */}
-        <input ref={inputRef} type="file" multiple webkitdirectory=""
-          onChange={(e) => setFileCount(e.target.files?.length ?? 0)} aria-label="Dossier" />
-        <input aria-label="Affaire" placeholder="Affaire" value={matter}
-          onChange={(e) => setMatter(e.target.value)} style={{ ...box, flex: "0 1 11rem" }} />
-        <select aria-label="Périmètre" value={scope} onChange={(e) => setScope(e.target.value)}
-          style={{ ...box, flex: "0 1 11rem" }}>
-          {identity.scopes.length === 0 && <option value="">aucun périmètre</option>}
-          {identity.scopes.map((s) => <option key={s} value={s}>{s}</option>)}
-        </select>
-        <button type="submit" disabled={busy || fileCount === 0 || !matter || !scope}
-          style={{ padding: ".5rem 1rem" }}>
-          {busy ? "Analyse…" : `Analyser${fileCount ? ` (${fileCount})` : ""}`}
-        </button>
-      </form>
-
-      {error && <p role="alert" style={{ color: "#a3161c" }}>{error}</p>}
+      <div className="apx-card apx-pad">
+        <form onSubmit={run} className="apx-controls">
+          {/* @ts-expect-error non-standard but supported: pick a whole folder */}
+          <input ref={inputRef} type="file" multiple webkitdirectory=""
+            onChange={(e) => setFileCount(e.target.files?.length ?? 0)} aria-label="Dossier" />
+          <input aria-label="Affaire" placeholder="Affaire" value={matter}
+            onChange={(e) => setMatter(e.target.value)} style={{ flex: "0 1 11rem" }} />
+          <select aria-label="Périmètre" value={scope} onChange={(e) => setScope(e.target.value)}
+            style={{ flex: "0 1 11rem" }}>
+            {identity.scopes.length === 0 && <option value="">aucun périmètre</option>}
+            {identity.scopes.map((s) => <option key={s} value={s}>{s}</option>)}
+          </select>
+          <button type="submit" disabled={busy || fileCount === 0 || !matter || !scope}>
+            {busy ? "Analyse…" : `Analyser${fileCount ? ` (${fileCount})` : ""}`}
+          </button>
+        </form>
+        {error && <p className="apx-error" role="alert">{error}</p>}
+      </div>
 
       {result && <InventoryView title={`Résultat — ${result.matter}`} r={result} />}
 
       <CorpusSearch />
 
       {matters.length > 0 && (
-        <section style={{ marginTop: "2rem" }}>
+        <section className="apx-panel">
           <h2>Mes dossiers</h2>
-          <table style={{ width: "100%", borderCollapse: "collapse" }}>
-            <tbody>
-              {matters.map((m) => <MatterRow key={m.matter} m={m} />)}
-            </tbody>
-          </table>
+          <div className="apx-list">
+            {matters.map((m) => <MatterRow key={m.matter} m={m} />)}
+          </div>
         </section>
       )}
     </main>
@@ -249,71 +252,62 @@ function Cockpit({ onBack, onLogout }: { onBack: () => void; onLogout: () => voi
     }
   }
 
-  const box = { padding: ".4rem" } as const;
   return (
     <main className="apx-shell">
       <header className="apx-appbar">
-        <div className="apx-wordmark">
-          A&nbsp;P<b>X</b>{" "}
-          <span style={{ fontFamily: "var(--apx-sans)", fontSize: ".68rem", letterSpacing: ".14em",
-            textTransform: "uppercase", color: "var(--apx-ink-3)", marginLeft: ".3rem" }}>Cockpit</span>
-        </div>
+        <Wordmark tag="Cockpit" />
         <div className="apx-who">
           <button className="apx-ghost" onClick={onBack}>← Console</button>
           <button className="apx-ghost" onClick={onLogout}>Déconnexion</button>
         </div>
       </header>
 
-      {err && <p role="alert" style={{ color: "#a3161c" }}>{err}</p>}
+      {err && <p className="apx-error" role="alert">{err}</p>}
 
-      <section style={{ marginTop: "1.2rem" }}>
+      <section className="apx-panel">
         <h2>Nouvel utilisateur</h2>
-        <form onSubmit={create}
-          style={{ display: "flex", gap: ".4rem", flexWrap: "wrap", alignItems: "center" }}>
-          <input aria-label="Courriel" placeholder="Courriel" type="email" value={email}
-            onChange={(e) => setEmail(e.target.value)} style={{ ...box, flex: "1 1 12rem" }} />
-          <input aria-label="Nom" placeholder="Nom affiché" value={name}
-            onChange={(e) => setName(e.target.value)} style={{ ...box, flex: "1 1 9rem" }} />
-          <input aria-label="Mot de passe" placeholder="Mot de passe" type="password" value={pw}
-            onChange={(e) => setPw(e.target.value)} style={{ ...box, flex: "1 1 9rem" }} />
-          <input aria-label="Périmètres" placeholder="périmètres (a, b)" value={scopes}
-            onChange={(e) => setScopes(e.target.value)} style={{ ...box, flex: "1 1 9rem" }} />
-          <label style={{ fontSize: ".85rem" }}>
-            <input type="checkbox" checked={isAdmin}
-              onChange={(e) => setIsAdmin(e.target.checked)} /> admin
-          </label>
-          <button type="submit" disabled={busy || !email || !pw || !name}
-            style={{ padding: ".4rem .9rem" }}>Créer</button>
-        </form>
+        <div className="apx-card apx-pad">
+          <form onSubmit={create} className="apx-controls">
+            <input aria-label="Courriel" placeholder="Courriel" type="email" value={email}
+              onChange={(e) => setEmail(e.target.value)} style={{ flex: "1 1 12rem" }} />
+            <input aria-label="Nom" placeholder="Nom affiché" value={name}
+              onChange={(e) => setName(e.target.value)} style={{ flex: "1 1 9rem" }} />
+            <input aria-label="Mot de passe" placeholder="Mot de passe" type="password" value={pw}
+              onChange={(e) => setPw(e.target.value)} style={{ flex: "1 1 9rem" }} />
+            <input aria-label="Périmètres" placeholder="périmètres (a, b)" value={scopes}
+              onChange={(e) => setScopes(e.target.value)} style={{ flex: "1 1 9rem" }} />
+            <label className="apx-hint" style={{ display: "flex", alignItems: "center", gap: ".3rem" }}>
+              <input type="checkbox" checked={isAdmin}
+                onChange={(e) => setIsAdmin(e.target.checked)} /> admin
+            </label>
+            <button type="submit" disabled={busy || !email || !pw || !name}>Créer</button>
+          </form>
+        </div>
       </section>
 
-      <section style={{ marginTop: "1.5rem" }}>
+      <section className="apx-panel">
         <h2>Utilisateurs</h2>
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <tbody>
-            {users.map((u) => (
-              <tr key={u.id} style={{ borderTop: "1px solid #ddd", verticalAlign: "top" }}>
-                <td style={{ padding: ".5rem .5rem .5rem 0" }}>
-                  {u.email}{u.is_admin && <span style={{ color: "#9a7a34" }}> · admin</span>}
-                  <div style={{ fontSize: ".8rem", color: "#777" }}>{u.display_name}</div>
-                </td>
-                <td style={{ padding: ".5rem 0" }}>
-                  {u.scopes.map((s) => (
-                    <span key={s} style={{ display: "inline-block", background: "#eef2f8", color: "#334",
-                      borderRadius: 999, padding: ".05rem .5rem", marginRight: ".3rem",
-                      marginBottom: ".2rem", fontSize: ".78rem" }}>
-                      {s}{" "}
-                      <button onClick={() => revoke(u.id, s)} aria-label={`Retirer ${s}`}
-                        style={{ border: 0, background: "none", cursor: "pointer", color: "#a3161c" }}>×</button>
-                    </span>
-                  ))}
-                  <button onClick={() => grant(u.id)}
-                    style={{ padding: ".1rem .5rem", fontSize: ".78rem" }}>+ périmètre</button>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="apx-list">
+          {users.map((u) => (
+            <div key={u.id} className="apx-item" style={{ alignItems: "start" }}>
+              <div>
+                <div>{u.email}{u.is_admin && <span style={{ color: "var(--apx-gold)" }}> · admin</span>}</div>
+                <div className="apx-hint">{u.display_name}</div>
+              </div>
+              <div style={{ textAlign: "right" }}>
+                {u.scopes.map((s) => (
+                  <span key={s} className="apx-chip apx-chip--scope"
+                    style={{ marginLeft: ".3rem", marginBottom: ".25rem" }}>
+                    {s}{" "}
+                    <button className="apx-x" onClick={() => revoke(u.id, s)} aria-label={`Retirer ${s}`}>×</button>
+                  </span>
+                ))}
+                <button className="apx-btn-sm apx-ghost" onClick={() => grant(u.id)}
+                  style={{ marginLeft: ".3rem" }}>+ périmètre</button>
+              </div>
+            </div>
+          ))}
+        </div>
       </section>
     </main>
   );
@@ -343,36 +337,37 @@ function CorpusSearch() {
   }
 
   return (
-    <section style={{ marginTop: "2rem" }}>
+    <section className="apx-panel">
       <h2>Recherche — dans votre périmètre</h2>
-      <p style={{ color: "#555", fontSize: ".9rem", margin: "0 0 .6rem" }}>
+      <p className="apx-hint" style={{ margin: "0 0 .7rem", maxWidth: "62ch" }}>
         Un nom, une partie, une référence : toute pièce qui le contient, où qu'elle soit dans
         votre périmètre, quel que soit son tri. Déterministe et exhaustif — rien n'est caché.
       </p>
-      <form onSubmit={runSearch} style={{ display: "flex", gap: ".4rem", flexWrap: "wrap" }}>
+      <form onSubmit={runSearch} className="apx-controls">
         <input value={q} onChange={(e) => setQ(e.target.value)}
           placeholder="nom de pièce, partie, référence…" aria-label="Recherche"
-          style={{ padding: ".4rem .5rem", flex: "1 1 20rem" }} />
-        <button type="submit" disabled={busy || !q.trim()} style={{ padding: ".4rem .9rem" }}>
-          {busy ? "Recherche…" : "Chercher"}
-        </button>
+          style={{ flex: "1 1 20rem" }} />
+        <button type="submit" disabled={busy || !q.trim()}>{busy ? "Recherche…" : "Chercher"}</button>
       </form>
-      {err && <p role="alert" style={{ color: "#a3161c" }}>{err}</p>}
+      {err && <p className="apx-error" role="alert">{err}</p>}
       {res && (
-        <div style={{ marginTop: ".8rem" }}>
-          <p style={{ fontSize: ".9rem", color: "#333", margin: "0 0 .4rem" }}>
-            <strong>{res.total}</strong> pièce{res.total > 1 ? "s" : ""} pour « {res.query} »
-            {res.returned < res.total && <span style={{ color: "#777" }}> · {res.returned} affichées</span>}
+        <div style={{ marginTop: ".9rem" }}>
+          <p className="apx-hint" style={{ margin: "0 0 .5rem" }}>
+            <strong className="apx-num">{res.total}</strong> pièce{res.total > 1 ? "s" : ""} pour «&nbsp;{res.query}&nbsp;»
+            {res.returned < res.total && <> · {res.returned} affichées</>}
           </p>
-          {res.hits.map((h) => (
-            <div key={`${h.matter}/${h.provenance}`}
-              style={{ borderTop: "1px solid #eee", padding: ".45rem 0" }}>
-              <div style={{ fontSize: ".8rem", color: "#777" }}>
-                {h.matter} · <span style={{ fontFamily: "monospace" }}>{h.provenance}</span>
-              </div>
-              <div style={{ fontSize: ".88rem", color: "#333" }}>{h.snippet}</div>
+          {res.hits.length > 0 && (
+            <div className="apx-list">
+              {res.hits.map((h) => (
+                <div key={`${h.matter}/${h.provenance}`} className="apx-item" style={{ gridTemplateColumns: "1fr" }}>
+                  <div>
+                    <div className="apx-hint">{h.matter} · <span className="apx-mono">{h.provenance}</span></div>
+                    <div style={{ marginTop: ".15rem" }}>{h.snippet}</div>
+                  </div>
+                </div>
+              ))}
             </div>
-          ))}
+          )}
         </div>
       )}
     </section>
@@ -428,47 +423,46 @@ function MatterRow({ m }: { m: MatterSummary }) {
   }
 
   return (
-    <>
-      <tr style={{ borderTop: "1px solid #ddd", cursor: "pointer" }} onClick={toggle}>
-        <td style={{ padding: ".5rem 0" }}>
-          <span aria-hidden style={{ color: "#999", marginRight: ".4rem" }}>{open ? "▾" : "▸"}</span>
+    <div>
+      <div className="apx-item apx-click" onClick={toggle}>
+        <div>
+          <span aria-hidden className="apx-caret">{open ? "▾" : "▸"}</span>
           {m.matter}
-        </td>
-        <td style={{ padding: ".5rem 0", textAlign: "right", color: "#555" }}>
-          {m.inventory.in_corpus} indexées · {m.inventory.failures} à revoir · tri & journal
-        </td>
-      </tr>
+        </div>
+        <div className="apx-hint">
+          {m.inventory.in_corpus} indexées · {m.inventory.failures} à revoir · tri &amp; journal
+        </div>
+      </div>
       {open && (
-        <tr>
-          <td colSpan={2} style={{ padding: ".25rem 0 1rem 1.4rem" }}>
-            {err && <p role="alert" style={{ color: "#a3161c", margin: 0 }}>{err}</p>}
-            {triage && <TriageView t={triage} />}
-            <Judging question={question} setQuestion={setQuestion} judging={judging}
-              onJudge={judge} labels={labels} />
-            {labels && labels.discarded > 0 && (
-              <RecallPanel matter={m.matter} discarded={labels.discarded} />
-            )}
-            {trail && <Journal trail={trail} />}
-          </td>
-        </tr>
+        <div className="apx-detail">
+          {err && <p className="apx-error" role="alert" style={{ marginTop: 0 }}>{err}</p>}
+          {triage && <TriageView t={triage} />}
+          <Judging question={question} setQuestion={setQuestion} judging={judging}
+            onJudge={judge} labels={labels} />
+          {labels && labels.discarded > 0 && (
+            <RecallPanel matter={m.matter} discarded={labels.discarded} />
+          )}
+          {trail && <Journal trail={trail} />}
+        </div>
       )}
-    </>
+    </div>
   );
 }
 
 function TriageView({ t }: { t: Triage }) {
   return (
-    <div style={{ marginBottom: ".9rem" }}>
-      <p style={{ margin: "0 0 .35rem", fontSize: ".95rem" }}>
-        <strong>{t.submitted}</strong> pièces → <strong>{t.distinct}</strong> distinctes à examiner
-        {t.duplicates > 0 && <> · <strong>{t.duplicates}</strong> doublon{t.duplicates > 1 ? "s" : ""} regroupé{t.duplicates > 1 ? "s" : ""}</>}
+    <div className="apx-block">
+      <p style={{ margin: "0 0 .35rem" }}>
+        <strong className="apx-num">{t.submitted}</strong> pièces →{" "}
+        <strong className="apx-num">{t.distinct}</strong> distinctes à examiner
+        {t.duplicates > 0 && <> · <strong className="apx-num">{t.duplicates}</strong> doublon{t.duplicates > 1 ? "s" : ""} regroupé{t.duplicates > 1 ? "s" : ""}</>}
       </p>
       {t.groups.length > 0 && (
-        <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: ".85rem", color: "#444" }}>
+        <ul className="apx-hint apx-inline-list">
           {t.groups.map((g) => (
-            <li key={g.representative} style={{ marginBottom: ".15rem" }}>
-              <span style={{ fontFamily: "monospace" }}>{g.representative}</span>{" "}
-              <span style={{ color: "#777" }}>+ {g.size - 1} copie{g.size - 1 > 1 ? "s" : ""}</span>
+            <li key={g.representative}>
+              <span className="apx-mono">{g.representative}</span>{" "}
+              + {g.size - 1} copie{g.size - 1 > 1 ? "s" : ""}
             </li>
           ))}
         </ul>
@@ -484,28 +478,28 @@ function Judging({ question, setQuestion, judging, onJudge, labels }: {
   onJudge: (e: React.FormEvent) => void; labels: Labels | null;
 }) {
   return (
-    <div style={{ marginBottom: ".9rem" }}>
-      <form onSubmit={onJudge} style={{ display: "flex", gap: ".4rem", marginBottom: ".5rem", flexWrap: "wrap" }}>
+    <div className="apx-block">
+      <form onSubmit={onJudge} className="apx-controls" style={{ marginBottom: ".5rem" }}>
         <input value={question} onChange={(e) => setQuestion(e.target.value)}
           placeholder="critères de tri (ex : bail, résiliation)" aria-label="Critères de tri"
-          style={{ padding: ".35rem .5rem", flex: "1 1 16rem" }} />
-        <button type="submit" disabled={judging} style={{ padding: ".35rem .8rem" }}>
+          style={{ flex: "1 1 16rem" }} />
+        <button type="submit" className="apx-btn-sm" disabled={judging}>
           {judging ? "Jugement…" : "Juger"}
         </button>
       </form>
       {labels && labels.judged > 0 && (
         <>
-          <p style={{ margin: "0 0 .35rem", fontSize: ".9rem" }}>
-            <strong style={{ color: "#2f6f4f" }}>{labels.relevant}</strong> pertinentes ·{" "}
-            <strong style={{ color: "#9a5a12" }}>{labels.uncertain}</strong> à juger ·{" "}
-            <strong style={{ color: "#7a7364" }}>{labels.discarded}</strong> écartées
+          <p style={{ margin: "0 0 .4rem", display: "flex", gap: ".3rem", flexWrap: "wrap" }}>
+            <span className="apx-chip apx-chip--kept apx-num">{labels.relevant} pertinentes</span>
+            <span className="apx-chip apx-chip--review apx-num">{labels.uncertain} à juger</span>
+            <span className="apx-chip apx-chip--discard apx-num">{labels.discarded} écartées</span>
           </p>
-          <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: ".85rem", color: "#444" }}>
+          <ul className="apx-hint apx-inline-list">
             {labels.pieces.map((p) => (
-              <li key={p.provenance} style={{ marginBottom: ".15rem" }}>
-                <span style={{ fontFamily: "monospace" }}>{p.provenance}</span>{" "}
+              <li key={p.provenance}>
+                <span className="apx-mono">{p.provenance}</span>{" "}
                 <LabelChip label={p.label} />{" "}
-                <span style={{ color: "#777" }}>{p.rationale}</span>
+                <span style={{ color: "var(--apx-muted)" }}>{p.rationale}</span>
               </li>
             ))}
           </ul>
@@ -553,14 +547,14 @@ function RecallPanel({ matter, discarded }: { matter: string; discarded: number 
   }
 
   return (
-    <div style={{ marginBottom: ".9rem", borderTop: "1px dashed #ddd", paddingTop: ".6rem" }}>
-      <button onClick={draw} disabled={busy} style={{ padding: ".3rem .7rem" }}>
+    <div className="apx-block" style={{ borderTop: "1px dashed var(--apx-line)", paddingTop: ".7rem" }}>
+      <button className="apx-btn-sm apx-ghost" onClick={draw} disabled={busy}>
         Vérifier le rappel ({discarded} écartées)
       </button>
-      {err && <p role="alert" style={{ color: "#a3161c", margin: ".4rem 0" }}>{err}</p>}
+      {err && <p className="apx-error" role="alert">{err}</p>}
       {sample && (
         <div style={{ marginTop: ".5rem" }}>
-          <p style={{ fontSize: ".85rem", color: "#555", margin: "0 0 .3rem" }}>
+          <p className="apx-hint" style={{ margin: "0 0 .3rem" }}>
             Cochez les pièces écartées <strong>à tort</strong> (population {sample.population},
             échantillon {sample.sample.length}) :
           </p>
@@ -569,17 +563,17 @@ function RecallPanel({ matter, discarded }: { matter: string; discarded: number 
               style={{ display: "block", fontSize: ".85rem", marginBottom: ".2rem", cursor: "pointer" }}>
               <input type="checkbox" checked={!!marks[s.piece_id]}
                 onChange={(e) => setMarks((m) => ({ ...m, [s.piece_id]: e.target.checked }))} />{" "}
-              <span style={{ fontFamily: "monospace" }}>{s.provenance}</span>{" "}
-              <span style={{ color: "#777" }}>— {s.excerpt}</span>
+              <span className="apx-mono">{s.provenance}</span>{" "}
+              <span style={{ color: "var(--apx-muted)" }}>— {s.excerpt}</span>
             </label>
           ))}
-          <button onClick={compute} disabled={busy} style={{ padding: ".3rem .7rem", marginTop: ".3rem" }}>
+          <button className="apx-btn-sm" onClick={compute} disabled={busy} style={{ marginTop: ".3rem" }}>
             {busy ? "Calcul…" : "Calculer la garantie"}
           </button>
         </div>
       )}
       {bound && (
-        <p style={{ marginTop: ".5rem", fontSize: ".9rem", color: "#2f6f4f" }}>
+        <p className="apx-seal apx-seal--ok" style={{ marginTop: ".5rem" }}>
           🛡 Relu {bound.sample_size}/{bound.population} · {bound.relevant_found} à tort → au plus{" "}
           <strong>{bound.count_upper}</strong> pièces ({(bound.prevalence_upper * 100).toFixed(1)}%)
           écartées à tort, à {Math.round(bound.confidence * 100)}%.
@@ -590,33 +584,28 @@ function RecallPanel({ matter, discarded }: { matter: string; discarded: number 
 }
 
 function LabelChip({ label }: { label: string }) {
-  const map: Record<string, [string, string, string]> = {
-    relevant: ["#2f6f4f", "#e8f1eb", "pertinente"],
-    uncertain: ["#9a5a12", "#f6ecdd", "à juger"],
-    discard: ["#7a7364", "#efece5", "écartée"],
+  const map: Record<string, [string, string]> = {
+    relevant: ["apx-chip--kept", "pertinente"],
+    uncertain: ["apx-chip--review", "à juger"],
+    discard: ["apx-chip--discard", "écartée"],
   };
-  const [fg, bg, txt] = map[label] ?? ["#555", "#eee", label];
-  return (
-    <span style={{ color: fg, background: bg, borderRadius: 999, padding: ".05rem .45rem", fontSize: ".76rem" }}>
-      {txt}
-    </span>
-  );
+  const [cls, txt] = map[label] ?? ["", label];
+  return <span className={`apx-chip ${cls}`}>{txt}</span>;
 }
 
 function Journal({ trail }: { trail: AuditTrail }) {
   return (
-    <div>
-      <p style={{ margin: "0 0 .5rem", fontSize: ".9rem",
-        color: trail.verified ? "#2f6f4f" : "#a3161c" }}>
+    <div className="apx-block">
+      <p className={trail.verified ? "apx-seal apx-seal--ok" : "apx-seal apx-seal--bad"}>
         {trail.verified
           ? "🔒 Journal intègre — la chaîne se recalcule sans rupture."
           : "⚠ Journal altéré — la chaîne ne se recalcule pas."}
       </p>
-      <ol style={{ margin: 0, paddingLeft: "1.2rem", fontSize: ".9rem", color: "#444" }}>
+      <ol className="apx-hint apx-inline-list">
         {trail.entries.map((e) => (
-          <li key={e.seq} style={{ marginBottom: ".2rem" }}>
-            <strong>{e.action}</strong> — {e.detail}{" "}
-            <span style={{ color: "#777" }}>· {e.actor} · {e.timestamp.replace("T", " ").slice(0, 19)}</span>
+          <li key={e.seq}>
+            <strong style={{ color: "var(--apx-ink-2)" }}>{e.action}</strong> — {e.detail}{" "}
+            <span style={{ color: "var(--apx-muted)" }}>· {e.actor} · {e.timestamp.replace("T", " ").slice(0, 19)}</span>
           </li>
         ))}
       </ol>
@@ -627,25 +616,43 @@ function Journal({ trail }: { trail: AuditTrail }) {
 function InventoryView({ title, r }: { title: string; r: IngestResponse }) {
   const inv = r.inventory;
   return (
-    <section aria-live="polite" style={{ marginTop: "1.5rem" }}>
+    <section className="apx-panel" aria-live="polite">
       <h2>{title}</h2>
-      <p style={{ fontSize: "1.1rem" }}>
-        <strong>{inv.submitted}</strong> pièces = <strong>{inv.in_corpus}</strong> indexées +{" "}
-        <strong>{inv.failures}</strong> non traitées + <strong>{inv.exclusions}</strong> exclues
-        {inv.consistent ? " · rien perdu" : " · ⚠ incohérent"}
+      <div className="apx-card apx-equation">
+        <div className="apx-eq-total">
+          <div className="n">{inv.submitted}</div>
+          <div className="l">pièces soumises</div>
+        </div>
+        <div className="apx-eq-rows">
+          <div className="apx-eq-row">
+            <div className="n" style={{ color: "var(--apx-kept)" }}>{inv.in_corpus}</div>
+            <div className="c">indexées — dans le corpus</div>
+          </div>
+          <div className="apx-eq-row">
+            <div className="n" style={{ color: "var(--apx-review)" }}>{inv.failures}</div>
+            <div className="c">non traitées — à revoir</div>
+          </div>
+          <div className="apx-eq-row">
+            <div className="n" style={{ color: "var(--apx-discard)" }}>{inv.exclusions}</div>
+            <div className="c">écartées — bruit système</div>
+          </div>
+        </div>
+      </div>
+      <div className={inv.consistent ? "apx-verdict" : "apx-verdict apx-verdict--bad"}>
+        {inv.consistent
+          ? `Inventaire cohérent : ${inv.submitted} = ${inv.in_corpus} + ${inv.failures} + ${inv.exclusions}`
+          : "⚠ Inventaire incohérent"}
         {r.persisted ? " · enregistré" : ""}
-      </p>
+      </div>
       {r.failure_list.length > 0 && (
-        <table style={{ width: "100%", borderCollapse: "collapse" }}>
-          <tbody>
-            {r.failure_list.map((f) => (
-              <tr key={f.path} style={{ borderTop: "1px solid #ddd" }}>
-                <td style={{ padding: ".4rem 0" }}>{f.path}</td>
-                <td style={{ padding: ".4rem 0", textAlign: "right", color: "#555" }}>{f.error_class}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
+        <div className="apx-list" style={{ marginTop: "1rem" }}>
+          {r.failure_list.map((f) => (
+            <div key={f.path} className="apx-item">
+              <span className="apx-mono">{f.path}</span>
+              <span className="apx-chip apx-chip--review">{f.error_class}</span>
+            </div>
+          ))}
+        </div>
       )}
     </section>
   );
