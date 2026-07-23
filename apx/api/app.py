@@ -19,6 +19,7 @@ from functools import lru_cache
 from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Response, UploadFile
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
@@ -32,7 +33,7 @@ from apx.core.app.triage import triage_pieces
 from apx.core.domain.auth import sign_token, verify_token
 from apx.core.ports.judge import Judge
 
-app = FastAPI(title="APX", version="0.0.0")
+app = FastAPI(title="APX", version="0.1.0")
 
 SESSION_COOKIE = "apx_session"
 
@@ -643,3 +644,13 @@ def read_inventory(matter: str, ident: Identity = Depends(current_identity)) -> 
     except ScopeDenied as exc:
         raise HTTPException(status_code=403, detail="outside your scope") from exc
     return _inventory_out(inv)
+
+
+# One artifact serves both: the API routes above (/api/*, matched first) and the built
+# SPA (everything else). Mounted only when a build is present, so tests and API-only
+# runs are unaffected. APX_WEB_DIST overrides the location (the Docker image sets it).
+_web_dist = Path(
+    os.environ.get("APX_WEB_DIST", str(Path(__file__).resolve().parent.parent / "web" / "dist"))
+)
+if _web_dist.is_dir():
+    app.mount("/", StaticFiles(directory=str(_web_dist), html=True), name="web")

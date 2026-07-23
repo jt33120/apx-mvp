@@ -56,6 +56,15 @@ def test_health_is_open() -> None:
         assert c.get("/api/health").json() == {"status": "ok"}
 
 
+def test_spa_is_served_at_root_when_built() -> None:
+    dist = Path(app_module.__file__).resolve().parent.parent / "web" / "dist"
+    if not dist.is_dir():
+        pytest.skip("web not built (npm run build)")
+    with TestClient(app) as c:
+        r = c.get("/")
+    assert r.status_code == 200 and "text/html" in r.headers.get("content-type", "")
+
+
 def test_protected_endpoint_requires_authentication(tmp_path: Path, monkeypatch) -> None:
     _prepare(tmp_path, monkeypatch)
     with TestClient(app) as c:

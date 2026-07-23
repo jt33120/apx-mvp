@@ -1,0 +1,37 @@
+# APX on one machine (the on-prem form-factor): the app + one stateful service
+# (PostgreSQL 18 + pgvector, the extension pinned here). `docker compose up` and open
+# http://localhost:8000. Fully offline unless an LLM key is set.
+services:
+  db:
+    image: pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: apx
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-apx}
+      POSTGRES_DB: apx
+    volumes:
+      - apx-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U apx -d apx"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  app:
+    build: .
+    environment:
+      DATABASE_URL: postgresql+psycopg://apx:${POSTGRES_PASSWORD:-apx}@db:5432/apx
+      # Required — generate once and keep it (e.g. `openssl rand -hex 32`).
+      APX_SECRET_KEY: ${APX_SECRET_KEY:?set APX_SECRET_KEY (e.g. openssl rand -hex 32)}
+      # Optional LLM tier (EU-hosted Mistral, or point LLM_BASE_URL at an on-prem model).
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+      JUDGE_WORKERS: ${JUDGE_WORKERS:-8}
+    ports:
+      - "8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  apx-data:

@@ -1,6 +1,6 @@
 [project]
 name = "apx"
-version = "0.0.0"
+version = "0.1.0"
 description = "APX MVP — mass-document triage for law firms. Hexagonal core + adapters, one stateful service (PostgreSQL)."
 requires-python = ">=3.13,<3.14"
 # Runtime pins are the spine's Stack table (ARCHITECTURE-SPINE.md#Stack), verified
