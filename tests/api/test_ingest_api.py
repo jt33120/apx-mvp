@@ -125,6 +125,29 @@ def test_chinese_wall_over_http(tmp_path: Path, monkeypatch) -> None:
         assert _read(c, "m-b", "wall-B").status_code == 200
 
 
+def test_triage_deduplicates_over_http(tmp_path: Path, monkeypatch) -> None:
+    url = f"sqlite:///{tmp_path / 'apx.db'}"
+    Base.metadata.create_all(create_engine(url))
+    monkeypatch.setenv("DATABASE_URL", url)
+    matter_dir = tmp_path / "matter"
+    matter_dir.mkdir()
+    (matter_dir / "a.txt").write_text("Le contrat est signé.", encoding="utf-8")
+    (matter_dir / "b.txt").write_text("le   CONTRAT  est signé.", encoding="utf-8")  # a copy
+    (matter_dir / "c.txt").write_text("Autre pièce.", encoding="utf-8")
+
+    with TestClient(app) as c:
+        c.post("/api/ingest", json={"folder": str(matter_dir), "matter": "m",
+                                    "tenant": "t", "scope": "wall-A"})
+        t = c.get("/api/matters/m/triage", params={"tenant": "t", "scopes": "wall-A"})
+        body = t.json()
+        assert t.status_code == 200
+        assert body["submitted"] == 3 and body["distinct"] == 2 and body["duplicates"] == 1
+        assert len(body["groups"]) == 1 and body["groups"][0]["size"] == 2
+        # scope-checked like every read (403 outside the wall, existence not disclosed)
+        denied = c.get("/api/matters/m/triage", params={"tenant": "t", "scopes": "wall-Z"})
+        assert denied.status_code == 403
+
+
 def test_audit_trail_over_http(tmp_path: Path, monkeypatch) -> None:
     url = f"sqlite:///{tmp_path / 'apx.db'}"
     Base.metadata.create_all(create_engine(url))

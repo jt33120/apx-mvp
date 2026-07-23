@@ -34,6 +34,9 @@ class Piece(Base):
     tenant: Mapped[str] = mapped_column(String, nullable=False)
     matter: Mapped[str] = mapped_column(String, nullable=False)
     content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    # the near-duplicate key: sha256 of normalised text; groups exact-modulo-formatting
+    # copies so the judgment cascade collapses them before any LLM (recall-first).
+    text_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     provenance_path: Mapped[str] = mapped_column(Text, nullable=False)  # attribute, not identity
     custodian: Mapped[str] = mapped_column(String, nullable=False)
     extraction_method: Mapped[str] = mapped_column(String, nullable=False)

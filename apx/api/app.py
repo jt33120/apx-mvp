@@ -85,6 +85,19 @@ class AuditTrailOut(BaseModel):
     verified: bool
 
 
+class DuplicateGroupOut(BaseModel):
+    representative: str      # the copy shown (and judged) on behalf of the group
+    members: list[str]       # every copy's provenance path, representative included
+    size: int
+
+
+class TriageOut(BaseModel):
+    submitted: int           # corpus pieces
+    distinct: int            # what remains to examine — submitted = distinct + duplicates
+    duplicates: int          # copies collapsed (kept, not deleted — reversible)
+    groups: list[DuplicateGroupOut]
+
+
 class MatterOut(BaseModel):
     matter: str
     scope: str
@@ -207,6 +220,29 @@ def read_audit(matter: str, tenant: str, scopes: str) -> AuditTrailOut:
             for e in trail.entries
         ],
         verified=trail.verified,
+    )
+
+
+@app.get("/api/matters/{matter}/triage", response_model=TriageOut)
+def read_triage(matter: str, tenant: str, scopes: str) -> TriageOut:
+    """The deterministic triage for a matter — near-duplicate clustering, the cheap
+    first tier of the judgment cascade (403 outside the scope). `submitted = distinct
+    + duplicates`: nothing lost, copies collapsed to one piece to examine."""
+    store = _store()
+    if store is None:
+        raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
+    try:
+        summary = store.deduplicate(matter, tenant, _parse_scopes(scopes))
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    return TriageOut(
+        submitted=summary.submitted,
+        distinct=summary.distinct,
+        duplicates=summary.duplicates,
+        groups=[
+            DuplicateGroupOut(representative=g.representative, members=list(g.members), size=g.size)
+            for g in summary.groups
+        ],
     )
 
 

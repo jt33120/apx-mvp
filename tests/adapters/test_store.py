@@ -73,3 +73,25 @@ def test_reading_a_matter_outside_scope_is_refused(tmp_path: Path, store: SqlSto
         store.inventory("m-b", "t", {"wall-A"})  # holds the wrong wall
     with pytest.raises(ScopeDenied):
         store.inventory("does-not-exist", "t", {"wall-A"})  # existence not disclosed
+
+
+def test_deduplicate_collapses_copies_modulo_formatting(tmp_path: Path, store: SqlStore) -> None:
+    # Different bytes (so distinct pieces by content_hash) but the SAME text modulo
+    # whitespace/case -> one near-duplicate cluster.
+    (tmp_path / "a.txt").write_text("Le contrat est signé.", encoding="utf-8")
+    (tmp_path / "b.txt").write_text("le   CONTRAT  est signé.", encoding="utf-8")
+    (tmp_path / "c.txt").write_text("Autre pièce, distincte.", encoding="utf-8")
+    store.save(_ingest(tmp_path, "m"), scope="wall-1")
+
+    d = store.deduplicate("m", "t", {"wall-1"})
+    assert d.submitted == 3 and d.distinct == 2 and d.duplicates == 1
+    assert d.submitted == d.distinct + d.duplicates  # nothing lost — copies kept, collapsed
+    (g,) = d.groups
+    assert g.size == 2 and set(g.members) == {"a.txt", "b.txt"}
+
+
+def test_deduplicate_is_scope_checked(tmp_path: Path, store: SqlStore) -> None:
+    (tmp_path / "a.txt").write_text("pièce", encoding="utf-8")
+    store.save(_ingest(tmp_path, "m-b"), scope="wall-B")
+    with pytest.raises(ScopeDenied):
+        store.deduplicate("m-b", "t", {"wall-A"})  # the wall pre-filters triage too

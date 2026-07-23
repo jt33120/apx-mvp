@@ -8,6 +8,8 @@ export type IngestResponse = {
 export type MatterSummary = { matter: string; scope: string; inventory: Inventory };
 export type AuditEntry = { seq: number; actor: string; action: string; detail: string; timestamp: string };
 export type AuditTrail = { entries: AuditEntry[]; verified: boolean };
+export type DuplicateGroup = { representative: string; members: string[]; size: number };
+export type Triage = { submitted: number; distinct: number; duplicates: number; groups: DuplicateGroup[] };
 
 // The one data path: HTTP to the API (AD-14). No fixtures, no fallback.
 export async function ingestUpload(
@@ -40,6 +42,15 @@ export async function listMatters(tenant: string, scope: string): Promise<Matter
 export async function readAudit(matter: string, tenant: string, scope: string): Promise<AuditTrail> {
   const q = new URLSearchParams({ tenant, scopes: scope });
   const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/audit?${q}`);
+  if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
+  return res.json();
+}
+
+// The deterministic triage — near-duplicate clustering, scope-checked (403 outside).
+// submitted = distinct + duplicates: copies collapsed to one piece to examine.
+export async function readTriage(matter: string, tenant: string, scope: string): Promise<Triage> {
+  const q = new URLSearchParams({ tenant, scopes: scope });
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/triage?${q}`);
   if (!res.ok) throw new Error((await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`);
   return res.json();
 }

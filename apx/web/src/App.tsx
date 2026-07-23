@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ingestUpload, listMatters, readAudit,
-  type AuditTrail, type IngestResponse, type MatterSummary,
+  ingestUpload, listMatters, readAudit, readTriage,
+  type AuditTrail, type IngestResponse, type MatterSummary, type Triage,
 } from "./api";
 
 const TENANT = "cabinet";
@@ -95,18 +95,25 @@ export default function App() {
   );
 }
 
-/** A matter, expandable to its audit journal (fetched on demand, scope-checked). */
+/** A matter, expandable to its deterministic triage and its audit journal
+ *  (fetched on demand, both scope-checked server-side). */
 function MatterRow({ m, scope }: { m: MatterSummary; scope: string }) {
   const [open, setOpen] = useState(false);
+  const [triage, setTriage] = useState<Triage | null>(null);
   const [trail, setTrail] = useState<AuditTrail | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
   async function toggle() {
     const next = !open;
     setOpen(next);
-    if (next && !trail) {
+    if (next && !triage) {
       try {
-        setTrail(await readAudit(m.matter, TENANT, scope));
+        const [tg, au] = await Promise.all([
+          readTriage(m.matter, TENANT, scope),
+          readAudit(m.matter, TENANT, scope),
+        ]);
+        setTriage(tg);
+        setTrail(au);
       } catch (e) {
         setErr(e instanceof Error ? e.message : String(e));
       }
@@ -121,18 +128,42 @@ function MatterRow({ m, scope }: { m: MatterSummary; scope: string }) {
           {m.matter}
         </td>
         <td style={{ padding: ".5rem 0", textAlign: "right", color: "#555" }}>
-          {m.inventory.in_corpus} indexées · {m.inventory.failures} à revoir · journal
+          {m.inventory.in_corpus} indexées · {m.inventory.failures} à revoir · tri & journal
         </td>
       </tr>
       {open && (
         <tr>
           <td colSpan={2} style={{ padding: ".25rem 0 1rem 1.4rem" }}>
             {err && <p role="alert" style={{ color: "#a3161c", margin: 0 }}>{err}</p>}
+            {triage && <TriageView t={triage} />}
             {trail && <Journal trail={trail} />}
           </td>
         </tr>
       )}
     </>
+  );
+}
+
+/** The deterministic tier of the judgment cascade: how far the corpus collapses
+ *  before any LLM. submitted → distinct, with the duplicate groups named. */
+function TriageView({ t }: { t: Triage }) {
+  return (
+    <div style={{ marginBottom: ".9rem" }}>
+      <p style={{ margin: "0 0 .35rem", fontSize: ".95rem" }}>
+        <strong>{t.submitted}</strong> pièces → <strong>{t.distinct}</strong> distinctes à examiner
+        {t.duplicates > 0 && <> · <strong>{t.duplicates}</strong> doublon{t.duplicates > 1 ? "s" : ""} regroupé{t.duplicates > 1 ? "s" : ""}</>}
+      </p>
+      {t.groups.length > 0 && (
+        <ul style={{ margin: 0, paddingLeft: "1.2rem", fontSize: ".85rem", color: "#444" }}>
+          {t.groups.map((g) => (
+            <li key={g.representative} style={{ marginBottom: ".15rem" }}>
+              <span style={{ fontFamily: "monospace" }}>{g.representative}</span>{" "}
+              <span style={{ color: "#777" }}>+ {g.size - 1} copie{g.size - 1 > 1 ? "s" : ""}</span>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 

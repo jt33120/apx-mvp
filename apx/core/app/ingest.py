@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from apx.core.domain.dedup import text_key
 from apx.core.domain.extraction import ExtractOutcome
 from apx.core.domain.failures import ErrorClass
 from apx.core.domain.identity import content_hash, piece_id
@@ -32,7 +33,8 @@ class IngestedPiece:
     id: str
     matter: str
     tenant: str
-    content_hash: str
+    content_hash: str  # hash of raw bytes — exact-file identity (AD-40)
+    text_key: str      # hash of normalised text — the near-duplicate key (judgment cascade)
     provenance_path: str
     custodian: str
     extraction_method: str
@@ -115,6 +117,7 @@ def ingest_folder(
                 matter=matter,
                 tenant=tenant,
                 content_hash=ch,
+                text_key=text_key(outcome.text),
                 provenance_path=prov,
                 custodian=custodian,
                 extraction_method=outcome.method,

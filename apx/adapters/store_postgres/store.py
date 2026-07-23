@@ -22,6 +22,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from apx.adapters.store_postgres.models import AuditRecord, Failure, MatterScope, Piece
 from apx.core.app.ingest import IngestionResult
+from apx.core.domain.dedup import cluster
 from apx.core.domain.inventory import Inventory
 
 
@@ -56,6 +57,21 @@ class AuditEntry:
 class AuditTrail:
     entries: list[AuditEntry]
     verified: bool  # the chain recomputes cleanly (no gap, reorder or truncation)
+
+
+@dataclass(frozen=True)
+class DuplicateGroup:
+    representative: str        # provenance path of the piece judged for the group
+    members: tuple[str, ...]   # provenance paths of every copy, representative included
+    size: int
+
+
+@dataclass(frozen=True)
+class DedupSummary:
+    submitted: int   # corpus pieces considered
+    distinct: int    # what remains to examine (clusters, singletons included)
+    duplicates: int  # copies collapsed into a representative (kept, not deleted)
+    groups: tuple[DuplicateGroup, ...]  # multi-member groups only
 
 
 def _failure_id(matter: str, submitted_path: str) -> str:
@@ -128,6 +144,7 @@ class SqlStore:
                 session.merge(
                     Piece(
                         id=p.id, tenant=p.tenant, matter=p.matter, content_hash=p.content_hash,
+                        text_key=p.text_key,
                         provenance_path=p.provenance_path, custodian=p.custodian,
                         extraction_method=p.extraction_method,
                         extractor_version=p.extractor_version,
@@ -195,6 +212,37 @@ class SqlStore:
                 raise ScopeDenied(matter)  # fail closed, and never disclose existence
             in_corpus, failures = self._counts(session, matter, tenant)
         return Inventory(in_corpus + failures, in_corpus, failures, 0)
+
+    def deduplicate(self, matter: str, tenant: str, scopes: set[str]) -> DedupSummary:
+        """The deterministic tier of the judgment cascade for a matter — scope-checked.
+        Groups the corpus by the near-duplicate key so copies (same text modulo
+        formatting) collapse to one representative; the LLM band only ever faces the
+        distinct set. A pure read — it computes clusters and mutates nothing, so it is
+        not itself an audited act (the reversible label written later is)."""
+        with self._sf() as session:
+            scope = session.scalar(
+                select(MatterScope.scope).where(
+                    MatterScope.matter == matter, MatterScope.tenant == tenant
+                )
+            )
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)  # fail closed, existence not disclosed
+            rows = session.execute(
+                select(Piece.id, Piece.text_key, Piece.provenance_path).where(
+                    Piece.matter == matter, Piece.tenant == tenant
+                )
+            ).all()
+        prov = {pid: path for pid, _key, path in rows}
+        report = cluster([(pid, key) for pid, key, _path in rows])
+        groups = tuple(
+            DuplicateGroup(
+                representative=prov[c.representative],
+                members=tuple(prov[m] for m in c.members),
+                size=c.size,
+            )
+            for c in report.clusters
+        )
+        return DedupSummary(report.submitted, report.distinct, report.duplicates, groups)
 
     def read_audit(self, matter: str, tenant: str, scopes: set[str]) -> AuditTrail:
         """The audit trail for a matter — scope-checked. The chain is per-tenant
