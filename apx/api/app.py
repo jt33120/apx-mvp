@@ -281,6 +281,15 @@ def _judge() -> Judge:
     return CascadeJudge(criteria, llm) if llm is not None else criteria
 
 
+def _judge_workers() -> int:
+    """How many judgments run concurrently (JUDGE_WORKERS, default 8). The LLM tier is
+    network-bound, so concurrency — not CPU — is what makes a large band tractable."""
+    try:
+        return max(1, int(os.environ.get("JUDGE_WORKERS", "8")))
+    except ValueError:
+        return 8
+
+
 @app.get("/api/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
@@ -460,7 +469,7 @@ def judge_matter(
     judge = _judge()
     try:
         reps = store.representatives(matter, ident.tenant, ident.scopes)
-        outcome = triage_pieces(reps, req.question, judge)
+        outcome = triage_pieces(reps, req.question, judge, workers=_judge_workers())
         store.save_labels(matter, ident.tenant, ident.scopes, outcome, judge.name, ident.actor)
     except ScopeDenied as exc:
         raise HTTPException(status_code=403, detail="outside your scope") from exc
