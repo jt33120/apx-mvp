@@ -242,6 +242,35 @@ def test_recall_sample_and_bound_over_http(tmp_path: Path, monkeypatch) -> None:
         assert 0 < b["prevalence_upper"] <= 1
 
 
+def test_cockpit_is_admin_only_and_manages_users(tmp_path: Path, monkeypatch) -> None:
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "admin@c.fr", "pw", "Admin", {"wall-A"}, is_admin=True)
+    store.create_user("t", "reg@c.fr", "pw", "Reg", {"wall-A"})  # not an admin
+
+    with TestClient(app) as c:
+        _login(c, "reg@c.fr")
+        assert c.get("/api/admin/users").status_code == 403  # non-admin refused
+
+        _login(c, "admin@c.fr")
+        assert c.get("/api/me").json()["is_admin"] is True
+        assert {u["email"] for u in c.get("/api/admin/users").json()} == {"admin@c.fr", "reg@c.fr"}
+
+        created = c.post("/api/admin/users", json={
+            "email": "new@c.fr", "password": "pw2", "display_name": "New", "scopes": ["wall-B"]})
+        assert created.status_code == 200
+        uid = created.json()["id"]
+        assert c.post(f"/api/admin/users/{uid}/grant", json={"scope": "wall-C"}).status_code == 200
+        assert c.post(f"/api/admin/users/{uid}/revoke", json={"scope": "wall-B"}).status_code == 200
+        # duplicate email is refused
+        dup = c.post("/api/admin/users",
+                     json={"email": "new@c.fr", "password": "x", "display_name": "Dup"})
+        assert dup.status_code == 400
+
+        # the newly-created user can log in and holds exactly the granted wall
+        _login(c, "new@c.fr", pw="pw2")
+        assert sorted(c.get("/api/me").json()["scopes"]) == ["wall-C"]
+
+
 def test_audit_trail_over_http(tmp_path: Path, monkeypatch) -> None:
     store = _prepare(tmp_path, monkeypatch)
     store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})

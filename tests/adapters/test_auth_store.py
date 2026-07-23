@@ -33,3 +33,30 @@ def test_wrong_password_unknown_user_and_other_tenant_fail(store: SqlStore) -> N
     assert store.authenticate("cabinet", "a@b.fr", "wrong") is None
     assert store.authenticate("cabinet", "ghost@b.fr", "right") is None
     assert store.authenticate("autre-cabinet", "a@b.fr", "right") is None  # tenant-scoped
+
+
+def test_identity_resolves_admin_flag_and_scopes(store: SqlStore) -> None:
+    admin = store.create_user("t", "admin@c.fr", "pw", "Admin", {"w1"}, is_admin=True)
+    regular = store.create_user("t", "reg@c.fr", "pw", "Reg", {"w2"})
+    assert store.identity(admin) == (True, {"w1"})
+    assert store.identity(regular) == (False, {"w2"})
+
+
+def test_cockpit_lists_users_and_grants_and_revokes(store: SqlStore) -> None:
+    uid = store.create_user("t", "a@c.fr", "pw", "A", {"w1"})
+    store.create_user("t", "b@c.fr", "pw", "B", set(), is_admin=True)
+    roster = {u.email: u for u in store.list_users("t")}
+    assert set(roster) == {"a@c.fr", "b@c.fr"}
+    assert roster["a@c.fr"].scopes == ("w1",) and roster["a@c.fr"].is_admin is False
+    assert roster["b@c.fr"].is_admin is True
+
+    store.grant_scope("t", uid, "w2")
+    assert store.scopes_for(uid) == {"w1", "w2"}
+    store.revoke_scope("t", uid, "w1")
+    assert store.scopes_for(uid) == {"w2"}
+
+
+def test_managing_a_user_in_another_tenant_is_rejected(store: SqlStore) -> None:
+    uid = store.create_user("t", "a@c.fr", "pw", "A", set())
+    with pytest.raises(ValueError):
+        store.grant_scope("autre-cabinet", uid, "w1")  # the user is not in that tenant

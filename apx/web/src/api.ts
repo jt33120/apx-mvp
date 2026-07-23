@@ -15,7 +15,10 @@ export type Labels = { relevant: number; uncertain: number; discarded: number; j
 export type JudgeResult = { judged: number; relevant: number; uncertain: number; discarded: number; judge: string };
 export type SearchHit = { matter: string; provenance: string; snippet: string };
 export type SearchResults = { query: string; total: number; returned: number; hits: SearchHit[] };
-export type Identity = { actor: string; tenant: string; scopes: string[] };
+export type Identity = { actor: string; tenant: string; scopes: string[]; is_admin: boolean };
+export type AdminUser = {
+  id: string; email: string; display_name: string; is_admin: boolean; scopes: string[];
+};
 export type SampledDiscard = { piece_id: string; provenance: string; excerpt: string };
 export type RecallSample = { population: number; sample: SampledDiscard[] };
 export type RecallBound = {
@@ -47,6 +50,39 @@ export async function login(tenant: string, email: string, password: string): Pr
 
 export async function logout(): Promise<void> {
   await fetch("/api/logout", { method: "POST" });
+}
+
+// Cockpit (admin only): the server enforces the admin gate and tenant scope.
+export async function listUsers(): Promise<AdminUser[]> {
+  const res = await fetch("/api/admin/users");
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+export async function createUser(
+  email: string, password: string, display_name: string, scopes: string[], is_admin = false,
+): Promise<AdminUser> {
+  const res = await fetch("/api/admin/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ email, password, display_name, scopes, is_admin }),
+  });
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+export async function grantScope(userId: string, scope: string): Promise<void> {
+  const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/grant`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope }),
+  });
+  if (!res.ok) throw new Error(await detail(res));
+}
+
+export async function revokeScope(userId: string, scope: string): Promise<void> {
+  const res = await fetch(`/api/admin/users/${encodeURIComponent(userId)}/revoke`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ scope }),
+  });
+  if (!res.ok) throw new Error(await detail(res));
 }
 
 // A lawyer drops files (or a folder) and files the matter under one of their walls.

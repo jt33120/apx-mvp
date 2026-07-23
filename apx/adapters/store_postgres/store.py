@@ -58,6 +58,15 @@ class AuthUser:
 
 
 @dataclass(frozen=True)
+class UserInfo:
+    id: str
+    email: str
+    display_name: str
+    is_admin: bool
+    scopes: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class SaveOutcome:
     pieces_written: int
     failures_written: int
@@ -516,7 +525,7 @@ class SqlStore:
         return SearchResults(q, total, hits)
 
     def create_user(self, tenant: str, email: str, password: str, display_name: str,
-                    scopes: set[str]) -> str:
+                    scopes: set[str], *, is_admin: bool = False) -> str:
         """Create an owned user with a scrypt-hashed password and their scope grants.
         The plaintext password is never stored. Returns the new user id."""
         uid = uuid4().hex
@@ -524,6 +533,7 @@ class SqlStore:
             session.add(User(
                 id=uid, tenant=tenant, email=email.strip().lower(),
                 password_hash=hash_password(password), display_name=display_name,
+                is_admin=is_admin,
             ))
             for scope in scopes:
                 session.add(UserScope(user_id=uid, scope=scope))
@@ -551,6 +561,55 @@ class SqlStore:
                     select(UserScope.scope).where(UserScope.user_id == user_id)
                 ).all()
             }
+
+    def identity(self, user_id: str) -> tuple[bool, set[str]]:
+        """A user's admin flag and held scopes in one live read (for the request path)."""
+        with self._sf() as session:
+            is_admin = bool(session.scalar(select(User.is_admin).where(User.id == user_id)))
+            scopes = {
+                scope for (scope,) in session.execute(
+                    select(UserScope.scope).where(UserScope.user_id == user_id)
+                ).all()
+            }
+        return is_admin, scopes
+
+    def list_users(self, tenant: str) -> list[UserInfo]:
+        """Every user in the tenant with their scopes — the cockpit roster."""
+        with self._sf() as session:
+            users = session.execute(
+                select(User).where(User.tenant == tenant).order_by(User.email)
+            ).scalars().all()
+            out = [
+                UserInfo(
+                    u.id, u.email, u.display_name, u.is_admin,
+                    tuple(sorted(
+                        scope for (scope,) in session.execute(
+                            select(UserScope.scope).where(UserScope.user_id == u.id)
+                        ).all()
+                    )),
+                )
+                for u in users
+            ]
+        return out
+
+    def grant_scope(self, tenant: str, user_id: str, scope: str) -> None:
+        """Grant a wall to a user in this tenant (idempotent). Takes effect on their
+        next request (scope is resolved live)."""
+        with self._sf() as session, session.begin():
+            user = session.scalar(select(User).where(User.id == user_id, User.tenant == tenant))
+            if user is None:
+                raise ValueError("unknown user")
+            session.merge(UserScope(user_id=user_id, scope=scope))
+
+    def revoke_scope(self, tenant: str, user_id: str, scope: str) -> None:
+        """Revoke a wall from a user in this tenant (takes effect on their next request)."""
+        with self._sf() as session, session.begin():
+            user = session.scalar(select(User).where(User.id == user_id, User.tenant == tenant))
+            if user is None:
+                raise ValueError("unknown user")
+            row = session.get(UserScope, {"user_id": user_id, "scope": scope})
+            if row is not None:
+                session.delete(row)
 
     def read_audit(self, matter: str, tenant: str, scopes: set[str]) -> AuditTrail:
         """The audit trail for a matter — scope-checked. The chain is per-tenant

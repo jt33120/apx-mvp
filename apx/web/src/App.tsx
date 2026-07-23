@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  ingestUpload, judgeMatter, listMatters, login, logout, me,
-  readAudit, readLabels, readTriage, recallReview, recallSample, searchCorpus,
-  type AuditTrail, type Identity, type IngestResponse, type Labels,
+  createUser, grantScope, ingestUpload, judgeMatter, listMatters, listUsers, login, logout, me,
+  readAudit, readLabels, readTriage, recallReview, recallSample, revokeScope, searchCorpus,
+  type AdminUser, type AuditTrail, type Identity, type IngestResponse, type Labels,
   type MatterSummary, type RecallBound, type RecallSample, type SearchResults, type Triage,
 } from "./api";
 
@@ -11,6 +11,7 @@ import {
 export default function App() {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [ready, setReady] = useState(false);
+  const [view, setView] = useState<"console" | "cockpit">("console");
 
   useEffect(() => {
     me().then(setIdentity).catch(() => setIdentity(null)).finally(() => setReady(true));
@@ -18,14 +19,18 @@ export default function App() {
 
   if (!ready) return <main style={{ padding: "2rem", maxWidth: 760, margin: "0 auto" }}>…</main>;
   if (!identity) return <Login onLogin={setIdentity} />;
+
+  const onLogout = async () => {
+    await logout();
+    setIdentity(null);
+    setView("console");
+  };
+  if (view === "cockpit" && identity.is_admin) {
+    return <Cockpit onBack={() => setView("console")} onLogout={onLogout} />;
+  }
   return (
-    <Console
-      identity={identity}
-      onLogout={async () => {
-        await logout();
-        setIdentity(null);
-      }}
-    />
+    <Console identity={identity} onLogout={onLogout}
+      onCockpit={identity.is_admin ? () => setView("cockpit") : undefined} />
   );
 }
 
@@ -72,7 +77,9 @@ function Login({ onLogin }: { onLogin: (id: Identity) => void }) {
 
 /** Drop a folder, see the inventory; deduplicate, judge, search — all within the
  *  scopes the session holds. */
-function Console({ identity, onLogout }: { identity: Identity; onLogout: () => void }) {
+function Console({ identity, onLogout, onCockpit }: {
+  identity: Identity; onLogout: () => void; onCockpit?: () => void;
+}) {
   const [matter, setMatter] = useState("");
   const [scope, setScope] = useState(identity.scopes[0] ?? "");
   const [fileCount, setFileCount] = useState(0);
@@ -118,6 +125,11 @@ function Console({ identity, onLogout }: { identity: Identity; onLogout: () => v
         <h1 style={{ margin: 0 }}>APX — Inventaire d'un dossier</h1>
         <div style={{ fontSize: ".85rem", color: "#555" }}>
           {identity.actor} · {identity.scopes.join(", ") || "aucun périmètre"}{" "}
+          {onCockpit && (
+            <button onClick={onCockpit} style={{ marginLeft: ".5rem", padding: ".2rem .6rem" }}>
+              Cockpit
+            </button>
+          )}
           <button onClick={onLogout} style={{ marginLeft: ".5rem", padding: ".2rem .6rem" }}>
             Déconnexion
           </button>
@@ -162,6 +174,133 @@ function Console({ identity, onLogout }: { identity: Identity; onLogout: () => v
           </table>
         </section>
       )}
+    </main>
+  );
+}
+
+/** The admin cockpit: manage the firm's users and their walls. Admin-gated server-side. */
+function Cockpit({ onBack, onLogout }: { onBack: () => void; onLogout: () => void }) {
+  const [users, setUsers] = useState<AdminUser[]>([]);
+  const [err, setErr] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [pw, setPw] = useState("");
+  const [name, setName] = useState("");
+  const [scopes, setScopes] = useState("");
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  async function refresh() {
+    try {
+      setUsers(await listUsers());
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+  useEffect(() => {
+    void refresh();
+  }, []);
+
+  async function create(e: React.FormEvent) {
+    e.preventDefault();
+    setBusy(true);
+    setErr(null);
+    try {
+      await createUser(email, pw, name, scopes.split(",").map((s) => s.trim()).filter(Boolean), isAdmin);
+      setEmail("");
+      setPw("");
+      setName("");
+      setScopes("");
+      setIsAdmin(false);
+      await refresh();
+    } catch (e2) {
+      setErr(e2 instanceof Error ? e2.message : String(e2));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function grant(id: string) {
+    const s = window.prompt("Périmètre à accorder ?");
+    if (!s || !s.trim()) return;
+    try {
+      await grantScope(id, s.trim());
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+  async function revoke(id: string, s: string) {
+    try {
+      await revokeScope(id, s);
+      await refresh();
+    } catch (e) {
+      setErr(e instanceof Error ? e.message : String(e));
+    }
+  }
+
+  const box = { padding: ".4rem" } as const;
+  return (
+    <main style={{ padding: "var(--apx-space-2)", maxWidth: 760, margin: "0 auto" }}>
+      <header style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline",
+        borderBottom: "1px solid #e7e2d8", paddingBottom: ".6rem" }}>
+        <h1 style={{ margin: 0 }}>Cockpit — utilisateurs &amp; périmètres</h1>
+        <div style={{ fontSize: ".85rem" }}>
+          <button onClick={onBack} style={{ padding: ".2rem .6rem" }}>← Console</button>{" "}
+          <button onClick={onLogout} style={{ padding: ".2rem .6rem" }}>Déconnexion</button>
+        </div>
+      </header>
+
+      {err && <p role="alert" style={{ color: "#a3161c" }}>{err}</p>}
+
+      <section style={{ marginTop: "1.2rem" }}>
+        <h2>Nouvel utilisateur</h2>
+        <form onSubmit={create}
+          style={{ display: "flex", gap: ".4rem", flexWrap: "wrap", alignItems: "center" }}>
+          <input aria-label="Courriel" placeholder="Courriel" type="email" value={email}
+            onChange={(e) => setEmail(e.target.value)} style={{ ...box, flex: "1 1 12rem" }} />
+          <input aria-label="Nom" placeholder="Nom affiché" value={name}
+            onChange={(e) => setName(e.target.value)} style={{ ...box, flex: "1 1 9rem" }} />
+          <input aria-label="Mot de passe" placeholder="Mot de passe" type="password" value={pw}
+            onChange={(e) => setPw(e.target.value)} style={{ ...box, flex: "1 1 9rem" }} />
+          <input aria-label="Périmètres" placeholder="périmètres (a, b)" value={scopes}
+            onChange={(e) => setScopes(e.target.value)} style={{ ...box, flex: "1 1 9rem" }} />
+          <label style={{ fontSize: ".85rem" }}>
+            <input type="checkbox" checked={isAdmin}
+              onChange={(e) => setIsAdmin(e.target.checked)} /> admin
+          </label>
+          <button type="submit" disabled={busy || !email || !pw || !name}
+            style={{ padding: ".4rem .9rem" }}>Créer</button>
+        </form>
+      </section>
+
+      <section style={{ marginTop: "1.5rem" }}>
+        <h2>Utilisateurs</h2>
+        <table style={{ width: "100%", borderCollapse: "collapse" }}>
+          <tbody>
+            {users.map((u) => (
+              <tr key={u.id} style={{ borderTop: "1px solid #ddd", verticalAlign: "top" }}>
+                <td style={{ padding: ".5rem .5rem .5rem 0" }}>
+                  {u.email}{u.is_admin && <span style={{ color: "#9a7a34" }}> · admin</span>}
+                  <div style={{ fontSize: ".8rem", color: "#777" }}>{u.display_name}</div>
+                </td>
+                <td style={{ padding: ".5rem 0" }}>
+                  {u.scopes.map((s) => (
+                    <span key={s} style={{ display: "inline-block", background: "#eef2f8", color: "#334",
+                      borderRadius: 999, padding: ".05rem .5rem", marginRight: ".3rem",
+                      marginBottom: ".2rem", fontSize: ".78rem" }}>
+                      {s}{" "}
+                      <button onClick={() => revoke(u.id, s)} aria-label={`Retirer ${s}`}
+                        style={{ border: 0, background: "none", cursor: "pointer", color: "#a3161c" }}>×</button>
+                    </span>
+                  ))}
+                  <button onClick={() => grant(u.id)}
+                    style={{ padding: ".1rem .5rem", fontSize: ".78rem" }}>+ périmètre</button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </section>
     </main>
   );
 }

@@ -20,6 +20,7 @@ from pathlib import Path
 
 from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel
+from sqlalchemy.exc import IntegrityError
 
 from apx.adapters.extraction.files import FileExtractor
 from apx.adapters.judge.criteria import CriteriaJudge
@@ -68,11 +69,13 @@ class Identity:
     tenant: str
     actor: str            # the session user's display name — the audit actor
     scopes: set[str]      # resolved live from user_scope; never client-supplied
+    is_admin: bool = False
 
 
 def current_identity(apx_session: str | None = Cookie(default=None)) -> Identity:
-    """Resolve the caller from their session cookie, or 401. Scopes are read from the
-    authoritative grants at request time (AD-13), so the client cannot claim a wall."""
+    """Resolve the caller from their session cookie, or 401. The admin flag and scopes
+    are read from the authoritative rows at request time (AD-13), so neither can be
+    claimed by the client and a revocation takes effect on the next request."""
     secret = _secret()
     if not apx_session:
         raise HTTPException(status_code=401, detail="not authenticated")
@@ -80,10 +83,19 @@ def current_identity(apx_session: str | None = Cookie(default=None)) -> Identity
     if claims is None:
         raise HTTPException(status_code=401, detail="invalid or expired session")
     store = _require_store()
+    is_admin, scopes = store.identity(claims["user_id"])
     return Identity(
         user_id=claims["user_id"], tenant=claims["tenant"], actor=claims["actor"],
-        scopes=store.scopes_for(claims["user_id"]),
+        scopes=scopes, is_admin=is_admin,
     )
+
+
+def require_admin(ident: Identity = Depends(current_identity)) -> Identity:
+    """Gate the cockpit: the caller must be an administrator (403 otherwise). The flag
+    is already resolved on the identity, so this adds no query."""
+    if not ident.is_admin:
+        raise HTTPException(status_code=403, detail="réservé aux administrateurs")
+    return ident
 
 
 class LoginRequest(BaseModel):
@@ -96,6 +108,27 @@ class IdentityOut(BaseModel):
     actor: str
     tenant: str
     scopes: list[str]
+    is_admin: bool = False
+
+
+class AdminUserOut(BaseModel):
+    id: str
+    email: str
+    display_name: str
+    is_admin: bool
+    scopes: list[str]
+
+
+class CreateUserIn(BaseModel):
+    email: str
+    password: str
+    display_name: str
+    scopes: list[str] = []
+    is_admin: bool = False
+
+
+class ScopeIn(BaseModel):
+    scope: str
 
 
 class IngestRequest(BaseModel):
@@ -311,8 +344,9 @@ def login(req: LoginRequest, response: Response) -> IdentityOut:
     # HttpOnly so JS cannot read it; SameSite=Lax against CSRF. Secure should be True
     # behind HTTPS in production (set via a reverse proxy / env in deployment).
     response.set_cookie(SESSION_COOKIE, token, httponly=True, samesite="lax", path="/")
+    is_admin, scopes = store.identity(user.id)
     return IdentityOut(
-        actor=user.display_name, tenant=user.tenant, scopes=sorted(store.scopes_for(user.id))
+        actor=user.display_name, tenant=user.tenant, scopes=sorted(scopes), is_admin=is_admin
     )
 
 
@@ -324,7 +358,64 @@ def logout(response: Response) -> dict[str, str]:
 
 @app.get("/api/me", response_model=IdentityOut)
 def me(ident: Identity = Depends(current_identity)) -> IdentityOut:
-    return IdentityOut(actor=ident.actor, tenant=ident.tenant, scopes=sorted(ident.scopes))
+    return IdentityOut(
+        actor=ident.actor, tenant=ident.tenant, scopes=sorted(ident.scopes), is_admin=ident.is_admin
+    )
+
+
+@app.get("/api/admin/users", response_model=list[AdminUserOut])
+def admin_list_users(ident: Identity = Depends(require_admin)) -> list[AdminUserOut]:
+    """Every user in the caller's tenant with their scopes (admin only)."""
+    store = _require_store()
+    return [
+        AdminUserOut(id=u.id, email=u.email, display_name=u.display_name,
+                     is_admin=u.is_admin, scopes=list(u.scopes))
+        for u in store.list_users(ident.tenant)
+    ]
+
+
+@app.post("/api/admin/users", response_model=AdminUserOut)
+def admin_create_user(req: CreateUserIn, ident: Identity = Depends(require_admin)) -> AdminUserOut:
+    """Create a user in the caller's tenant (admin only). 400 if the email is taken."""
+    store = _require_store()
+    try:
+        uid = store.create_user(ident.tenant, req.email, req.password, req.display_name,
+                                set(req.scopes), is_admin=req.is_admin)
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=400, detail="un utilisateur existe déjà pour ce courriel"
+        ) from exc
+    return AdminUserOut(id=uid, email=req.email.strip().lower(), display_name=req.display_name,
+                        is_admin=req.is_admin, scopes=sorted(set(req.scopes)))
+
+
+@app.post("/api/admin/users/{user_id}/grant")
+def admin_grant(
+    user_id: str, req: ScopeIn, ident: Identity = Depends(require_admin)
+) -> dict[str, str]:
+    """Grant a wall to a user in the caller's tenant (admin only)."""
+    store = _require_store()
+    scope = req.scope.strip()
+    if not scope:
+        raise HTTPException(status_code=400, detail="périmètre requis")
+    try:
+        store.grant_scope(ident.tenant, user_id, scope)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="utilisateur inconnu") from exc
+    return {"status": "granted"}
+
+
+@app.post("/api/admin/users/{user_id}/revoke")
+def admin_revoke(
+    user_id: str, req: ScopeIn, ident: Identity = Depends(require_admin)
+) -> dict[str, str]:
+    """Revoke a wall from a user in the caller's tenant (admin only)."""
+    store = _require_store()
+    try:
+        store.revoke_scope(ident.tenant, user_id, req.scope.strip())
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="utilisateur inconnu") from exc
+    return {"status": "revoked"}
 
 
 @app.post("/api/ingest", response_model=IngestResponse)
