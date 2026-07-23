@@ -119,3 +119,30 @@ class LabelRecord(Base):
     rationale: Mapped[str] = mapped_column(Text, nullable=False)  # why — never empty
     judge: Mapped[str] = mapped_column(String, nullable=False)  # which judge decided (transparency)
     judged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class User(Base):
+    """An owned user (AD-15) — no hosted identity. The password is a scrypt hash
+    (apx.core.domain.auth); the plaintext is never stored. `user` is reserved in
+    Postgres, hence `user_account`.
+    """
+
+    __tablename__ = "user_account"
+    __table_args__ = (UniqueConstraint("tenant", "email", name="uq_user_tenant_email"),)
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    email: Mapped[str] = mapped_column(String, nullable=False)
+    password_hash: Mapped[str] = mapped_column(String, nullable=False)
+    display_name: Mapped[str] = mapped_column(String, nullable=False)
+
+
+class UserScope(Base):
+    """Which walls a user holds (AD-13). Authoritative: scope is resolved from here at
+    query time and the client never supplies it — the request cannot claim a wall.
+    """
+
+    __tablename__ = "user_scope"
+
+    user_id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    scope: Mapped[str] = mapped_column(String, primary_key=True)

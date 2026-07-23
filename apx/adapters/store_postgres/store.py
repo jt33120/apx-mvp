@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from uuid import uuid4
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, sessionmaker
@@ -26,16 +27,31 @@ from apx.adapters.store_postgres.models import (
     LabelRecord,
     MatterScope,
     Piece,
+    User,
+    UserScope,
 )
 from apx.core.app.ingest import IngestionResult
+from apx.core.domain.auth import hash_password, verify_password
 from apx.core.domain.dedup import cluster
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.search import snippet
 from apx.core.domain.triage import TriageOutcome
 
+# A valid hash to verify against when the user is unknown, so authentication takes the
+# same time whether or not the email exists (no user-enumeration by timing).
+_DUMMY_HASH = hash_password("timing-equalizer")
+
 
 class ScopeDenied(Exception):
     """A read touched a matter outside the caller's RBAC scope. Fail closed."""
+
+
+@dataclass(frozen=True)
+class AuthUser:
+    id: str
+    tenant: str
+    email: str
+    display_name: str  # the actor recorded on the audit trail
 
 
 @dataclass(frozen=True)
@@ -392,6 +408,43 @@ class SqlStore:
             ).all()
         hits = tuple(SearchHit(matter, prov, snippet(full, q)) for matter, prov, full in rows)
         return SearchResults(q, total, hits)
+
+    def create_user(self, tenant: str, email: str, password: str, display_name: str,
+                    scopes: set[str]) -> str:
+        """Create an owned user with a scrypt-hashed password and their scope grants.
+        The plaintext password is never stored. Returns the new user id."""
+        uid = uuid4().hex
+        with self._sf() as session, session.begin():
+            session.add(User(
+                id=uid, tenant=tenant, email=email.strip().lower(),
+                password_hash=hash_password(password), display_name=display_name,
+            ))
+            for scope in scopes:
+                session.add(UserScope(user_id=uid, scope=scope))
+        return uid
+
+    def authenticate(self, tenant: str, email: str, password: str) -> AuthUser | None:
+        """Return the user on a correct password, else None. The password is always
+        verified — against a dummy hash when the email is unknown — so timing does not
+        reveal whether an account exists."""
+        with self._sf() as session:
+            u = session.scalar(
+                select(User).where(User.tenant == tenant, User.email == email.strip().lower())
+            )
+            ok = verify_password(password, u.password_hash if u is not None else _DUMMY_HASH)
+            if u is None or not ok:
+                return None
+            return AuthUser(u.id, u.tenant, u.email, u.display_name)
+
+    def scopes_for(self, user_id: str) -> set[str]:
+        """The walls a user holds — resolved live (never denormalised), so a re-grant
+        takes effect on the next request (AD-13)."""
+        with self._sf() as session:
+            return {
+                scope for (scope,) in session.execute(
+                    select(UserScope.scope).where(UserScope.user_id == user_id)
+                ).all()
+            }
 
     def read_audit(self, matter: str, tenant: str, scopes: set[str]) -> AuditTrail:
         """The audit trail for a matter — scope-checked. The chain is per-tenant
