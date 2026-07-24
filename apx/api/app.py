@@ -15,6 +15,7 @@ import os
 import tempfile
 import time
 from dataclasses import dataclass
+from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 
@@ -34,7 +35,6 @@ from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.triage import triage_pieces
-from apx.core.domain.auth import sign_token, verify_token
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
 
@@ -118,13 +118,12 @@ def _require_store() -> SqlStore:
     return store
 
 
-def _secret() -> str:
-    """The local key that signs sessions (APX_SECRET_KEY). Required — there is no
-    insecure default; without it, auth fails closed."""
-    secret = os.environ.get("APX_SECRET_KEY")
-    if not secret:
-        raise HTTPException(status_code=503, detail="no session secret (set APX_SECRET_KEY)")
-    return secret
+def _session_ttls() -> tuple[timedelta, timedelta]:
+    """The session's absolute and idle lifetimes — configuration-as-data (AD-15). Defaults:
+    8h absolute, 30min idle."""
+    absolute = int(os.environ.get("APX_SESSION_ABSOLUTE_SECONDS", str(8 * 3600)))
+    idle = int(os.environ.get("APX_SESSION_IDLE_SECONDS", str(30 * 60)))
+    return timedelta(seconds=absolute), timedelta(seconds=idle)
 
 
 @dataclass
@@ -137,20 +136,19 @@ class Identity:
 
 
 def current_identity(apx_session: str | None = Cookie(default=None)) -> Identity:
-    """Resolve the caller from their session cookie, or 401. The admin flag and scopes
-    are read from the authoritative rows at request time (AD-13), so neither can be
-    claimed by the client and a revocation takes effect on the next request."""
-    secret = _secret()
+    """Resolve the caller from their opaque session cookie, or 401. Authority is the
+    server-side session row, not a self-verifying token (AD-15): the actor, admin flag and
+    scopes are re-resolved LIVE from the user's rows, so a revocation takes effect on the
+    next request and a signed-out or expired session is refused."""
     if not apx_session:
         raise HTTPException(status_code=401, detail="not authenticated")
-    claims = verify_token(secret, apx_session, now=int(time.time()))
-    if claims is None:
+    _, idle_ttl = _session_ttls()
+    who = _require_store().resolve_session(apx_session, idle_ttl=idle_ttl)
+    if who is None:
         raise HTTPException(status_code=401, detail="invalid or expired session")
-    store = _require_store()
-    is_admin, scopes = store.identity(claims["user_id"])
     return Identity(
-        user_id=claims["user_id"], tenant=claims["tenant"], actor=claims["actor"],
-        scopes=scopes, is_admin=is_admin,
+        user_id=who.user_id, tenant=who.tenant, actor=who.actor,
+        scopes=who.scopes, is_admin=who.is_admin,
     )
 
 
@@ -410,26 +408,24 @@ def health() -> dict[str, str]:
 
 @app.post("/api/login", response_model=IdentityOut)
 def login(req: LoginRequest, request: Request, response: Response) -> IdentityOut:
-    """Exchange credentials for a signed session cookie. Rate-limited per IP on failed
-    attempts (429 once too many); fails closed (401) at the same speed whether or not
-    the account exists (no enumeration)."""
+    """Exchange credentials for an opaque server-side session (AD-15). Rate-limited per IP
+    on failed attempts (429 once too many); fails closed (401) at the same speed whether or
+    not the account exists (no enumeration)."""
     ip = _client_ip(request)
     if _login_limiter.blocked(ip):
         raise HTTPException(status_code=429, detail="trop de tentatives — réessayez plus tard")
-    secret = _secret()
     store = _require_store()
     user = store.authenticate(req.tenant, req.email, req.password)
     if user is None:
         _login_limiter.record_failure(ip)
         raise HTTPException(status_code=401, detail="identifiants invalides")
     _login_limiter.reset(ip)  # a success clears the counter — legitimate use is never throttled
-    token = sign_token(
-        secret, {"user_id": user.id, "tenant": user.tenant, "actor": user.display_name},
-        now=int(time.time()),
-    )
-    # HttpOnly so JS cannot read it; SameSite=Lax against CSRF; Secure behind HTTPS.
+    absolute_ttl, _ = _session_ttls()
+    sid = store.create_session(user.id, user.tenant, absolute_ttl=absolute_ttl)
+    # HttpOnly so JS cannot read it; SameSite=Lax against CSRF; Secure behind HTTPS. The
+    # value is an opaque server-side session id, never a self-verifying token (AD-15).
     response.set_cookie(
-        SESSION_COOKIE, token, httponly=True, samesite="lax", secure=_cookie_secure(), path="/")
+        SESSION_COOKIE, sid, httponly=True, samesite="lax", secure=_cookie_secure(), path="/")
     is_admin, scopes = store.identity(user.id)
     return IdentityOut(
         actor=user.display_name, tenant=user.tenant, scopes=sorted(scopes), is_admin=is_admin
@@ -437,7 +433,9 @@ def login(req: LoginRequest, request: Request, response: Response) -> IdentityOu
 
 
 @app.post("/api/logout")
-def logout(response: Response) -> dict[str, str]:
+def logout(response: Response, apx_session: str | None = Cookie(default=None)) -> dict[str, str]:
+    if apx_session:
+        _require_store().delete_session(apx_session)  # the id is not reusable afterwards
     response.delete_cookie(SESSION_COOKIE, path="/")
     return {"status": "logged out"}
 
@@ -468,6 +466,7 @@ def change_password(
     if not store.verify_user_password(ident.user_id, req.current_password):
         raise HTTPException(status_code=400, detail="mot de passe actuel incorrect")
     store.set_password(ident.user_id, req.new_password)
+    store.delete_user_sessions(ident.user_id)  # invalidate every live session (AD-15/AC3)
     return {"status": "changed"}
 
 

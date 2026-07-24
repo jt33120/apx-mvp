@@ -212,6 +212,25 @@ class UserScope(Base):
     scope: Mapped[str] = mapped_column(String, primary_key=True)
 
 
+class SessionRecord(Base):
+    """An opaque server-side session (AD-15). The cookie carries only this unguessable id;
+    authority comes from THIS row — so sign-out, a password change and a scope revocation
+    take effect immediately (delete the row / re-resolve live), not "wait for a token to
+    expire". There is no stateless self-verifying token for user sessions (AD-15 forbids
+    JWT here). No user data is denormalised on the row — the actor, admin flag and scopes
+    are resolved live from the user's rows at each request. No cascade FK (AD-7).
+    """
+
+    __tablename__ = "session"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # secrets.token_urlsafe(32)
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    absolute_expiry: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class RecallReview(Base):
     """A recorded recall check on a matter's discard pile (the FR-… guarantee). A
     sample of the discards was reviewed; this stores the finite-population upper

@@ -16,7 +16,12 @@ from __future__ import annotations
 import sys
 from collections.abc import Callable
 
-from apx.checks import import_contracts, payload_schema, tenant_isolation
+from apx.checks import (
+    credential_storage,
+    import_contracts,
+    payload_schema,
+    tenant_isolation,
+)
 from apx.checks.import_contracts import CheckResult
 
 # The registry. Each entry names its pattern and the AD it enforces (AD-33).
@@ -32,6 +37,9 @@ CHECKS: list[Callable[[], CheckResult]] = [
     tenant_isolation.tenant_not_null_on_owned_tables,
     tenant_isolation.scoped_access_carries_tenant,
     tenant_isolation.identity_is_tenant_qualified,
+    # story 1.5 — owned auth (AD-15).
+    credential_storage.no_reversible_credential_storage,
+    credential_storage.jwt_decode_pins_algorithms,
 ]
 
 

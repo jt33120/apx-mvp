@@ -39,6 +39,7 @@ OWNED_TABLES = frozenset({
     "audit_record",
     "recall_review",
     "user_account",
+    "session",
 })
 
 

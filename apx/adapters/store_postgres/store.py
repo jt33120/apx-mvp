@@ -15,11 +15,12 @@ from __future__ import annotations
 
 import hashlib
 import random
+import secrets
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session, sessionmaker
 
 from apx.adapters.store_postgres.models import (
@@ -29,11 +30,12 @@ from apx.adapters.store_postgres.models import (
     MatterScope,
     Piece,
     RecallReview,
+    SessionRecord,
     User,
     UserScope,
 )
 from apx.core.app.ingest import IngestionResult
-from apx.core.domain.auth import hash_password, verify_password
+from apx.core.domain.auth import hash_password, verify_and_upgrade, verify_password
 from apx.core.domain.confidence import prevalence_upper_bound
 from apx.core.domain.dedup import cluster
 from apx.core.domain.inventory import Inventory
@@ -55,6 +57,19 @@ class AuthUser:
     tenant: str
     email: str
     display_name: str  # the actor recorded on the audit trail
+
+
+@dataclass(frozen=True)
+class SessionIdentity:
+    """The Principal resolved from an opaque session (AD-15) — everything LIVE from the
+    user's rows (never denormalised on the session), so a rename, a scope revocation or an
+    admin change takes effect on the next request."""
+
+    user_id: str
+    tenant: str
+    actor: str  # the user's current display name (the audit actor)
+    is_admin: bool
+    scopes: set[str]
 
 
 @dataclass(frozen=True)
@@ -186,6 +201,13 @@ def _audit_ts(dt: datetime) -> str:
     if dt.tzinfo is not None:
         dt = dt.astimezone(UTC).replace(tzinfo=None)
     return dt.isoformat(timespec="microseconds")
+
+
+def _as_utc(dt: datetime) -> datetime:
+    """An aware-UTC datetime for comparison. A read-back value is tz-naive on SQLite (it
+    drops the tzinfo) and aware on Postgres; treat a naive value as UTC so aware/naive
+    comparisons never explode."""
+    return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
 
 def _audit_content(seq: int, tenant: str, matter: str | None, actor: str, action: str,
@@ -545,13 +567,17 @@ class SqlStore:
         """Return the user on a correct password, else None. The password is always
         verified — against a dummy hash when the email is unknown — so timing does not
         reveal whether an account exists."""
-        with self._sf() as session:
+        with self._sf() as session, session.begin():
             u = session.scalar(
                 select(User).where(User.tenant == tenant, User.email == email.strip().lower())
             )
-            ok = verify_password(password, u.password_hash if u is not None else _DUMMY_HASH)
+            ok, upgraded = verify_and_upgrade(
+                password, u.password_hash if u is not None else _DUMMY_HASH
+            )
             if u is None or not ok:
                 return None
+            if upgraded is not None:
+                u.password_hash = upgraded  # upgrade-on-verify: legacy scrypt -> Argon2id
             return AuthUser(u.id, u.tenant, u.email, u.display_name)
 
     def scopes_for(self, user_id: str) -> set[str]:
@@ -574,6 +600,63 @@ class SqlStore:
                 ).all()
             }
         return is_admin, scopes
+
+    # ── opaque server-side sessions (AD-15) — the one Principal-resolution interface ──
+
+    def create_session(
+        self, user_id: str, tenant: str, *, absolute_ttl: timedelta, now: datetime | None = None
+    ) -> str:
+        """Open a session and return its opaque, unguessable id (the cookie value). The id
+        is never a signed claim blob — authority is the row (AD-15)."""
+        now = now or datetime.now(UTC)
+        sid = secrets.token_urlsafe(32)
+        with self._sf() as session, session.begin():
+            session.add(SessionRecord(
+                id=sid, user_id=user_id, tenant=tenant,
+                created_at=now, last_seen_at=now, absolute_expiry=now + absolute_ttl,
+            ))
+        return sid
+
+    def resolve_session(
+        self, session_id: str, *, idle_ttl: timedelta, now: datetime | None = None
+    ) -> SessionIdentity | None:
+        """Resolve an opaque session to a live Principal, or None if absent/expired. Slides
+        the idle window (touches last_seen_at) and reaps an expired row. The actor, admin
+        flag and scopes are resolved LIVE from the user's rows — a revoked scope is gone
+        here on the next request (AD-13/FR-49)."""
+        now = now or datetime.now(UTC)
+        with self._sf() as session, session.begin():
+            row = session.get(SessionRecord, session_id)
+            if row is None:
+                return None
+            if now >= _as_utc(row.absolute_expiry) or (now - _as_utc(row.last_seen_at)) > idle_ttl:
+                session.delete(row)  # expired (absolute or idle) — reap and refuse
+                return None
+            user = session.get(User, row.user_id)
+            if user is None:
+                session.delete(row)  # the user is gone — the session cannot stand
+                return None
+            row.last_seen_at = now  # slide the idle window
+            scopes = {
+                s for (s,) in session.execute(
+                    select(UserScope.scope).where(UserScope.user_id == row.user_id)
+                ).all()
+            }
+            return SessionIdentity(
+                row.user_id, row.tenant, user.display_name, bool(user.is_admin), scopes
+            )
+
+    def delete_session(self, session_id: str) -> None:
+        """Sign-out: the id is not reusable afterwards."""
+        with self._sf() as session, session.begin():
+            row = session.get(SessionRecord, session_id)
+            if row is not None:
+                session.delete(row)
+
+    def delete_user_sessions(self, user_id: str) -> None:
+        """Invalidate every live session for a user (on a password change)."""
+        with self._sf() as session, session.begin():
+            session.execute(delete(SessionRecord).where(SessionRecord.user_id == user_id))
 
     def verify_user_password(self, user_id: str, password: str) -> bool:
         """Check a password for a known user id (used to confirm a self-service change)."""
