@@ -34,12 +34,21 @@ _FORBIDDEN_JWT_NAMES = {"PyJWK", "PyJWKClient", "jwks"}
 
 
 def no_reversible_credential_storage(metadata: MetaData | None = None) -> CheckResult:
-    """No model column stores a plaintext/reversible credential (FR-56/AD-15)."""
+    """No model column stores a plaintext/reversible credential (FR-56/AD-15). A password is
+    stored only as ``password_hash`` (one-way): any other password-ish column — ``password``,
+    ``password_plain``, a reversibly-encrypted ``password_enc`` — fails the build. (Limitation,
+    by design: this is a name-and-metadata check; a reversible cipher applied to a credential
+    in *store code* is not caught here — the review tracks a store-AST leg as follow-up.)"""
     name, ad = "no reversible credential storage", "AD-15"
     tables = (metadata if metadata is not None else _base_metadata()).tables
     for tname, table in tables.items():
         for col in table.columns:
-            if col.name.lower() in _PLAINTEXT_CREDENTIAL_NAMES:
+            low = col.name.lower()
+            if "password" in low and low != "password_hash":
+                return CheckResult(name, ad, False,
+                                   f"{tname}.{col.name} is a non-hash password column — a "
+                                   "password is stored only as password_hash (one-way, AD-15)")
+            if low in _PLAINTEXT_CREDENTIAL_NAMES:
                 return CheckResult(name, ad, False,
                                    f"{tname}.{col.name} looks like a plaintext credential — a "
                                    "password is stored only as a one-way hash (Argon2id, AD-15)")

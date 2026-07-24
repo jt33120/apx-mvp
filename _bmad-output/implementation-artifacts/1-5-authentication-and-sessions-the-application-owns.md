@@ -4,7 +4,7 @@ baseline_commit: 13f1497
 
 # Story 1.5: Authentication and sessions the application owns
 
-Status: review
+Status: done
 
 ## Story
 
@@ -110,6 +110,28 @@ Claude Opus 4.8 (1M context) — Claude Code dev-story workflow.
 | Date | Change |
 |---|---|
 | 2026-07-24 | Implemented story 1.5 — owned auth (AD-15): Argon2id (pwdlib) with legacy-scrypt upgrade-on-verify; opaque server-side sessions in PostgreSQL (migration 0011) behind one Principal interface, replacing stateless HMAC tokens; app.py rewired (login/logout/current_identity/change_password); revocation reaches live sessions; lockout recorded in the audit; MFA config-as-data per tenant via TOTP (migration 0012); two structural checks (no-reversible-storage, jwt.decode algorithm-list). 240 passed / 8 skipped, 10 checks + ruff green, migration head 0012. Status → review. |
+| 2026-07-24 | Addressed the adversarial code review (three-reviewer pass): fixed 3 Med + several Low findings — MFA fail-closed, auth-event audit hardening, XFF trust config-gated, stronger credential check, and cheap hardening. 241 passed / 8 skipped; 10 checks green. Status → done. |
+
+## Senior Developer Review (AI)
+
+**Date:** 2026-07-24 · **Reviewers:** Blind Hunter + Edge-Case Hunter + Acceptance Auditor (parallel, blind, same model tier) · **Outcome:** APPROVE-WITH-NITS → fixes applied. **No auth bypass and no session hijack/fixation** — the reviewers verified the session, password-hashing and rewiring core is solid.
+
+### Findings and resolutions
+
+- [x] **[Med] MFA failed OPEN for unenrolled users.** `if requires_mfa and secret:` let a user with no `mfa_secret` log in with a password alone in an MFA-required tenant (the dangerous downgrade). **Fixed:** the gate now **fails closed** — an MFA-required tenant refuses (403) an unenrolled user (and an empty secret) until enrolled; an API test proves it.
+- [x] **[Med] Auth events on the serialized per-tenant audit chain — pollution + a concurrent 500.** Failed logins wrote to the *attempted* (attacker-controlled) tenant's chain, seeding chains for non-existent firms; two concurrent failures for one tenant raced on `(tenant, seq)` → an `IntegrityError`/500. **Fixed:** `record_auth_event` records only for a **tenant that exists** (no spray-seeded chains) and **retries** on the seq collision; tests added. **Deferred (documented, AD-44):** high-volume auth events on the serialized chain head is a real architectural tension — a dedicated non-chained auth-events log is the AD-44-aligned follow-up.
+- [x] **[Med] `X-Forwarded-For` spoofable → rate-limit/lockout bypass + forged audit IP.** The leftmost XFF (client-controllable even behind a proxy, which *appends*) keyed the per-IP limiter. **Fixed:** the client IP is the **direct socket peer** unless `APX_TRUST_FORWARDED_FOR` is set (deployed image), where the **rightmost** (trusted-proxy-appended) entry is used.
+- [x] **[Low-Med] `no_reversible_credential_storage` was name-only.** A reversibly-encrypted `password_enc` slipped past. **Fixed:** it forbids **any** password-ish column except `password_hash`, with a `password_enc` fixture. *Documented limitation:* a reversible cipher in store *code* is not caught (a store-AST leg is a noted follow-up).
+- [x] **[Low] Cheap hardening:** the rate-limiter is now **thread-safe** (a lock — it runs in FastAPI's threadpool); the ≥8 password floor is enforced at **creation**, not only on change; the dead `sign_token`/`verify_token` HMAC primitives are **deleted** (a footgun — nothing structurally stopped them being re-wired into user sessions); the stale "scrypt" docstrings corrected; `SessionIdentity.tenant` resolves live from the user; a malformed session-TTL env value defaults instead of 500.
+
+### Deferred (documented)
+
+- [x] TOTP replay within the ~90s window (no used-code cache) — a later hardening; MFA stays gated ([ASSUMPTION] carried).
+- [x] `mfa_secret` (a shared TOTP secret) at rest — encryption-at-rest is story 1.7.
+- [x] The general `_append_audit` seq-collision race (pre-existing, affects every audited op) + auth-events-off-the-chain — an AD-44 story.
+- [x] The limiter's residual check-then-act over-permit at the threshold boundary (a shared store is the multi-instance step).
+
+**Post-fix verification:** `ruff` clean · `python -m apx.checks` **10/10** · `pytest` **241 passed, 8 skipped** · migration head `0012`.
 
 ## Open Questions for the human
 

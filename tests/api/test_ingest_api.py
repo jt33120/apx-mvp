@@ -76,6 +76,17 @@ def test_login_requires_totp_when_the_tenant_enables_mfa(tmp_path: Path, monkeyp
         assert ok.status_code == 200
 
 
+def test_mfa_required_but_unenrolled_is_refused(tmp_path: Path, monkeypatch) -> None:
+    # FAIL CLOSED: enabling MFA for a tenant must not let an unenrolled user in on password
+    # alone (the dangerous downgrade). They are refused (403) until enrolled.
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "a@a.test", "pw", "Avocat A", {"w"})  # no mfa_secret
+    store.set_mfa_required("t", True)
+    with TestClient(app) as c:
+        r = c.post("/api/login", json={"tenant": "t", "email": "a@a.test", "password": "pw"})
+        assert r.status_code == 403
+
+
 def test_spa_is_served_at_root_when_built() -> None:
     dist = Path(app_module.__file__).resolve().parent.parent / "web" / "dist"
     if not dist.is_dir():
@@ -308,18 +319,19 @@ def test_cockpit_is_admin_only_and_manages_users(tmp_path: Path, monkeypatch) ->
         assert {u["email"] for u in c.get("/api/admin/users").json()} == {"admin@c.fr", "reg@c.fr"}
 
         created = c.post("/api/admin/users", json={
-            "email": "new@c.fr", "password": "pw2", "display_name": "New", "scopes": ["wall-B"]})
+            "email": "new@c.fr", "password": "password2",
+            "display_name": "New", "scopes": ["wall-B"]})
         assert created.status_code == 200
         uid = created.json()["id"]
         assert c.post(f"/api/admin/users/{uid}/grant", json={"scope": "wall-C"}).status_code == 200
         assert c.post(f"/api/admin/users/{uid}/revoke", json={"scope": "wall-B"}).status_code == 200
         # duplicate email is refused
         dup = c.post("/api/admin/users",
-                     json={"email": "new@c.fr", "password": "x", "display_name": "Dup"})
+                     json={"email": "new@c.fr", "password": "password2", "display_name": "Dup"})
         assert dup.status_code == 400
 
         # the newly-created user can log in and holds exactly the granted wall
-        _login(c, "new@c.fr", pw="pw2")
+        _login(c, "new@c.fr", pw="password2")
         assert sorted(c.get("/api/me").json()["scopes"]) == ["wall-C"]
 
 

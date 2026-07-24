@@ -34,6 +34,10 @@ ENV APX_WEB_DIST=/app/apx/web/dist
 ENV APX_OCR=1
 # Behind HTTPS in deployment: mark the session cookie Secure and send HSTS.
 ENV APX_COOKIE_SECURE=1
+# Behind the platform's proxy: trust its appended X-Forwarded-For (rightmost entry) for the
+# rate-limit/audit client IP. Only safe because the proxy fronts the app — never set this
+# when the app is directly reachable (the header would be client-spoofable).
+ENV APX_TRUST_FORWARDED_FOR=1
 
 COPY alembic.ini ./
 COPY docker/entrypoint.sh /entrypoint.sh

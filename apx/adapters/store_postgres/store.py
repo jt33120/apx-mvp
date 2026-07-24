@@ -21,6 +21,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import delete, func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from apx.adapters.store_postgres.models import (
@@ -551,7 +552,7 @@ class SqlStore:
 
     def create_user(self, tenant: str, email: str, password: str, display_name: str,
                     scopes: set[str], *, is_admin: bool = False) -> str:
-        """Create an owned user with a scrypt-hashed password and their scope grants.
+        """Create an owned user with an Argon2id-hashed password and their scope grants.
         The plaintext password is never stored. Returns the new user id."""
         uid = uuid4().hex
         with self._sf() as session, session.begin():
@@ -644,7 +645,7 @@ class SqlStore:
                 ).all()
             }
             return SessionIdentity(
-                row.user_id, row.tenant, user.display_name, bool(user.is_admin), scopes
+                row.user_id, user.tenant, user.display_name, bool(user.is_admin), scopes
             )
 
     def delete_session(self, session_id: str) -> None:
@@ -661,12 +662,31 @@ class SqlStore:
 
     def record_auth_event(self, tenant: str, actor: str, action: str, detail: str) -> None:
         """Append a tenant-level audit entry for an auth event — a failed login, a lockout:
-        a matterless act on the per-tenant chain (AD-43/AD-22). So a failure is durably
-        recorded (FR-48), not only throttled in memory. Recorded against the *attempted*
-        tenant (an attempt names a tenant even when the credential is wrong)."""
+        a matterless act on the per-tenant chain (AD-43/AD-22). A failure is durably recorded
+        (FR-48), not only throttled in memory.
+
+        Recorded only for a tenant that EXISTS (has users), so an unauthenticated login-spray
+        with arbitrary tenant names cannot seed audit chains for non-existent firms. Retries
+        on a concurrent (tenant, seq) collision so a burst of failed logins does not surface
+        as a 500. (AD-44 note: high-volume auth events on the serialized chain head can still
+        contend; a dedicated non-chained auth-events log is the AD-44-aligned future — a
+        separate story, tracked in the 1.5 review.)"""
         now = datetime.now(UTC)
-        with self._sf() as session, session.begin():
-            self._append_audit(session, tenant, None, actor, action, detail, now)
+        for attempt in range(4):
+            try:
+                with self._sf() as session, session.begin():
+                    exists = session.scalar(
+                        select(func.count()).select_from(User).where(User.tenant == tenant)
+                    )
+                    if not exists:
+                        return  # unknown tenant — never pollute the audit with a spray target
+                    self._append_audit(session, tenant, None, actor, action, detail, now)
+                    session.flush()  # surface a (tenant, seq) collision here, inside the try
+                return
+            except IntegrityError:
+                if attempt == 3:
+                    raise
+                continue
 
     # ── MFA: configuration-as-data per tenant (AD-15/FR-48, [ASSUMPTION] carried) ──
 
@@ -700,7 +720,7 @@ class SqlStore:
             return user is not None and verify_password(password, user.password_hash)
 
     def set_password(self, user_id: str, new_password: str) -> None:
-        """Replace a user's password with a fresh scrypt hash (plaintext never stored)."""
+        """Replace a user's password with a fresh Argon2id hash (plaintext never stored)."""
         with self._sf() as session, session.begin():
             user = session.get(User, user_id)
             if user is None:

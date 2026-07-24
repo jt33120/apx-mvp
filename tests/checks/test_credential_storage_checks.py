@@ -24,6 +24,15 @@ def test_no_reversible_storage_fires_on_a_plaintext_password_column() -> None:
     assert not result.ok and "password" in result.detail
 
 
+def test_no_reversible_storage_fires_on_a_reversibly_encrypted_password() -> None:
+    # a non-hash password column (e.g. reversibly encrypted) must NOT slip past the name check
+    md = MetaData()
+    Table("user_account", md, Column("id", String, primary_key=True),
+          Column("password_enc", String))
+    result = credential_storage.no_reversible_credential_storage(md)
+    assert not result.ok and "password_enc" in result.detail
+
+
 def test_jwt_decode_fires_without_a_literal_algorithm_list(tmp_path: Path) -> None:
     (tmp_path / "svc.py").write_text("import jwt\n\ndef read(t, k):\n    return jwt.decode(t, k)\n")
     result = credential_storage.jwt_decode_pins_algorithms([tmp_path])

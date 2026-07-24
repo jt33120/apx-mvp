@@ -6,19 +6,15 @@ KDF, each with its own salt, in a self-describing PHC string (``$argon2id$…``)
 hashes from before the AD-15 migration still *verify*, and ``verify_and_upgrade`` re-hashes
 them to Argon2id on the next successful login (upgrade-on-verify), so nothing locks out;
 scrypt is never used to hash a new or changed password. The module imports only ``pwdlib``
-and the standard library, so the egress guard has nothing to forbid.
-
-``sign_token``/``verify_token`` remain for now as a stateless-HMAC primitive; user *sessions*
-move to opaque server-side rows in this story's later tasks (AD-15 forbids a stateless token
-for user sessions), and these are kept only should an internal service-token need arise.
+and the standard library, so the egress guard has nothing to forbid. User *sessions* are
+opaque server-side rows (AD-15 forbids a stateless token for user sessions) — there is no
+stateless-token primitive here to be misused for one.
 """
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import hmac
-import json
 
 from pwdlib import PasswordHash
 
@@ -76,36 +72,3 @@ def verify_and_upgrade(password: str, stored: str) -> tuple[bool, str | None]:
         return _hasher.verify_and_update(password, stored)
     except Exception:  # noqa: BLE001
         return False, None
-
-
-def _b64(raw: bytes) -> str:
-    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
-
-
-def _unb64(s: str) -> bytes:
-    return base64.urlsafe_b64decode(s + "=" * (-len(s) % 4))
-
-
-def sign_token(secret: str, claims: dict, *, now: int, ttl_seconds: int = 8 * 3600) -> str:
-    """A stateless HMAC-SHA256 token (base64(claims incl. exp) + '.' + sig). Retained for a
-    possible internal service token; **not** for user sessions (AD-15 — those are server-side)."""
-    body = {**claims, "exp": now + ttl_seconds}
-    payload = _b64(json.dumps(body, sort_keys=True, separators=(",", ":")).encode())
-    sig = hmac.new(secret.encode(), payload.encode("ascii"), hashlib.sha256).hexdigest()
-    return f"{payload}.{sig}"
-
-
-def verify_token(secret: str, token: str, *, now: int) -> dict | None:
-    """Return the claims if the signature is valid and the token is unexpired, else None.
-    Signature checked in constant time; a tampered or stale token returns None."""
-    try:
-        payload, sig = token.split(".")
-        expected = hmac.new(secret.encode(), payload.encode("ascii"), hashlib.sha256).hexdigest()
-        if not hmac.compare_digest(sig, expected):
-            return None
-        claims = json.loads(_unb64(payload))
-        if int(claims.get("exp", 0)) < now:
-            return None
-        return claims
-    except (ValueError, TypeError):
-        return None

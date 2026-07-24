@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+import threading
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -57,10 +58,21 @@ def _cookie_secure() -> bool:
     return os.environ.get("APX_COOKIE_SECURE", "").strip().lower() in ("1", "true", "yes")
 
 
+def _trust_forwarded_for() -> bool:
+    return os.environ.get("APX_TRUST_FORWARDED_FOR", "").strip().lower() in ("1", "true", "yes")
+
+
 def _client_ip(request: Request) -> str:
-    forwarded = request.headers.get("x-forwarded-for")
-    if forwarded:
-        return forwarded.split(",")[0].strip()  # the client, in front of Railway's proxy
+    """The client IP for rate-limiting and the audit. Behind a trusted proxy
+    (APX_TRUST_FORWARDED_FOR — set in the deployed image), use the RIGHTMOST
+    X-Forwarded-For entry: the one the trusted proxy appended (the client as it saw it).
+    The LEFTMOST is client-supplied and spoofable, so trusting it would let an attacker
+    rotate the header to evade the per-IP lockout (AC5) and forge the audited IP. Without a
+    trusted proxy, use the direct socket peer, which a client cannot forge."""
+    if _trust_forwarded_for():
+        forwarded = request.headers.get("x-forwarded-for")
+        if forwarded:
+            return forwarded.split(",")[-1].strip()
     return request.client.host if request.client else "unknown"
 
 
@@ -73,18 +85,22 @@ class _LoginRateLimiter:
         self._limit = limit
         self._window = window_seconds
         self._fails: dict[str, list[float]] = {}
+        self._lock = threading.Lock()  # login runs in the threadpool — guard the shared dict
 
     def blocked(self, key: str) -> bool:
         now = time.time()
-        recent = [t for t in self._fails.get(key, []) if now - t < self._window]
-        self._fails[key] = recent
-        return len(recent) >= self._limit
+        with self._lock:
+            recent = [t for t in self._fails.get(key, []) if now - t < self._window]
+            self._fails[key] = recent
+            return len(recent) >= self._limit
 
     def record_failure(self, key: str) -> None:
-        self._fails.setdefault(key, []).append(time.time())
+        with self._lock:
+            self._fails.setdefault(key, []).append(time.time())
 
     def reset(self, key: str) -> None:
-        self._fails.pop(key, None)
+        with self._lock:
+            self._fails.pop(key, None)
 
 
 _login_limiter = _LoginRateLimiter(limit=10, window_seconds=300.0)
@@ -119,12 +135,22 @@ def _require_store() -> SqlStore:
     return store
 
 
+def _int_env(name: str, default: int) -> int:
+    """An int from the environment, or the default on absence or a malformed value (never a
+    500 on a typo in a config value)."""
+    try:
+        return int(os.environ.get(name, "") or default)
+    except ValueError:
+        return default
+
+
 def _session_ttls() -> tuple[timedelta, timedelta]:
     """The session's absolute and idle lifetimes — configuration-as-data (AD-15). Defaults:
     8h absolute, 30min idle."""
-    absolute = int(os.environ.get("APX_SESSION_ABSOLUTE_SECONDS", str(8 * 3600)))
-    idle = int(os.environ.get("APX_SESSION_IDLE_SECONDS", str(30 * 60)))
-    return timedelta(seconds=absolute), timedelta(seconds=idle)
+    return (
+        timedelta(seconds=_int_env("APX_SESSION_ABSOLUTE_SECONDS", 8 * 3600)),
+        timedelta(seconds=_int_env("APX_SESSION_IDLE_SECONDS", 30 * 60)),
+    )
 
 
 @dataclass
@@ -427,11 +453,16 @@ def login(req: LoginRequest, request: Request, response: Response) -> IdentityOu
         if _login_limiter.blocked(ip):
             store.record_auth_event(req.tenant, "system:auth", "login_locked_out", f"ip={ip}")
         raise HTTPException(status_code=401, detail="identifiants invalides")
-    # Password ok — demand the second factor when the tenant requires MFA and the user is
-    # enrolled (configuration-as-data). An unenrolled user in an MFA tenant passes here;
-    # enrolment is a minimal, out-of-band step ([ASSUMPTION] carried).
+    # Password ok — demand the second factor when the tenant requires MFA (config-as-data).
+    # FAIL CLOSED: an MFA-required tenant whose user is not enrolled cannot log in with a
+    # password alone. Enrolment is out-of-band (set_mfa_secret) — [ASSUMPTION] carried.
     requires_mfa, secret = store.mfa_status(user.tenant, user.id)
-    if requires_mfa and secret:
+    if requires_mfa:
+        if not secret:  # not enrolled (or an empty secret) — refuse, never downgrade to 1FA
+            store.record_auth_event(
+                user.tenant, "system:auth", "login_mfa_unenrolled", f"user={user.id} ip={ip}")
+            raise HTTPException(
+                status_code=403, detail="MFA requis mais non configuré")
         if not req.totp or not pyotp.TOTP(secret).verify(req.totp, valid_window=1):
             store.record_auth_event(
                 user.tenant, "system:auth", "login_mfa_failed", f"user={user.id} ip={ip}")
@@ -503,6 +534,9 @@ def admin_list_users(ident: Identity = Depends(require_admin)) -> list[AdminUser
 def admin_create_user(req: CreateUserIn, ident: Identity = Depends(require_admin)) -> AdminUserOut:
     """Create a user in the caller's tenant (admin only). 400 if the email is taken."""
     store = _require_store()
+    if len(req.password) < 8:
+        raise HTTPException(
+            status_code=422, detail="le mot de passe doit faire au moins 8 caractères")
     try:
         uid = store.create_user(ident.tenant, req.email, req.password, req.display_name,
                                 set(req.scopes), is_admin=req.is_admin)
