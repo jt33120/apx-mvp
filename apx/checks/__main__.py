@@ -22,6 +22,7 @@ from apx.checks import (
     import_contracts,
     payload_schema,
     scope_admin,
+    secrets,
     tenant_isolation,
 )
 from apx.checks.import_contracts import CheckResult
@@ -47,6 +48,9 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # story 1.7 — encryption at rest & a fail-closed start (AD-31).
     encryption.sensitive_columns_are_encrypted,
     encryption.startup_gate_is_fail_closed,
+    # story 1.8 — secret & key management (AD-47/FR-51).
+    secrets.no_secret_in_source,
+    secrets.no_secret_column_in_models,
 ]
 
 

@@ -4,12 +4,13 @@ Mass-document triage for law firms. Hexagonal core, adapters at the edges, **one
 stateful service** (PostgreSQL). Runs the same one artefact hosted, in CI, and
 air-gapped inside a firm (AD-3).
 
-> **Status: story 1.7 — encryption at rest & a fail-closed start.** The frozen payload schema
-> (1.3), the *tenant* wall (1.4), owned auth — Argon2id + opaque server-side sessions,
-> lockout-in-audit, MFA (1.5) — privileged, audited, reversible scope administration (1.6),
-> and now **application-layer encryption at rest** with a **start-up gate that refuses to boot
-> without it** (1.7) exist; ingestion, retrieval and the model tiers do not yet. What is
-> deliberately absent, and which story owns it, is listed at the bottom.
+> **Status: story 1.8 — secret & key management.** The frozen payload schema (1.3), the
+> *tenant* wall (1.4), owned auth — Argon2id + opaque server-side sessions, lockout-in-audit,
+> MFA (1.5) — privileged, audited, reversible scope administration (1.6), application-layer
+> encryption at rest with a fail-closed start-up gate (1.7), and now **secrets held only in the
+> environment** — no secret in source (a build-time guard), **rotatable in place** without a
+> redeploy or a re-index, and scrubbed from logs (1.8) exist; ingestion, retrieval and the model
+> tiers do not yet. What is deliberately absent, and which story owns it, is listed at the bottom.
 
 Planning artefacts (PRD, architecture spine, epics, stories) live under
 `_bmad-output/planning-artifacts/`. The previous implementation at
@@ -202,6 +203,33 @@ that already holds data is supported — a one-shot backfill migration re-encryp
 > provider-managed encrypted volume in the hosted tier. The cryptographic teeth are the
 > application-layer key gate. Key **rotation/custody** is story 1.8.
 
+## Secret & key management (AD-47)
+
+Every held secret — the encryption key(s), model-provider & embedder credentials, the DB URL —
+lives **only in the environment**, never in a data store, and is **scrubbed from logs** by a
+redaction filter (installed at start-up) so a careless log line comes out masked. A build-time
+guard (`python -m apx.checks`) **fails the build on a secret value in source or committed/example
+config** — a known credential pattern (a GitHub PAT, an `sk-`/`AKIA` token, a PEM key) or a bare
+high-entropy token — the one mistake that ends a client relationship.
+
+The encryption key is **rotatable in place**, no redeploy and no re-index: the cipher encrypts
+with a **primary** key and decrypts with primary-or-previous, so a rotation is —
+
+```
+# 1. set the new key as primary, keep the old as a decrypt-only fallback
+export APX_ENCRYPTION_KEY="$(openssl rand -base64 32)"   # the NEW key
+export APX_ENCRYPTION_KEYS_OLD="$OLD_KEY"                # the previous key
+# 2. re-encrypt every stored value under the new key (audited per tenant)
+python -m apx.manage rekey
+# 3. drop APX_ENCRYPTION_KEYS_OLD once the re-key completes
+```
+
+The re-key touches only the application-encrypted columns — never the searchable surfaces (the
+vector column and text index are not application-encrypted), which is why a rotation needs no
+re-index. Rotation is recorded on each *tenant*'s audit chain, naming a one-way key fingerprint,
+never the key. *(The transient user-supplied credential channel — a document password — is
+AD-47's second rule, owned by the failure-register work in epic 2.)*
+
 ## What does NOT belong in this repo yet
 
 Scaffolding only. Each item below has an owning story; building it here is a
@@ -210,7 +238,7 @@ scope violation.
 | Not yet | Owner |
 |---|---|
 | Internal service tokens (PyJWT), WebAuthn as a 2nd factor; MFA enrolment UX | later |
-| Secret / key management (the session/DB secrets' custody, key rotation) | 1.8 |
+| Transient user-supplied credential channel (document passwords, AD-47 rule 2) | epic 2 |
 | Single read entry point (`core/app/read/`) + outside-read grep (AD-14) | later (1.12 / epic 3) |
 | Config / provisioning surface | 1.9 |
 | Content-free projection, egress check | 1.10 / 1.12 |

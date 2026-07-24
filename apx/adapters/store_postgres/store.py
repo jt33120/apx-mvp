@@ -731,6 +731,30 @@ class SqlStore:
                     raise
                 continue
 
+    def tenants(self) -> list[str]:
+        """Every tenant that exists (has at least one user) — the authoritative tenant list, for
+        maintenance acts that must touch each firm (e.g. record a key rotation, AD-47/AD-48)."""
+        with self._sf() as session:
+            rows = session.execute(select(User.tenant).distinct()).scalars().all()
+        return sorted(rows)
+
+    def record_key_rotation(self, tenant: str, actor: str, fingerprint: str) -> None:
+        """Record a key rotation on the tenant's audit chain (AD-47: rotation is recorded, never
+        the key). `fingerprint` is a one-way hash naming WHICH key is now primary — the record
+        answers "which key, when, on whose authority" without ever holding the key value."""
+        now = datetime.now(UTC)
+        for attempt in range(4):
+            try:
+                with self._sf() as session, session.begin():
+                    self._append_audit(
+                        session, tenant, None, actor, "key_rotated", f"key={fingerprint}", now)
+                    session.flush()  # surface a (tenant, seq) collision inside the try
+                return
+            except IntegrityError:
+                if attempt == 3:
+                    raise
+                continue
+
     # ── MFA: configuration-as-data per tenant (AD-15/FR-48, [ASSUMPTION] carried) ──
 
     def set_mfa_required(self, tenant: str, required: bool) -> None:

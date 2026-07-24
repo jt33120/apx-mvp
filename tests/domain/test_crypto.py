@@ -16,7 +16,9 @@ from apx.core.domain.crypto import (
     MissingEncryptionKey,
     generate_key,
     is_ciphertext,
+    key_fingerprint,
     load_key_from_env,
+    load_keys_from_env,
 )
 
 
@@ -71,6 +73,49 @@ def test_an_all_zero_key_is_rejected() -> None:
     import base64
     with pytest.raises(MissingEncryptionKey):
         load_key_from_env({"APX_ENCRYPTION_KEY": base64.urlsafe_b64encode(bytes(32)).decode()})
+
+
+# ── key rotation (story 1.8, AD-47): a multi-key cipher — encrypt with the primary, decrypt
+# with primary-or-previous, so a value under an old key still reads during the transition ──
+
+
+def test_a_previous_key_still_decrypts_during_rotation() -> None:
+    old, new = _key(), _key()
+    old_token = Cipher(old).encrypt("secret professionnel", aad="c")
+    rotating = Cipher([new, old])  # new is primary, old is the previous key
+    assert rotating.decrypt(old_token, aad="c") == "secret professionnel"  # old still reads
+    new_token = rotating.encrypt("secret professionnel", aad="c")
+    assert Cipher(new).decrypt(new_token, aad="c") == "secret professionnel"  # new writes primary
+    with pytest.raises(DecryptionError):
+        Cipher(new).decrypt(old_token, aad="c")  # the new key ALONE cannot read the old value
+
+
+def test_encrypt_uses_the_primary_key() -> None:
+    primary, previous = _key(), _key()
+    token = Cipher([primary, previous]).encrypt("x", aad="c")
+    assert Cipher(primary).decrypt(token, aad="c") == "x"  # readable by the primary alone
+
+
+def test_load_keys_from_env_orders_primary_then_previous() -> None:
+    primary, old1, old2 = generate_key(), generate_key(), generate_key()
+    keys = load_keys_from_env(
+        {"APX_ENCRYPTION_KEY": primary, "APX_ENCRYPTION_KEYS_OLD": f"{old1}, {old2}"}
+    )
+    assert len(keys) == 3
+    assert keys[0] == base64.urlsafe_b64decode(primary)  # primary first — the one that encrypts
+
+
+def test_load_keys_from_env_needs_only_the_primary() -> None:
+    keys = load_keys_from_env({"APX_ENCRYPTION_KEY": generate_key()})  # no previous keys
+    assert len(keys) == 1
+
+
+def test_key_fingerprint_names_the_key_without_revealing_it() -> None:
+    key = _key()
+    fp = key_fingerprint(key)
+    assert len(fp) == 12 and fp == key_fingerprint(key)      # stable
+    assert fp != key_fingerprint(_key())                     # distinguishes keys
+    assert key.hex() != fp and fp in key_fingerprint(key)    # one-way, not the key itself
 
 
 def test_a_plaintext_value_in_an_encrypted_column_is_a_loud_error() -> None:

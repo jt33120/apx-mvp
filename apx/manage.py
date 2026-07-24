@@ -47,6 +47,25 @@ def ensure_admin(store: SqlStore) -> str:
         return f"bootstrap: admin {email} already exists — no change"
 
 
+def rekey(store: SqlStore) -> str:
+    """Rotate the encryption key in place (story 1.8, AD-47): re-encrypt every application-
+    encrypted value under the current PRIMARY key, then record the rotation on each tenant's
+    audit chain. The runbook: set the new key as APX_ENCRYPTION_KEY, move the old to
+    APX_ENCRYPTION_KEYS_OLD, run this, then drop the old key. No redeploy, no re-index (the
+    searchable surfaces are never application-encrypted)."""
+    from apx.adapters.store_postgres.backfill import rekey_all
+    from apx.core.domain.crypto import key_fingerprint, load_key_from_env
+
+    fingerprint = key_fingerprint(load_key_from_env())
+    with store._sf() as session, session.begin():
+        count = rekey_all(session.connection())
+    firms = store.tenants()
+    for tenant in firms:
+        store.record_key_rotation(tenant, "system:maintenance", fingerprint)
+    return (f"rekey: {count} value(s) re-encrypted under key {fingerprint}; "
+            f"rotation recorded for {len(firms)} tenant(s)")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="apx.manage")
     sub = parser.add_subparsers(dest="cmd", required=True)
@@ -57,6 +76,7 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--admin", action="store_true")
     create.add_argument("--scope", action="append", default=[], help="repeatable")
     sub.add_parser("ensure-admin", help="idempotent first-admin bootstrap from the environment")
+    sub.add_parser("rekey", help="rotate the encryption key in place (re-encrypt + audit)")
     return parser
 
 
@@ -72,6 +92,8 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(f"créé : {uid} · {args.email} · admin={args.admin} · scopes={scopes}")
     elif args.cmd == "ensure-admin":
         print(ensure_admin(SqlStore(make_session_factory())))
+    elif args.cmd == "rekey":
+        print(rekey(SqlStore(make_session_factory())))
 
 
 if __name__ == "__main__":

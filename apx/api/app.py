@@ -37,6 +37,7 @@ from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.store import ScopeConflict, ScopeDenied, SqlStore
+from apx.api.logging import install_secret_redaction
 from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.triage import triage_pieces
@@ -49,8 +50,10 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     """Fail closed on start-up unless BOTH encryption layers are in place (AD-31): the
     application key and the attested data volume. Raising here refuses the boot — no
     permissive default, no warning-and-continue. Runs on a real start (and under
-    `with TestClient(app)`), never at import, so the module stays importable in collection."""
+    `with TestClient(app)`), never at import, so the module stays importable in collection.
+    Also install log redaction (AD-47) so a configured secret can never reach a log line."""
     startup_gate()
+    install_secret_redaction()
     yield
 
 
