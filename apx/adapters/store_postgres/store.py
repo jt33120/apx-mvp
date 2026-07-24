@@ -31,6 +31,7 @@ from apx.adapters.store_postgres.models import (
     Piece,
     RecallReview,
     SessionRecord,
+    TenantConfig,
     User,
     UserScope,
 )
@@ -657,6 +658,40 @@ class SqlStore:
         """Invalidate every live session for a user (on a password change)."""
         with self._sf() as session, session.begin():
             session.execute(delete(SessionRecord).where(SessionRecord.user_id == user_id))
+
+    def record_auth_event(self, tenant: str, actor: str, action: str, detail: str) -> None:
+        """Append a tenant-level audit entry for an auth event — a failed login, a lockout:
+        a matterless act on the per-tenant chain (AD-43/AD-22). So a failure is durably
+        recorded (FR-48), not only throttled in memory. Recorded against the *attempted*
+        tenant (an attempt names a tenant even when the credential is wrong)."""
+        now = datetime.now(UTC)
+        with self._sf() as session, session.begin():
+            self._append_audit(session, tenant, None, actor, action, detail, now)
+
+    # ── MFA: configuration-as-data per tenant (AD-15/FR-48, [ASSUMPTION] carried) ──
+
+    def set_mfa_required(self, tenant: str, required: bool) -> None:
+        """Turn MFA (TOTP) on or off for a tenant — configuration-as-data (AD-24)."""
+        with self._sf() as session, session.begin():
+            session.merge(TenantConfig(tenant=tenant, mfa_required=required))
+
+    def set_mfa_secret(self, user_id: str, secret: str) -> None:
+        """Enrol a user's TOTP secret (minimal enrolment; the secret is a shared secret,
+        not a reversible password store — AD-15)."""
+        with self._sf() as session, session.begin():
+            user = session.get(User, user_id)
+            if user is None:
+                raise ValueError("unknown user")
+            user.mfa_secret = secret
+
+    def mfa_status(self, tenant: str, user_id: str) -> tuple[bool, str | None]:
+        """(whether the tenant requires MFA, the user's TOTP secret or None) — the login
+        gate reads this to decide whether a second factor is demanded."""
+        with self._sf() as session:
+            cfg = session.get(TenantConfig, tenant)
+            required = bool(cfg.mfa_required) if cfg is not None else False
+            secret = session.scalar(select(User.mfa_secret).where(User.id == user_id))
+        return required, secret
 
     def verify_user_password(self, user_id: str, password: str) -> bool:
         """Check a password for a known user id (used to confirm a self-service change)."""

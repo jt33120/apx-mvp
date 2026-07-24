@@ -19,6 +19,7 @@ from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
 
+import pyotp
 from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Request, Response, UploadFile
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
@@ -164,6 +165,7 @@ class LoginRequest(BaseModel):
     tenant: str
     email: str
     password: str
+    totp: str | None = None  # the second factor, when the tenant requires MFA
 
 
 class IdentityOut(BaseModel):
@@ -417,8 +419,24 @@ def login(req: LoginRequest, request: Request, response: Response) -> IdentityOu
     store = _require_store()
     user = store.authenticate(req.tenant, req.email, req.password)
     if user is None:
+        # Durably audit the failure (FR-48), not only throttle in memory; audit the lockout
+        # once, when this failure crosses the threshold.
+        store.record_auth_event(
+            req.tenant, "system:auth", "login_failed", f"email={req.email} ip={ip}")
         _login_limiter.record_failure(ip)
+        if _login_limiter.blocked(ip):
+            store.record_auth_event(req.tenant, "system:auth", "login_locked_out", f"ip={ip}")
         raise HTTPException(status_code=401, detail="identifiants invalides")
+    # Password ok — demand the second factor when the tenant requires MFA and the user is
+    # enrolled (configuration-as-data). An unenrolled user in an MFA tenant passes here;
+    # enrolment is a minimal, out-of-band step ([ASSUMPTION] carried).
+    requires_mfa, secret = store.mfa_status(user.tenant, user.id)
+    if requires_mfa and secret:
+        if not req.totp or not pyotp.TOTP(secret).verify(req.totp, valid_window=1):
+            store.record_auth_event(
+                user.tenant, "system:auth", "login_mfa_failed", f"user={user.id} ip={ip}")
+            _login_limiter.record_failure(ip)
+            raise HTTPException(status_code=401, detail="code MFA invalide")
     _login_limiter.reset(ip)  # a success clears the counter — legitimate use is never throttled
     absolute_ttl, _ = _session_ttls()
     sid = store.create_session(user.id, user.tenant, absolute_ttl=absolute_ttl)

@@ -199,6 +199,9 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String, nullable=False)
     display_name: Mapped[str] = mapped_column(String, nullable=False)
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # cockpit access
+    # the user's TOTP secret (pyotp), set at enrolment; NULL until enrolled. A shared secret
+    # by construction (both sides need it) — not a reversible password store (AD-15).
+    mfa_secret: Mapped[str | None] = mapped_column(String, nullable=True)
 
 
 class UserScope(Base):
@@ -229,6 +232,17 @@ class SessionRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     absolute_expiry: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TenantConfig(Base):
+    """Per-tenant configuration-as-data (AD-24) — never code. Today it carries whether MFA
+    (TOTP) is required for the tenant's users (FR-48); the row is the config, so turning MFA
+    on for a firm is a data change, not a deploy."""
+
+    __tablename__ = "tenant_config"
+
+    tenant: Mapped[str] = mapped_column(String, primary_key=True)
+    mfa_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
 
 
 class RecallReview(Base):

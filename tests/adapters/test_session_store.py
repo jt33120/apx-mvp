@@ -9,10 +9,10 @@ from collections.abc import Iterable
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
-from apx.adapters.store_postgres.models import Base
+from apx.adapters.store_postgres.models import AuditRecord, Base
 from apx.adapters.store_postgres.store import SqlStore
 
 _ABS = timedelta(hours=8)
@@ -97,3 +97,15 @@ def test_session_ids_are_opaque_and_unique(store: SqlStore) -> None:
     uid = _user(store)
     ids = {store.create_session(uid, "cabinet", absolute_ttl=_ABS) for _ in range(5)}
     assert len(ids) == 5 and all(len(i) >= 32 for i in ids)  # unguessable, non-colliding
+
+
+def test_auth_failures_are_recorded_in_the_audit(store: SqlStore) -> None:
+    # a failed login / lockout is durably audited (FR-48), not only throttled in memory
+    store.record_auth_event("cabinet", "system:auth", "login_failed", "email=x ip=1.2.3.4")
+    store.record_auth_event("cabinet", "system:auth", "login_locked_out", "ip=1.2.3.4")
+    with store._sf() as s:  # the test inspects the durable, matterless audit rows
+        rows = s.execute(
+            select(AuditRecord).where(AuditRecord.tenant == "cabinet").order_by(AuditRecord.seq)
+        ).scalars().all()
+    assert [r.action for r in rows] == ["login_failed", "login_locked_out"]
+    assert all(r.matter is None and r.actor == "system:auth" for r in rows)

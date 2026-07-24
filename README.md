@@ -4,11 +4,11 @@ Mass-document triage for law firms. Hexagonal core, adapters at the edges, **one
 stateful service** (PostgreSQL). Runs the same one artefact hosted, in CI, and
 air-gapped inside a firm (AD-3).
 
-> **Status: story 1.4 — tenant isolation.** The frozen `piece`/`chunk` payload schema and
-> its one writer (1.3), and now the *tenant* wall — enforced at the write boundary,
-> tenant-first on every read, proven by an adversarial cross-tenant suite (1.4) — exist;
-> auth/sessions, ingestion, retrieval and the model tiers do not yet. What is deliberately
-> absent, and which story owns it, is listed at the bottom.
+> **Status: story 1.5 — owned authentication.** The frozen `piece`/`chunk` payload schema
+> and its one writer (1.3), the *tenant* wall proven by an adversarial cross-tenant suite
+> (1.4), and now **owned auth** — Argon2id passwords and opaque server-side sessions, with
+> lockout-in-audit and per-tenant MFA (1.5) — exist; ingestion, retrieval and the model tiers
+> do not yet. What is deliberately absent, and which story owns it, is listed at the bottom.
 
 Planning artefacts (PRD, architecture spine, epics, stories) live under
 `_bmad-output/planning-artifacts/`. The previous implementation at
@@ -141,6 +141,23 @@ across every read surface. *(The full AD-14 single-read-entry-point consolidatio
 `core/app/read/` path plus a grep forbidding tenant-table queries elsewhere — is a
 separate, larger unit; 1.4 delivers the tenant guarantee and a store-scoped check.)*
 
+## Owned authentication (AD-15)
+
+Auth is the application's own, so the same identity model works air-gapped and hosted with no
+third party between a lawyer and the wall. Passwords are **Argon2id** (`pwdlib[argon2]`); a
+legacy scrypt hash still logs in and is re-hashed to Argon2id on the next login
+(upgrade-on-verify). Sessions are **opaque, server-side rows in PostgreSQL** — the cookie is an
+unguessable id, authority is the row — with absolute and idle lifetimes (config-as-data), so
+sign-out, a password change and a scope revocation take effect immediately (the row is deleted,
+or scopes re-resolve live on the next request), never "wait for a token to expire". **No JWT
+for user sessions.** Repeated failures are rate-limited **and recorded in the audit trail**;
+MFA (TOTP) is configuration-as-data per tenant.
+
+Two build-time guards (`python -m apx.checks`): **no reversible credential storage** (a
+plaintext password column fails the build — passwords live only as a one-way hash), and every
+`jwt.decode` must pin a literal `algorithms=[...]` (vacuous today; ready for internal service
+tokens). `pwdlib[argon2]` and `pyotp` are pinned exactly (AD-30); PyJWT / WebAuthn are deferred.
+
 ## What does NOT belong in this repo yet
 
 Scaffolding only. Each item below has an owning story; building it here is a
@@ -148,7 +165,8 @@ scope violation.
 
 | Not yet | Owner |
 |---|---|
-| Authentication, sessions, password hashing, PyJWT | 1.5 / 1.8 |
+| Internal service tokens (PyJWT), WebAuthn as a 2nd factor; MFA enrolment UX | later |
+| Secret / key management (the session/DB secrets' custody) | 1.8 |
 | Encryption + fail-closed start-up gate | 1.7 |
 | Single read entry point (`core/app/read/`) + outside-read grep (AD-14) | later (1.12 / epic 3) |
 | Config / provisioning surface | 1.9 |

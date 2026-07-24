@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pyotp
 import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
@@ -56,6 +57,23 @@ def _login(c: TestClient, email: str, pw: str = "pw", tenant: str = "t"):
 def test_health_is_open() -> None:
     with TestClient(app) as c:
         assert c.get("/api/health").json() == {"status": "ok"}
+
+
+def test_login_requires_totp_when_the_tenant_enables_mfa(tmp_path: Path, monkeypatch) -> None:
+    store = _prepare(tmp_path, monkeypatch)
+    uid = store.create_user("t", "a@a.test", "pw", "Avocat A", {"w"})
+    store.set_mfa_required("t", True)
+    secret = pyotp.random_base32()
+    store.set_mfa_secret(uid, secret)
+    with TestClient(app) as c:
+        # password alone is refused once MFA is required + enrolled
+        r = c.post("/api/login", json={"tenant": "t", "email": "a@a.test", "password": "pw"})
+        assert r.status_code == 401
+        # password + a correct TOTP succeeds
+        ok = c.post("/api/login", json={
+            "tenant": "t", "email": "a@a.test", "password": "pw", "totp": pyotp.TOTP(secret).now(),
+        })
+        assert ok.status_code == 200
 
 
 def test_spa_is_served_at_root_when_built() -> None:
