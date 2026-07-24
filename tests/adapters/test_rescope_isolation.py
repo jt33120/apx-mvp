@@ -15,7 +15,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 
 from apx.adapters.store_postgres.models import AuditRecord, Base
-from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
+from apx.adapters.store_postgres.store import ScopeConflict, ScopeDenied, SqlStore
 from apx.core.app.ingest import IngestedPiece, IngestionResult
 
 TENANT, MATTER, OLD, NEW = "cabinet", "m", "wall-old", "wall-new"
@@ -63,6 +63,17 @@ def test_rescope_rejects_a_no_op_and_an_unknown_matter(store: SqlStore) -> None:
         store.rescope_matter(TENANT, "admin", "ghost", NEW)
 
 
+def test_ingest_cannot_move_an_existing_matters_wall(store: SqlStore) -> None:
+    # the matter is filed under OLD; a re-ingest under a DIFFERENT scope must be refused — a
+    # wall moves ONLY via the audited admin path (the 1.6 review High: the ingest side-door).
+    with pytest.raises(ScopeConflict):
+        store.save(IngestionResult(pieces=[_piece("c")]), scope=NEW, actor="mallory")
+    # the wall did not move: OLD still sees, NEW still denied
+    assert store.inventory(MATTER, TENANT, {OLD}).in_corpus == 2
+    with pytest.raises(ScopeDenied):
+        store.inventory(MATTER, TENANT, {NEW})
+
+
 def test_rescope_is_reversible(store: SqlStore) -> None:
     store.rescope_matter(TENANT, "admin", MATTER, NEW)
     store.rescope_matter(TENANT, "admin", MATTER, OLD)  # move it back
@@ -91,6 +102,26 @@ def test_scope_mutations_are_audited_with_actor_subject_scope(store: SqlStore) -
         assert by_action[action].actor == "boss"        # on the authority of the admin
         assert "subject=" in by_action[action].detail   # naming its subject
     assert f"scope={OLD}->{NEW}" in by_action["rescope_matter"].detail  # before -> after
+
+
+def test_cannot_revoke_the_last_administrator(store: SqlStore) -> None:
+    admin = store.create_user(TENANT, "admin@c.fr", "password1", "Admin", set(), is_admin=True)
+    with pytest.raises(ValueError, match="last administrator"):
+        store.set_user_admin(TENANT, "boss", admin, False)  # would lock the tenant out
+    second = store.create_user(TENANT, "a2@c.fr", "password1", "A2", set(), is_admin=True)
+    store.set_user_admin(TENANT, "boss", second, False)  # ok now — one admin still remains
+    assert store.identity(admin)[0] is True and store.identity(second)[0] is False
+
+
+def test_no_op_mutations_write_no_phantom_audit_entry(store: SqlStore) -> None:
+    uid = store.create_user(TENANT, "a@a.test", "password1", "A", set())
+    before = len(_audit(store))
+    store.revoke_scope(TENANT, "boss", uid, "never-held")     # nothing to revoke
+    store.grant_scope(TENANT, "boss", uid, "wall-x")          # a real grant (audited)
+    store.grant_scope(TENANT, "boss", uid, "wall-x")          # idempotent re-grant — no phantom
+    store.set_user_admin(TENANT, "boss", uid, False)          # already not admin — no-op
+    actions = [r.action for r in _audit(store)[before:]]
+    assert actions == ["grant_scope"]  # only the ONE real change is on the record
 
 
 def test_the_administrative_grant_is_not_an_implicit_superuser(store: SqlStore) -> None:

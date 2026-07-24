@@ -16,6 +16,7 @@ from __future__ import annotations
 import hashlib
 import random
 import secrets
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -51,6 +52,11 @@ _DUMMY_HASH = hash_password("timing-equalizer")
 
 class ScopeDenied(Exception):
     """A read touched a matter outside the caller's RBAC scope. Fail closed."""
+
+
+class ScopeConflict(Exception):
+    """An ingest would change an existing matter's scope. A matter's wall may only move via
+    the audited admin re-scope path (AD-13/FR-49), never silently through a re-ingest."""
 
 
 @dataclass(frozen=True)
@@ -256,7 +262,16 @@ class SqlStore:
         )
         with self._sf() as session, session.begin():
             if matter is not None and tenant is not None:
-                session.merge(MatterScope(matter=matter, tenant=tenant, scope=scope))
+                # A matter's wall may only move via the audited admin re-scope path — never
+                # silently through a re-ingest (the 1.6 review High). Create on first ingest;
+                # refuse an ingest that would change an existing matter's scope.
+                existing = session.get(MatterScope, {"tenant": tenant, "matter": matter})
+                if existing is None:
+                    session.add(MatterScope(matter=matter, tenant=tenant, scope=scope))
+                elif existing.scope != scope:
+                    raise ScopeConflict(
+                        f"matter {matter!r} already exists under a different scope; "
+                        "re-scope via the admin path")
                 inv = result.inventory
                 detail = (
                     f"submitted={inv.submitted} corpus={inv.in_corpus} "
@@ -551,10 +566,13 @@ class SqlStore:
         return SearchResults(q, total, hits)
 
     def create_user(self, tenant: str, email: str, password: str, display_name: str,
-                    scopes: set[str], *, is_admin: bool = False) -> str:
-        """Create an owned user with an Argon2id-hashed password and their scope grants.
-        The plaintext password is never stored. Returns the new user id."""
+                    scopes: set[str], *, is_admin: bool = False, actor: str = "system") -> str:
+        """Create an owned user with an Argon2id-hashed password and their scope grants, on the
+        authority of `actor` — an **audited** privileged act (it grants scopes and, possibly,
+        the administrative authority, so it may not skip the record). The plaintext password is
+        never stored. Returns the new user id."""
         uid = uuid4().hex
+        now = datetime.now(UTC)
         with self._sf() as session, session.begin():
             session.add(User(
                 id=uid, tenant=tenant, email=email.strip().lower(),
@@ -563,6 +581,10 @@ class SqlStore:
             ))
             for scope in scopes:
                 session.add(UserScope(user_id=uid, scope=scope))
+            self._append_audit(
+                session, tenant, None, actor, "create_user",
+                f"subject={uid} email={email.strip().lower()} scopes={sorted(scopes)} "
+                f"admin={is_admin}", now)
         return uid
 
     def authenticate(self, tenant: str, email: str, password: str) -> AuthUser | None:
@@ -746,42 +768,65 @@ class SqlStore:
             ]
         return out
 
-    def grant_scope(self, tenant: str, actor: str, user_id: str, scope: str) -> None:
-        """Grant a wall to a user in this tenant (idempotent), on the authority of `actor`
-        (an administrator) — an audited, reversible act (FR-49). Takes effect on the user's
-        next request (scope is resolved live)."""
+    def _audited_tx(self, work: Callable[[Session, datetime], None]) -> None:
+        """Run a scope-mutation-plus-audit as one transaction, retrying on a concurrent
+        (tenant, seq) audit collision — the same hazard record_auth_event handles. `work`
+        raises a domain ValueError for a bad request (propagated, never retried)."""
         now = datetime.now(UTC)
-        with self._sf() as session, session.begin():
+        for attempt in range(4):
+            try:
+                with self._sf() as session, session.begin():
+                    work(session, now)
+                return
+            except IntegrityError:
+                if attempt == 3:
+                    raise
+
+    def grant_scope(self, tenant: str, actor: str, user_id: str, scope: str) -> None:
+        """Grant a wall to a user on the authority of `actor` (an administrator) — audited and
+        reversible (FR-49). Idempotent: re-granting a held scope is a no-op that writes no
+        phantom audit entry. Takes effect on the user's next request (scope resolved live)."""
+        if not scope.strip():
+            raise ValueError("scope is required")
+
+        def _work(session: Session, now: datetime) -> None:
             user = session.scalar(select(User).where(User.id == user_id, User.tenant == tenant))
             if user is None:
                 raise ValueError("unknown user")
-            session.merge(UserScope(user_id=user_id, scope=scope))
-            self._append_audit(
-                session, tenant, None, actor, "grant_scope",
-                f"subject={user_id} scope={scope}", now)
+            if session.get(UserScope, {"user_id": user_id, "scope": scope}) is None:
+                session.add(UserScope(user_id=user_id, scope=scope))
+                self._append_audit(
+                    session, tenant, None, actor, "grant_scope",
+                    f"subject={user_id} scope={scope}", now)
+
+        self._audited_tx(_work)
 
     def revoke_scope(self, tenant: str, actor: str, user_id: str, scope: str) -> None:
-        """Revoke a wall from a user in this tenant on the authority of `actor` — audited and
-        reversible (FR-49); takes effect on the user's next request."""
-        now = datetime.now(UTC)
-        with self._sf() as session, session.begin():
+        """Revoke a wall from a user on the authority of `actor` — audited and reversible
+        (FR-49). Revoking a scope the user does not hold is a no-op that writes no phantom
+        audit entry. Takes effect on the user's next request."""
+        def _work(session: Session, now: datetime) -> None:
             user = session.scalar(select(User).where(User.id == user_id, User.tenant == tenant))
             if user is None:
                 raise ValueError("unknown user")
             row = session.get(UserScope, {"user_id": user_id, "scope": scope})
             if row is not None:
                 session.delete(row)
-            self._append_audit(
-                session, tenant, None, actor, "revoke_scope",
-                f"subject={user_id} scope={scope}", now)
+                self._append_audit(
+                    session, tenant, None, actor, "revoke_scope",
+                    f"subject={user_id} scope={scope}", now)
+
+        self._audited_tx(_work)
 
     def rescope_matter(self, tenant: str, actor: str, matter: str, new_scope: str) -> None:
         """Move a matter's wall — update the ONE authoritative matter_scope row and record one
         audit entry with before->after. Because scope is resolved live at query time (AD-13),
         this takes effect at the next query with nothing to propagate and no re-index. Rejects a
-        no-op (same scope) and an unknown matter — never a silent write (FR-49)."""
-        now = datetime.now(UTC)
-        with self._sf() as session, session.begin():
+        no-op (same scope), an unknown matter, and an empty scope — never a silent write (FR-49)."""
+        if not new_scope.strip():
+            raise ValueError("scope is required")
+
+        def _work(session: Session, now: datetime) -> None:
             row = session.get(MatterScope, {"tenant": tenant, "matter": matter})
             if row is None:
                 raise ValueError("unknown matter")
@@ -793,19 +838,31 @@ class SqlStore:
                 session, tenant, matter, actor, "rescope_matter",
                 f"subject={matter} scope={before}->{new_scope}", now)
 
+        self._audited_tx(_work)
+
     def set_user_admin(self, tenant: str, actor: str, subject_user: str, is_admin: bool) -> None:
         """Grant or revoke the administrative authority for a user — an audited, admin-only,
-        reversible act (AC2). The first admin is the provisioned one (ensure-admin), so every
-        admin traces back to provisioning; holding it does not widen a data read (AD-12)."""
-        now = datetime.now(UTC)
-        with self._sf() as session, session.begin():
+        reversible act (AC2). Refuses to revoke the LAST administrator of a tenant (no lockout).
+        A no-op (already at the target flag) writes no phantom entry. The first admin is the
+        provisioned one; holding it does not widen a data read (AD-12)."""
+        def _work(session: Session, now: datetime) -> None:
             user = session.scalar(
                 select(User).where(User.id == subject_user, User.tenant == tenant))
             if user is None:
                 raise ValueError("unknown user")
+            if user.is_admin == is_admin:
+                return  # no change — no phantom audit entry
+            if not is_admin:
+                admins = session.scalar(
+                    select(func.count()).select_from(User).where(
+                        User.tenant == tenant, User.is_admin.is_(True)))
+                if (admins or 0) <= 1:
+                    raise ValueError("cannot revoke the last administrator")
             user.is_admin = is_admin
             action = "grant_admin" if is_admin else "revoke_admin"
             self._append_audit(session, tenant, None, actor, action, f"subject={subject_user}", now)
+
+        self._audited_tx(_work)
 
     def read_audit(self, matter: str, tenant: str, scopes: set[str]) -> AuditTrail:
         """The audit trail for a matter — scope-checked. The chain is per-tenant

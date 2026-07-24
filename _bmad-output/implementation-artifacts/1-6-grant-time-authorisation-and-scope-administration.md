@@ -4,7 +4,7 @@ baseline_commit: 6b6dc3e
 
 # Story 1.6: Grant-time authorisation and scope administration
 
-Status: review
+Status: done
 
 ## Story
 
@@ -99,6 +99,29 @@ Claude Opus 4.8 (1M context) — Claude Code dev-story workflow.
 | Date | Change |
 |---|---|
 | 2026-07-24 | Implemented story 1.6 — grant-time authorisation & scope administration: audited grant/revoke (with authority), matter re-scope as one audited op with before→after, the administrative grant as an audited admin-only reversible act (no implicit superuser), a mutating adversarial suite, and a structural check (scope mutations are audited). 250 passed / 8 skipped, 11 checks + ruff green. Status → review. |
+| 2026-07-24 | Addressed the adversarial code review: fixed 1 High (ingest re-scope side-door) + 6 Med findings. 254 passed / 8 skipped; 11 checks green. Status → done. |
+
+## Senior Developer Review (AI)
+
+**Date:** 2026-07-24 · **Reviewers:** Blind Hunter + Edge-Case Hunter (parallel, blind; the Acceptance Auditor pass was interrupted) · **Outcome:** the sanctioned `rescope_matter` and the four mutations were verified tenant-scoped and correctly isolated — the wall was crossed **beside** them. Fixes applied.
+
+### Findings and resolutions
+
+- [x] **[High] The ingest side-door re-scoped a matter.** `save()` did `merge(MatterScope(...))` (PK `(tenant, matter)`), overwriting an existing matter's scope; the ingest endpoints are `current_identity`-gated (not admin) and check only the *target* scope. A non-admin could re-ingest under `matter=existing, scope=their-wall` and **seize the matter's whole corpus off the record**, bypassing every 1.6 guard (and invisible to the structural check). **Fixed:** `save()` creates the `matter_scope` on first ingest but **refuses** (`ScopeConflict` → 409) an ingest that would change an existing matter's scope — a wall moves only via the audited admin re-scope path. Store + behaviour tested.
+- [x] **[Med] `create_user` granted scopes and admin with no audit** (and the check missed it). **Fixed:** it now audits the act (subject/email/scopes/admin flag) on the acting admin's authority, and is added to the structural-check mutator set.
+- [x] **[Med] Last-admin self-revocation locked the tenant out.** **Fixed:** `set_user_admin` refuses to revoke the last administrator of a tenant (no in-app lockout); tested.
+- [x] **[Med] Concurrent scope mutations collided on the audit `(tenant, seq)` → 500.** **Fixed:** the mutators share an `_audited_tx` helper that retries on the collision (the mitigation `record_auth_event` already had). *(The general `_append_audit` contention across all audited ops remains an AD-44 concern — deferred.)*
+- [x] **[Med] The structural check was circumventable** (4 hard-coded names; passed vacuously on deletion/rename). **Fixed:** it now requires the known mutators to be **present** on the real tree (a rename/deletion fails the build) and includes `create_user`. *(Documented limitation: audit-call detection is lexical, not path-sensitive — the runtime tests cover the content.)*
+- [x] **[Med] No-op mutations wrote phantom audit entries** (revoking an unheld scope, an idempotent re-grant, a no-change set-admin). **Fixed:** each mutation audits **only a real change** (matching `rescope_matter`'s "never a silent write"); tested.
+- [x] **[Low] Store-level empty-scope rejection** added (fail-closed no longer depends on the edge); the **no-superuser test strengthened to the API layer** (an admin with no scope: `/me` shows no scopes, `/matters` shows nothing) since the store-level assertion short-circuited.
+
+### Deferred (documented)
+
+- [x] The general `_append_audit` `(tenant, seq)` contention across all audited ops (ingest/judge/…) — an AD-44 story (a non-chained or partitioned high-volume stream).
+- [x] Audit `authority` is a renameable, non-unique `display_name`; `detail` is unescaped `key=value` — attribution/round-trip nits (a later observability/schema pass).
+- [x] Matterless audit entries (grant/revoke/create/set-admin) have no read-back API surface — a tenant-level audit read endpoint is a later story.
+
+**Post-fix verification:** `ruff` clean · `python -m apx.checks` **11/11** · `pytest` **254 passed, 8 skipped**.
 
 ## Open Questions for the human
 

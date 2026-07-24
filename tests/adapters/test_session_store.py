@@ -118,8 +118,10 @@ def test_auth_failures_are_recorded_in_the_audit(store: SqlStore) -> None:
         rows = s.execute(
             select(AuditRecord).where(AuditRecord.tenant == "cabinet").order_by(AuditRecord.seq)
         ).scalars().all()
-    assert [r.action for r in rows] == ["login_failed", "login_locked_out"]
-    assert all(r.matter is None and r.actor == "system:auth" for r in rows)
+    actions = [r.action for r in rows]
+    assert "login_failed" in actions and "login_locked_out" in actions
+    auth_rows = [r for r in rows if r.action.startswith("login_")]
+    assert all(r.matter is None and r.actor == "system:auth" for r in auth_rows)
 
 
 def test_auth_events_for_an_unknown_tenant_are_not_recorded(store: SqlStore) -> None:

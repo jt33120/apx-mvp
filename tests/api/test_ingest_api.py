@@ -19,6 +19,7 @@ from apx.adapters.store_postgres.models import Base
 from apx.adapters.store_postgres.store import SqlStore
 from apx.api import app as app_module
 from apx.api.app import app
+from apx.core.app.ingest import IngestedPiece, IngestionResult
 
 SECRET = "test-secret"
 
@@ -74,6 +75,24 @@ def test_login_requires_totp_when_the_tenant_enables_mfa(tmp_path: Path, monkeyp
             "tenant": "t", "email": "a@a.test", "password": "pw", "totp": pyotp.TOTP(secret).now(),
         })
         assert ok.status_code == 200
+
+
+def test_an_admin_is_not_a_data_superuser(tmp_path: Path, monkeypatch) -> None:
+    # A matter exists behind wall-x; the admin holds NO scope. The app layer must not widen an
+    # admin's scopes (AD-12/AD-48) — /me shows no scopes, /matters shows nothing.
+    from datetime import UTC, datetime
+    store = _prepare(tmp_path, monkeypatch)
+    piece = IngestedPiece(
+        id="p", matter="mx", tenant="t", content_hash="p", text_key="p", provenance_path="/p.txt",
+        custodian="c", extraction_method="text", extractor_version="v", schema_version="s",
+        ingestion_timestamp=datetime.now(UTC), full_text="secret", text_version="v")
+    store.save(IngestionResult(pieces=[piece]), scope="wall-x", actor="sys")
+    store.create_user("t", "admin@c.fr", "password1", "Admin", set(), is_admin=True)
+    with TestClient(app) as c:
+        _login(c, "admin@c.fr", pw="password1")
+        me = c.get("/api/me").json()
+        assert me["is_admin"] is True and me["scopes"] == []   # not widened for the admin
+        assert c.get("/api/matters").json() == []              # sees no matter it lacks a wall for
 
 
 def test_mfa_required_but_unenrolled_is_refused(tmp_path: Path, monkeypatch) -> None:

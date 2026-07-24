@@ -34,7 +34,7 @@ from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.store_postgres.engine import make_session_factory
-from apx.adapters.store_postgres.store import ScopeDenied, SqlStore
+from apx.adapters.store_postgres.store import ScopeConflict, ScopeDenied, SqlStore
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.triage import triage_pieces
 from apx.core.ports.extraction import Extractor
@@ -364,7 +364,11 @@ def _persist(result: IngestionResult, scope: str, actor: str) -> bool:
     store = _store()
     if store is None:
         return False
-    store.save(result, scope, actor)
+    try:
+        store.save(result, scope, actor)
+    except ScopeConflict as exc:
+        # a re-ingest may not move a matter's wall — that is the admin re-scope path (409)
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     return True
 
 
@@ -539,7 +543,7 @@ def admin_create_user(req: CreateUserIn, ident: Identity = Depends(require_admin
             status_code=422, detail="le mot de passe doit faire au moins 8 caractères")
     try:
         uid = store.create_user(ident.tenant, req.email, req.password, req.display_name,
-                                set(req.scopes), is_admin=req.is_admin)
+                                set(req.scopes), is_admin=req.is_admin, actor=ident.actor)
     except IntegrityError as exc:
         raise HTTPException(
             status_code=400, detail="un utilisateur existe déjà pour ce courriel"
