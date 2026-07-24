@@ -18,6 +18,7 @@ from collections.abc import Callable
 
 from apx.checks import (
     credential_storage,
+    encryption,
     import_contracts,
     payload_schema,
     scope_admin,
@@ -43,6 +44,9 @@ CHECKS: list[Callable[[], CheckResult]] = [
     credential_storage.jwt_decode_pins_algorithms,
     # story 1.6 — grant-time authorisation (FR-49).
     scope_admin.scope_mutations_are_audited,
+    # story 1.7 — encryption at rest & a fail-closed start (AD-31).
+    encryption.sensitive_columns_are_encrypted,
+    encryption.startup_gate_is_fail_closed,
 ]
 
 

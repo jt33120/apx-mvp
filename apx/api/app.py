@@ -15,6 +15,8 @@ import os
 import tempfile
 import threading
 import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache
@@ -35,12 +37,24 @@ from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.store import ScopeConflict, ScopeDenied, SqlStore
+from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.triage import triage_pieces
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
 
-app = FastAPI(title="APX", version="0.1.0")
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    """Fail closed on start-up unless BOTH encryption layers are in place (AD-31): the
+    application key and the attested data volume. Raising here refuses the boot — no
+    permissive default, no warning-and-continue. Runs on a real start (and under
+    `with TestClient(app)`), never at import, so the module stays importable in collection."""
+    startup_gate()
+    yield
+
+
+app = FastAPI(title="APX", version="0.1.0", lifespan=_lifespan)
 
 SESSION_COOKIE = "apx_session"
 

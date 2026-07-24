@@ -21,6 +21,20 @@ def _normalise(url: str) -> str:
     return url
 
 
+def _with_sslmode(url: str) -> str:
+    """Encrypt the app↔store connection in transit (AD-31). For a PostgreSQL URL, apply
+    ``APX_DB_SSLMODE`` (default ``require``) unless the URL already carries an ``sslmode`` —
+    so a hosted connection uses TLS out of the box, with no permissive default. A same-machine
+    loopback (the single-machine install, a CI service container) may set
+    ``APX_DB_SSLMODE=disable`` with a documented rationale — traffic that never leaves the
+    host. Non-PostgreSQL URLs (sqlite in tests) pass through untouched."""
+    if not url.startswith("postgresql") or "sslmode=" in url:
+        return url
+    sslmode = os.environ.get("APX_DB_SSLMODE", "require").strip() or "require"
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}sslmode={sslmode}"
+
+
 def database_url() -> str:
     url = os.environ.get("DATABASE_URL")
     if not url:
@@ -28,7 +42,7 @@ def database_url() -> str:
             "DATABASE_URL is not set. APX reads it from the environment (AD-47). "
             "e.g. postgresql+psycopg://apx:...@localhost:5432/apx"
         )
-    return _normalise(url)
+    return _with_sslmode(_normalise(url))
 
 
 def make_session_factory() -> sessionmaker[Session]:

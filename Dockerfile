@@ -38,12 +38,21 @@ ENV APX_COOKIE_SECURE=1
 # rate-limit/audit client IP. Only safe because the proxy fronts the app — never set this
 # when the app is directly reachable (the header would be client-spoofable).
 ENV APX_TRUST_FORWARDED_FOR=1
+# Encryption in transit to the store (AD-31): require TLS on the DB connection. A hosted
+# managed Postgres offers it; a same-machine loopback may override APX_DB_SSLMODE=disable.
+ENV APX_DB_SSLMODE=require
+# Encryption at rest, layer 2 (AD-31): attest the data volume is encrypted (must be backed by
+# a provider-managed encrypted volume or dm-crypt/LUKS). Layer 1 — the application key
+# APX_ENCRYPTION_KEY — is REQUIRED at runtime with no default; the start-up gate refuses to
+# boot without both. Deliberately NOT baked in here: the key never lives in the image.
+ENV APX_VOLUME_ENCRYPTED=1
 
 COPY alembic.ini ./
 COPY docker/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 EXPOSE 8000
-# APX_SECRET_KEY is required (no insecure default); DATABASE_URL points at Postgres;
+# APX_SECRET_KEY and APX_ENCRYPTION_KEY are required (no insecure default — the start-up gate
+# refuses to boot without the encryption key); DATABASE_URL points at Postgres;
 # LLM_API_KEY / MISTRAL_API_KEY are optional (the cascade runs offline without them).
 ENTRYPOINT ["/entrypoint.sh"]

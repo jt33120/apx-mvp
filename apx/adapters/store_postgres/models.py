@@ -24,6 +24,8 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
+from apx.adapters.store_postgres.crypto_types import EncryptedText
+
 
 class Base(DeclarativeBase):
     pass
@@ -49,8 +51,10 @@ class Piece(Base):
     # the near-duplicate key: sha256 of normalised text; groups exact-modulo-formatting
     # copies so the judgment cascade collapses them before any LLM (recall-first).
     text_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
-    provenance_path: Mapped[str] = mapped_column(Text, nullable=False)  # attribute, not identity
-    custodian: Mapped[str] = mapped_column(String, nullable=False)
+    # content-bearing → application-encrypted at rest (AD-31). A path leaks custodian
+    # folder structure and client names; custodianship is PII. Neither is a query key.
+    provenance_path: Mapped[str] = mapped_column(EncryptedText, nullable=False)  # attribute
+    custodian: Mapped[str] = mapped_column(EncryptedText, nullable=False)
     extraction_method: Mapped[str] = mapped_column(String, nullable=False)
     extractor_version: Mapped[str] = mapped_column(String, nullable=False)
     schema_version: Mapped[str] = mapped_column(String, nullable=False)
@@ -58,6 +62,11 @@ class Piece(Base):
     piece_date: Mapped[date | None] = mapped_column(nullable=True)
     # determined | undetermined
     piece_date_status: Mapped[str] = mapped_column(String, nullable=False)
+    # AD-31 NAMED EXCEPTION — the deterministic text index. `search` (FR-13) runs an SQL
+    # ILIKE over this column, so it CANNOT be application-encrypted (you cannot index
+    # ciphertext); it is protected by volume-level encryption and asserted by the start-up
+    # gate instead. Left plaintext ON PURPOSE — a structural check (AD-33) forbids encrypting
+    # it (it would break exhaustive search) and the seeded-token test excludes it by name.
     full_text: Mapped[str] = mapped_column(Text, nullable=False)  # FR-13's target, stored once
     # AD-10: the full text is a first-class artefact with its OWN identity and version,
     # separate from the raw-content identity (content_hash) — two scans of one page can
@@ -116,11 +125,13 @@ class Failure(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     tenant: Mapped[str] = mapped_column(String, nullable=False)
     matter: Mapped[str] = mapped_column(String, nullable=False)
-    filename: Mapped[str] = mapped_column(String, nullable=False)
-    submitted_path: Mapped[str] = mapped_column(Text, nullable=False)
+    # content-bearing → application-encrypted (AD-31): filenames/paths/details name the
+    # documents that did not enter the corpus. error_class/resolution_state are categorical.
+    filename: Mapped[str] = mapped_column(EncryptedText, nullable=False)
+    submitted_path: Mapped[str] = mapped_column(EncryptedText, nullable=False)
     error_class: Mapped[str] = mapped_column(String, nullable=False)
     resolution_state: Mapped[str] = mapped_column(String, nullable=False)  # open|resolved
-    detail: Mapped[str | None] = mapped_column(Text, nullable=True)
+    detail: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -159,7 +170,12 @@ class AuditRecord(Base):
     matter: Mapped[str | None] = mapped_column(String, nullable=True)
     actor: Mapped[str] = mapped_column(String, nullable=False)
     action: Mapped[str] = mapped_column(String, nullable=False)
-    detail: Mapped[str] = mapped_column(Text, nullable=False)
+    # the free-text field carries emails, IPs, counts, subjects → application-encrypted
+    # (AD-31). The chain is computed over the PLAINTEXT detail before the column encrypts it,
+    # and read_audit decrypts before recomputing — so tamper-evidence survives (AC3).
+    # actor/action/seq/chain/timestamp stay plaintext: categorical metadata and the query
+    # surface, not tenant document content.
+    detail: Mapped[str] = mapped_column(EncryptedText, nullable=False)
     chain: Mapped[str] = mapped_column(String(64), nullable=False)  # sha256(prev.chain + content)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -179,7 +195,8 @@ class LabelRecord(Base):
     tenant: Mapped[str] = mapped_column(String, nullable=False)
     matter: Mapped[str] = mapped_column(String, nullable=False, index=True)
     label: Mapped[str] = mapped_column(String, nullable=False)  # relevant | uncertain | discard
-    rationale: Mapped[str] = mapped_column(Text, nullable=False)  # why — never empty
+    # the judge's rationale quotes the evidence → application-encrypted (AD-31)
+    rationale: Mapped[str] = mapped_column(EncryptedText, nullable=False)  # why — never empty
     judge: Mapped[str] = mapped_column(String, nullable=False)  # which judge decided (transparency)
     judged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -201,7 +218,10 @@ class User(Base):
     is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)  # cockpit access
     # the user's TOTP secret (pyotp), set at enrolment; NULL until enrolled. A shared secret
     # by construction (both sides need it) — not a reversible password store (AD-15).
-    mfa_secret: Mapped[str | None] = mapped_column(String, nullable=True)
+    # A literal secret at rest → application-encrypted (AD-31); fetched by user id, never
+    # queried by value, so encryption is transparent. (email/display_name stay plaintext:
+    # email is the login lookup key; both are operator identity, not tenant document content.)
+    mfa_secret: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
 
 
 class UserScope(Base):

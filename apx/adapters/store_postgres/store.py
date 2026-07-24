@@ -450,9 +450,13 @@ class SqlStore:
                 select(LabelRecord.label, LabelRecord.rationale, Piece.provenance_path)
                 .join(Piece, (Piece.id == LabelRecord.piece_id) & (Piece.tenant == tenant))
                 .where(LabelRecord.matter == matter, LabelRecord.tenant == tenant)
-                .order_by(Piece.provenance_path)
+                .order_by(Piece.id)  # provenance_path is ciphertext at rest (AD-31); sort below
             ).all()
-        pieces = tuple(LabelledPiece(prov, label, rat) for label, rat, prov in rows)
+        # present by provenance path, sorted AFTER the column decrypts (encrypted at rest)
+        pieces = tuple(
+            LabelledPiece(prov, label, rat)
+            for label, rat, prov in sorted(rows, key=lambda r: r[2])
+        )
         relevant = sum(1 for p in pieces if p.label == "relevant")
         uncertain = sum(1 for p in pieces if p.label == "uncertain")
         discarded = sum(1 for p in pieces if p.label == "discard")
@@ -559,9 +563,12 @@ class SqlStore:
                 select(Piece.matter, Piece.provenance_path, Piece.full_text)
                 .join(MatterScope, join_on)
                 .where(*conds)
-                .order_by(Piece.matter, Piece.provenance_path)
+                # provenance_path is ciphertext at rest (AD-31) — order the capped subset by
+                # the plaintext PK for determinism, then present by (matter, provenance) below.
+                .order_by(Piece.matter, Piece.id)
                 .limit(limit)
             ).all()
+        rows = sorted(rows, key=lambda r: (r[0], r[1]))  # present by (matter, provenance)
         hits = tuple(SearchHit(matter, prov, snippet(full, q)) for matter, prov, full in rows)
         return SearchResults(q, total, hits)
 

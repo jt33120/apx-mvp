@@ -36,6 +36,12 @@ dependencies = [
     "pdf2image>=1.17,<2",
     "pwdlib[argon2]==0.3.0",
     "pyotp==2.10.0",
+    # Application-layer encryption at rest (story 1.7, AD-31): AES-256-GCM. A LOCAL
+    # crypto library, not a hosted-provider SDK — untouched by the egress deny-list
+    # (AD-45), exactly as pwdlib/pyotp are. Used from apx.core.domain.crypto alongside
+    # auth.py's pwdlib. No stdlib symmetric cipher exists, so this dependency is intrinsic
+    # to the encryption story, not incidental.
+    "cryptography>=44,<47",
 ]
 
 [project.optional-dependencies]

@@ -4,11 +4,12 @@ Mass-document triage for law firms. Hexagonal core, adapters at the edges, **one
 stateful service** (PostgreSQL). Runs the same one artefact hosted, in CI, and
 air-gapped inside a firm (AD-3).
 
-> **Status: story 1.6 — grant-time authorisation.** The frozen payload schema (1.3), the
-> *tenant* wall (1.4), owned auth — Argon2id + opaque server-side sessions, lockout-in-audit,
-> MFA (1.5) — and now **privileged, audited, reversible scope administration** with matter
-> re-scoping and no implicit superuser (1.6) exist; ingestion, retrieval and the model tiers
-> do not yet. What is deliberately absent, and which story owns it, is listed at the bottom.
+> **Status: story 1.7 — encryption at rest & a fail-closed start.** The frozen payload schema
+> (1.3), the *tenant* wall (1.4), owned auth — Argon2id + opaque server-side sessions,
+> lockout-in-audit, MFA (1.5) — privileged, audited, reversible scope administration (1.6),
+> and now **application-layer encryption at rest** with a **start-up gate that refuses to boot
+> without it** (1.7) exist; ingestion, retrieval and the model tiers do not yet. What is
+> deliberately absent, and which story owns it, is listed at the bottom.
 
 Planning artefacts (PRD, architecture spine, epics, stories) live under
 `_bmad-output/planning-artifacts/`. The previous implementation at
@@ -172,6 +173,31 @@ adversarial suite that moves a matter's wall mid-*corpus* and asserts it holds i
 position immediately and its old position never. A build-time guard (`python -m apx.checks`)
 fails the build on a scope mutator that skips the audit.
 
+## Encryption at rest and in transit (AD-31)
+
+Everything content-bearing at rest is encrypted **by the application's storage adapters** —
+AES-256-GCM behind the `EncryptedText` column type, keyed from `APX_ENCRYPTION_KEY` (never in
+source): a *pièce*'s provenance and custodian, the *failure register*, the *audit record*'s
+detail, triage rationales, the TOTP secret. **Two named surfaces are the only exceptions** —
+the `halfvec` vector column (from 2.8) and the **deterministic text index**, which today is
+`piece.full_text`, the column exhaustive search runs an SQL `ILIKE` over: you cannot index
+ciphertext, so they are protected by **volume-/cluster-level encryption** and asserted by the
+start-up gate instead. A seeded-token raw-store inspection proves no plaintext token survives
+anywhere but that named index. In transit, the app↔store connection requires TLS
+(`APX_DB_SSLMODE=require` by default; a same-host loopback may opt out) and the browser edge is
+HTTPS.
+
+The **start-up gate fails closed on both layers**: no application key, or no attested data
+volume (`APX_VOLUME_ENCRYPTED`), and the app **refuses to boot** — no permissive default, no
+warning-and-continue. Two build-time guards (`python -m apx.checks`) hold the line: one fails
+the build if a content-bearing column is left plaintext or the text index is encrypted (it
+would break search); the other if the gate stops covering both layers or stops raising.
+
+> The volume attestation is an honest operator promise (the app cannot verify a block device
+> from inside a container) — back it with dm-crypt/LUKS on a single-machine install, or a
+> provider-managed encrypted volume in the hosted tier. The cryptographic teeth are the
+> application-layer key gate. Key **rotation/custody** is story 1.8.
+
 ## What does NOT belong in this repo yet
 
 Scaffolding only. Each item below has an owning story; building it here is a
@@ -180,8 +206,7 @@ scope violation.
 | Not yet | Owner |
 |---|---|
 | Internal service tokens (PyJWT), WebAuthn as a 2nd factor; MFA enrolment UX | later |
-| Secret / key management (the session/DB secrets' custody) | 1.8 |
-| Encryption + fail-closed start-up gate | 1.7 |
+| Secret / key management (the session/DB secrets' custody, key rotation) | 1.8 |
 | Single read entry point (`core/app/read/`) + outside-read grep (AD-14) | later (1.12 / epic 3) |
 | Config / provisioning surface | 1.9 |
 | Content-free projection, egress check | 1.10 / 1.12 |

@@ -22,6 +22,17 @@ services:
       DATABASE_URL: postgresql+psycopg://apx:${POSTGRES_PASSWORD:-apx}@db:5432/apx
       # Required — generate once and keep it (e.g. `openssl rand -hex 32`).
       APX_SECRET_KEY: ${APX_SECRET_KEY:?set APX_SECRET_KEY (e.g. openssl rand -hex 32)}
+      # Encryption at rest (AD-31), layer 1: the application key — REQUIRED, no default. The
+      # start-up gate refuses to boot without it. Generate once: `openssl rand -base64 32`.
+      APX_ENCRYPTION_KEY: ${APX_ENCRYPTION_KEY:?set APX_ENCRYPTION_KEY (e.g. openssl rand -base64 32)}
+      # Layer 2: attest the host data volume is encrypted. On this single-machine form-factor
+      # YOU must back this with a real encrypted disk (dm-crypt/LUKS) under ./apx-data — the
+      # attestation is the operator's promise; the app cannot verify the block device itself.
+      APX_VOLUME_ENCRYPTED: ${APX_VOLUME_ENCRYPTED:-1}
+      # app↔db is a same-host link on the compose network (it never leaves the machine), so TLS
+      # is not required here; a multi-host or hardened install should enable Postgres SSL and
+      # set APX_DB_SSLMODE=require. Documented same-machine exemption (AD-31).
+      APX_DB_SSLMODE: ${APX_DB_SSLMODE:-disable}
       # Optional LLM tier (EU-hosted Mistral, or point LLM_BASE_URL at an on-prem model).
       MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
       LLM_BASE_URL: ${LLM_BASE_URL:-}
