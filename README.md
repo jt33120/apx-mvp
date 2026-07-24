@@ -4,10 +4,10 @@ Mass-document triage for law firms. Hexagonal core, adapters at the edges, **one
 stateful service** (PostgreSQL). Runs the same one artefact hosted, in CI, and
 air-gapped inside a firm (AD-3).
 
-> **Status: story 1.5 — owned authentication.** The frozen `piece`/`chunk` payload schema
-> and its one writer (1.3), the *tenant* wall proven by an adversarial cross-tenant suite
-> (1.4), and now **owned auth** — Argon2id passwords and opaque server-side sessions, with
-> lockout-in-audit and per-tenant MFA (1.5) — exist; ingestion, retrieval and the model tiers
+> **Status: story 1.6 — grant-time authorisation.** The frozen payload schema (1.3), the
+> *tenant* wall (1.4), owned auth — Argon2id + opaque server-side sessions, lockout-in-audit,
+> MFA (1.5) — and now **privileged, audited, reversible scope administration** with matter
+> re-scoping and no implicit superuser (1.6) exist; ingestion, retrieval and the model tiers
 > do not yet. What is deliberately absent, and which story owns it, is listed at the bottom.
 
 Planning artefacts (PRD, architecture spine, epics, stories) live under
@@ -157,6 +157,20 @@ Two build-time guards (`python -m apx.checks`): **no reversible credential stora
 plaintext password column fails the build — passwords live only as a one-way hash), and every
 `jwt.decode` must pin a literal `algorithms=[...]` (vacuous today; ready for internal service
 tokens). `pwdlib[argon2]` and `pyotp` are pinned exactly (AD-30); PyJWT / WebAuthn are deferred.
+
+## Scope administration (grant-time authorisation, FR-49)
+
+A wall anyone can move is not a wall. Granting or revoking a *RBAC scope*, and **re-scoping a
+matter**, are **privileged** acts (an administrative grant held by a named *tenant* user),
+each **recorded in the audit** with actor, subject, scope, authority and timestamp, and each
+**reversible**. The administrative grant is itself granted by the same audited path; its first
+holder is set at provisioning, so every admin traces back to it — there is **no implicit
+superuser**: holding the grant administers, it does not widen a data read (an admin with no
+scope still reads an empty *corpus*). A re-scope is a single `matter_scope` UPDATE that takes
+effect at the **next query** with nothing to propagate (AD-13) — proven by a mutating
+adversarial suite that moves a matter's wall mid-*corpus* and asserts it holds in its new
+position immediately and its old position never. A build-time guard (`python -m apx.checks`)
+fails the build on a scope mutator that skips the audit.
 
 ## What does NOT belong in this repo yet
 

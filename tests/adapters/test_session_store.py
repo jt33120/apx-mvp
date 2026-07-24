@@ -97,7 +97,7 @@ def test_a_revoked_scope_is_gone_from_a_live_session_on_the_next_request(store: 
     sid = store.create_session(uid, "cabinet", absolute_ttl=_ABS)
     first = store.resolve_session(sid, idle_ttl=_IDLE)
     assert first is not None and first.scopes == {"wall-a", "wall-b"}
-    store.revoke_scope("cabinet", uid, "wall-b")
+    store.revoke_scope("cabinet", "admin", uid, "wall-b")
     # the SAME session, next request: wall-b is gone (scopes resolved live) — not at next login
     again = store.resolve_session(sid, idle_ttl=_IDLE)
     assert again is not None and again.scopes == {"wall-a"}

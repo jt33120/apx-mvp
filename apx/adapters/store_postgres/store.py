@@ -746,17 +746,24 @@ class SqlStore:
             ]
         return out
 
-    def grant_scope(self, tenant: str, user_id: str, scope: str) -> None:
-        """Grant a wall to a user in this tenant (idempotent). Takes effect on their
+    def grant_scope(self, tenant: str, actor: str, user_id: str, scope: str) -> None:
+        """Grant a wall to a user in this tenant (idempotent), on the authority of `actor`
+        (an administrator) — an audited, reversible act (FR-49). Takes effect on the user's
         next request (scope is resolved live)."""
+        now = datetime.now(UTC)
         with self._sf() as session, session.begin():
             user = session.scalar(select(User).where(User.id == user_id, User.tenant == tenant))
             if user is None:
                 raise ValueError("unknown user")
             session.merge(UserScope(user_id=user_id, scope=scope))
+            self._append_audit(
+                session, tenant, None, actor, "grant_scope",
+                f"subject={user_id} scope={scope}", now)
 
-    def revoke_scope(self, tenant: str, user_id: str, scope: str) -> None:
-        """Revoke a wall from a user in this tenant (takes effect on their next request)."""
+    def revoke_scope(self, tenant: str, actor: str, user_id: str, scope: str) -> None:
+        """Revoke a wall from a user in this tenant on the authority of `actor` — audited and
+        reversible (FR-49); takes effect on the user's next request."""
+        now = datetime.now(UTC)
         with self._sf() as session, session.begin():
             user = session.scalar(select(User).where(User.id == user_id, User.tenant == tenant))
             if user is None:
@@ -764,6 +771,41 @@ class SqlStore:
             row = session.get(UserScope, {"user_id": user_id, "scope": scope})
             if row is not None:
                 session.delete(row)
+            self._append_audit(
+                session, tenant, None, actor, "revoke_scope",
+                f"subject={user_id} scope={scope}", now)
+
+    def rescope_matter(self, tenant: str, actor: str, matter: str, new_scope: str) -> None:
+        """Move a matter's wall — update the ONE authoritative matter_scope row and record one
+        audit entry with before->after. Because scope is resolved live at query time (AD-13),
+        this takes effect at the next query with nothing to propagate and no re-index. Rejects a
+        no-op (same scope) and an unknown matter — never a silent write (FR-49)."""
+        now = datetime.now(UTC)
+        with self._sf() as session, session.begin():
+            row = session.get(MatterScope, {"tenant": tenant, "matter": matter})
+            if row is None:
+                raise ValueError("unknown matter")
+            if row.scope == new_scope:
+                raise ValueError("matter is already in that scope")  # no silent no-op
+            before = row.scope
+            row.scope = new_scope
+            self._append_audit(
+                session, tenant, matter, actor, "rescope_matter",
+                f"subject={matter} scope={before}->{new_scope}", now)
+
+    def set_user_admin(self, tenant: str, actor: str, subject_user: str, is_admin: bool) -> None:
+        """Grant or revoke the administrative authority for a user — an audited, admin-only,
+        reversible act (AC2). The first admin is the provisioned one (ensure-admin), so every
+        admin traces back to provisioning; holding it does not widen a data read (AD-12)."""
+        now = datetime.now(UTC)
+        with self._sf() as session, session.begin():
+            user = session.scalar(
+                select(User).where(User.id == subject_user, User.tenant == tenant))
+            if user is None:
+                raise ValueError("unknown user")
+            user.is_admin = is_admin
+            action = "grant_admin" if is_admin else "revoke_admin"
+            self._append_audit(session, tenant, None, actor, action, f"subject={subject_user}", now)
 
     def read_audit(self, matter: str, tenant: str, scopes: set[str]) -> AuditTrail:
         """The audit trail for a matter — scope-checked. The chain is per-tenant

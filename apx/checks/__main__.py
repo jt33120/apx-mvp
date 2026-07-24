@@ -20,6 +20,7 @@ from apx.checks import (
     credential_storage,
     import_contracts,
     payload_schema,
+    scope_admin,
     tenant_isolation,
 )
 from apx.checks.import_contracts import CheckResult
@@ -40,6 +41,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # story 1.5 — owned auth (AD-15).
     credential_storage.no_reversible_credential_storage,
     credential_storage.jwt_decode_pins_algorithms,
+    # story 1.6 — grant-time authorisation (FR-49).
+    scope_admin.scope_mutations_are_audited,
 ]
 
 

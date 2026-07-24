@@ -50,16 +50,16 @@ def test_cockpit_lists_users_and_grants_and_revokes(store: SqlStore) -> None:
     assert roster["a@c.fr"].scopes == ("w1",) and roster["a@c.fr"].is_admin is False
     assert roster["b@c.fr"].is_admin is True
 
-    store.grant_scope("t", uid, "w2")
+    store.grant_scope("t", "admin", uid, "w2")
     assert store.scopes_for(uid) == {"w1", "w2"}
-    store.revoke_scope("t", uid, "w1")
+    store.revoke_scope("t", "admin", uid, "w1")
     assert store.scopes_for(uid) == {"w2"}
 
 
 def test_managing_a_user_in_another_tenant_is_rejected(store: SqlStore) -> None:
     uid = store.create_user("t", "a@c.fr", "pw", "A", set())
     with pytest.raises(ValueError):
-        store.grant_scope("autre-cabinet", uid, "w1")  # the user is not in that tenant
+        store.grant_scope("autre-cabinet", "admin", uid, "w1")  # the user is not in that tenant
 
 
 def test_change_password(store: SqlStore) -> None:

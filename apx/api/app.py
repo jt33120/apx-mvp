@@ -558,7 +558,7 @@ def admin_grant(
     if not scope:
         raise HTTPException(status_code=400, detail="périmètre requis")
     try:
-        store.grant_scope(ident.tenant, user_id, scope)
+        store.grant_scope(ident.tenant, ident.actor, user_id, scope)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="utilisateur inconnu") from exc
     return {"status": "granted"}
@@ -568,13 +568,48 @@ def admin_grant(
 def admin_revoke(
     user_id: str, req: ScopeIn, ident: Identity = Depends(require_admin)
 ) -> dict[str, str]:
-    """Revoke a wall from a user in the caller's tenant (admin only)."""
+    """Revoke a wall from a user in the caller's tenant (admin only) — audited."""
     store = _require_store()
     try:
-        store.revoke_scope(ident.tenant, user_id, req.scope.strip())
+        store.revoke_scope(ident.tenant, ident.actor, user_id, req.scope.strip())
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="utilisateur inconnu") from exc
     return {"status": "revoked"}
+
+
+@app.post("/api/admin/matters/{matter}/rescope")
+def admin_rescope(
+    matter: str, req: ScopeIn, ident: Identity = Depends(require_admin)
+) -> dict[str, str]:
+    """Move a matter's wall to a new scope (admin only) — one audited op with before->after;
+    takes effect at the next query (AD-13). 404 unknown matter, 400 a no-op."""
+    store = _require_store()
+    new_scope = req.scope.strip()
+    if not new_scope:
+        raise HTTPException(status_code=400, detail="périmètre requis")
+    try:
+        store.rescope_matter(ident.tenant, ident.actor, matter, new_scope)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "rescoped"}
+
+
+class AdminFlagIn(BaseModel):
+    is_admin: bool
+
+
+@app.post("/api/admin/users/{user_id}/admin")
+def admin_set_admin(
+    user_id: str, req: AdminFlagIn, ident: Identity = Depends(require_admin)
+) -> dict[str, str]:
+    """Grant or revoke the administrative authority for a user (admin only) — audited and
+    reversible. The administrative grant is itself granted by this same privileged path (AC2)."""
+    store = _require_store()
+    try:
+        store.set_user_admin(ident.tenant, ident.actor, user_id, req.is_admin)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="utilisateur inconnu") from exc
+    return {"status": "updated"}
 
 
 @app.post("/api/ingest", response_model=IngestResponse)
