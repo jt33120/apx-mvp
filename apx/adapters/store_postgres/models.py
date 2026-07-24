@@ -260,15 +260,22 @@ class SessionRecord(Base):
     absolute_expiry: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
-class TenantConfig(Base):
-    """Per-tenant configuration-as-data (AD-24) — never code. Today it carries whether MFA
-    (TOTP) is required for the tenant's users (FR-48); the row is the config, so turning MFA
-    on for a firm is a data change, not a deploy."""
+class TenantSetting(Base):
+    """Per-tenant configuration-as-data (AD-24) — never code, never a per-deployment env var.
+    One row per (tenant, key); ``value`` holds the JSON-encoded configuration value. The set of
+    permitted keys, their types and their defaults are declared in ``apx.core.domain.config``;
+    this table only stores the *non-default* values a tenant has set. Written exclusively through
+    the audited surface (AD-25) — ``store.set_config`` validates against the schema and records
+    before/after — so a value here without a matching audited change is a direct edit and is
+    detectable (``store.config_provenance``). Replaces the earlier single ``mfa_required`` column:
+    MFA is now the ``mfa_required`` key, so there is one surface for every configuration value."""
 
-    __tablename__ = "tenant_config"
+    __tablename__ = "tenant_setting"
 
     tenant: Mapped[str] = mapped_column(String, primary_key=True)
-    mfa_required: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    key: Mapped[str] = mapped_column(String, primary_key=True)
+    # JSON-encoded value (apx.core.domain.config declares each key's type + default)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
 
 
 class RecallReview(Base):

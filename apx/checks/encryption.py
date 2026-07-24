@@ -46,6 +46,16 @@ _PLAINTEXT_ALLOWLIST = {
     "email", "password_hash", "display_name",
     "full_text",  # the AD-31 exempt deterministic text index (also asserted un-encrypted below)
 }
+# Table-qualified plaintext columns — used where the bare name is too generic to allow globally.
+# ``tenant_setting.key``/``value`` are configuration-as-data metadata (a language code, an
+# endpoint, thresholds, taxonomy labels) — configuration the admin surface reads and DISPLAYS in
+# the clear, comparable to the already-plaintext ``matter``/``scope`` names, and less sensitive
+# than a matter (client) name. The audited before/after of a config change lives in the encrypted
+# ``audit_record.detail``; the live config value is operational metadata, not document content.
+_PLAINTEXT_ALLOWLIST_QUALIFIED = {
+    ("TenantSetting", "key"),
+    ("TenantSetting", "value"),
+}
 
 
 def _column_type_name(value: ast.expr | None) -> str | None:
@@ -104,7 +114,9 @@ def sensitive_columns_are_encrypted(roots: Iterable[Path] | None = None) -> Chec
                                        "plaintext; encrypting it breaks exhaustive search (FR-13)")
                 string_capable = type_name in _STRING_TYPES or (
                     type_name is None and _annotation_is_str(stmt.annotation))
-                if string_capable and type_name != _ENCRYPTED and attr not in _PLAINTEXT_ALLOWLIST:
+                allowed = attr in _PLAINTEXT_ALLOWLIST or (
+                    cls.name, attr) in _PLAINTEXT_ALLOWLIST_QUALIFIED
+                if string_capable and type_name != _ENCRYPTED and not allowed:
                     shown = type_name or "an inferred String"
                     return CheckResult(name, ad, False,
                                        f"{cls.name}.{attr} is {shown}, not {_ENCRYPTED}, and is "

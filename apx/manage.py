@@ -1,11 +1,16 @@
-"""Operational CLI — bootstrap the first admin, and create users off-line.
+"""Operational CLI — provision a tenant, bootstrap the first admin, create users off-line.
+
+    python -m apx.manage provision --tenant cabinet --admin-email patron@cabinet.fr \
+        --admin-name "Le Patron" --scope pole-assurance --taxonomy conclusions --taxonomy pièce
 
     python -m apx.manage create-user --tenant cabinet --email patron@cabinet.fr \
         --name "Le Patron" --admin --scope pole-assurance --scope pole-penal
 
 Reads DATABASE_URL from the environment. The password comes from APX_NEW_PASSWORD or an
-interactive prompt — never a command-line argument, so it does not land in shell
-history. The first admin is created this way; thereafter the cockpit manages the rest.
+interactive prompt — never a command-line argument, so it does not land in shell history.
+`provision` is the first-run bootstrap surface (AD-25): it establishes a tenant's first
+administrative grant and its taxonomy in one audited act; thereafter the authed cockpit
+manages configuration, users and scopes.
 """
 
 from __future__ import annotations
@@ -18,7 +23,7 @@ from collections.abc import Sequence
 from sqlalchemy.exc import IntegrityError
 
 from apx.adapters.store_postgres.engine import make_session_factory
-from apx.adapters.store_postgres.store import SqlStore
+from apx.adapters.store_postgres.store import SqlStore, TenantAlreadyProvisioned
 
 
 def _create_user(store: SqlStore, args: argparse.Namespace, password: str) -> str:
@@ -63,9 +68,23 @@ def rekey(store: SqlStore) -> str:
             f"rotation recorded for {len(firms)} tenant(s)")
 
 
+def _provision(store: SqlStore, args: argparse.Namespace, password: str) -> str:
+    return store.provision_tenant(
+        args.tenant, args.admin_email, password, args.admin_name,
+        set(args.scope or []), list(args.taxonomy or []),
+    )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="apx.manage")
     sub = parser.add_subparsers(dest="cmd", required=True)
+    prov = sub.add_parser(
+        "provision", help="provision a tenant: first admin + scopes + taxonomy (audited, AD-25)")
+    prov.add_argument("--tenant", required=True)
+    prov.add_argument("--admin-email", required=True)
+    prov.add_argument("--admin-name", required=True)
+    prov.add_argument("--scope", action="append", default=[], help="repeatable")
+    prov.add_argument("--taxonomy", action="append", default=[], help="repeatable label")
     create = sub.add_parser("create-user", help="create a user (use --admin for the first admin)")
     create.add_argument("--tenant", required=True)
     create.add_argument("--email", required=True)
@@ -82,7 +101,19 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     install_secret_redaction()  # scrub secrets from any log this CLI emits (AD-47), like the app
     args = build_parser().parse_args(argv)
-    if args.cmd == "create-user":
+    if args.cmd == "provision":
+        password = os.environ.get("APX_NEW_PASSWORD") or getpass.getpass("Mot de passe admin : ")
+        if not password:
+            raise SystemExit("un mot de passe est requis (APX_NEW_PASSWORD ou saisie)")
+        store = SqlStore(make_session_factory())
+        try:
+            uid = _provision(store, args, password)
+        except TenantAlreadyProvisioned as exc:
+            raise SystemExit(f"déjà provisionné : {exc}") from exc
+        scopes, taxonomy = sorted(args.scope or []), list(args.taxonomy or [])
+        print(f"provisionné : tenant={args.tenant} · admin={uid} ({args.admin_email}) · "
+              f"scopes={scopes} · taxonomie={len(taxonomy)} label(s)")
+    elif args.cmd == "create-user":
         password = os.environ.get("APX_NEW_PASSWORD") or getpass.getpass("Mot de passe : ")
         if not password:
             raise SystemExit("un mot de passe est requis (APX_NEW_PASSWORD ou saisie)")

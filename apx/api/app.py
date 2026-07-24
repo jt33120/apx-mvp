@@ -21,6 +21,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from functools import lru_cache
 from pathlib import Path
+from typing import Any
 
 import pyotp
 from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Request, Response, UploadFile
@@ -41,6 +42,7 @@ from apx.api.logging import install_secret_redaction
 from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.triage import triage_pieces
+from apx.core.domain.config import ConfigError
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
 
@@ -631,6 +633,72 @@ def admin_set_admin(
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="utilisateur inconnu") from exc
     return {"status": "updated"}
+
+
+# ── the configuration surface (AD-25): one audited surface for every config-as-data value ──
+class ConfigItemOut(BaseModel):
+    key: str
+    value: Any
+    default: Any
+    governs: str
+
+
+class ConfigSetIn(BaseModel):
+    value: Any  # validated against the declared schema in the store, not here
+
+
+class ConfigChangeOut(BaseModel):
+    key: str
+    before: Any
+    after: Any
+    changed: bool
+
+
+class ConfigProvenanceOut(BaseModel):
+    key: str
+    value: Any
+    audited: bool
+
+
+@app.get("/api/admin/config", response_model=list[ConfigItemOut])
+def admin_get_config(ident: Identity = Depends(require_admin)) -> list[ConfigItemOut]:
+    """Every configuration-as-data value for the caller's tenant — current value, default and
+    the guarantee each key governs (admin only; tenant from the session, never cross-tenant)."""
+    store = _require_store()
+    return [
+        ConfigItemOut(key=c.key, value=c.value, default=c.default, governs=c.governs)
+        for c in store.get_all_config(ident.tenant)
+    ]
+
+
+@app.put("/api/admin/config/{key}", response_model=ConfigChangeOut)
+def admin_set_config(
+    key: str, req: ConfigSetIn, ident: Identity = Depends(require_admin)
+) -> ConfigChangeOut:
+    """Set one configuration value for the caller's tenant — validated against the schema and
+    audited with before/after (admin only). 422 on an unknown key or a wrong-typed value; a
+    re-set to the identical value is accepted as a no-op (`changed=false`)."""
+    store = _require_store()
+    try:
+        change = store.set_config(ident.tenant, ident.actor, key, req.value)
+    except ConfigError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return ConfigChangeOut(
+        key=change.key, before=change.before, after=change.after, changed=change.changed)
+
+
+@app.get("/api/admin/config/provenance", response_model=list[ConfigProvenanceOut])
+def admin_config_provenance(
+    ident: Identity = Depends(require_admin)
+) -> list[ConfigProvenanceOut]:
+    """The provenance of every stored configuration value (admin only): whether it is traceable
+    to an audited change through this surface. An `audited=false` row was written by a direct DB
+    edit that bypassed the surface (AD-25) — the detectability the guarantee promises."""
+    store = _require_store()
+    return [
+        ConfigProvenanceOut(key=p.key, value=p.value, audited=p.audited)
+        for p in store.config_provenance(ident.tenant)
+    ]
 
 
 @app.post("/api/ingest", response_model=IngestResponse)

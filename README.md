@@ -4,13 +4,15 @@ Mass-document triage for law firms. Hexagonal core, adapters at the edges, **one
 stateful service** (PostgreSQL). Runs the same one artefact hosted, in CI, and
 air-gapped inside a firm (AD-3).
 
-> **Status: story 1.8 — secret & key management.** The frozen payload schema (1.3), the
-> *tenant* wall (1.4), owned auth — Argon2id + opaque server-side sessions, lockout-in-audit,
-> MFA (1.5) — privileged, audited, reversible scope administration (1.6), application-layer
-> encryption at rest with a fail-closed start-up gate (1.7), and now **secrets held only in the
-> environment** — no secret in source (a build-time guard), **rotatable in place** without a
-> redeploy or a re-index, and scrubbed from logs (1.8) exist; ingestion, retrieval and the model
-> tiers do not yet. What is deliberately absent, and which story owns it, is listed at the bottom.
+> **Status: story 1.9 — configuration-as-data & the provisioning surface.** The frozen payload
+> schema (1.3), the *tenant* wall (1.4), owned auth — Argon2id + opaque server-side sessions,
+> lockout-in-audit, MFA (1.5) — privileged, audited, reversible scope administration (1.6),
+> application-layer encryption at rest with a fail-closed start-up gate (1.7), secrets held only in
+> the environment — rotatable in place, scrubbed from logs (1.8), and now **per-*tenant* behaviour
+> as data rows** edited through **one audited surface**, a *tenant* **provisioned** through it, and
+> a build that goes red if a firm's identity leaks into a code branch or a guarantee ships switched
+> off (1.9) — exist; ingestion, retrieval and the model tiers do not yet. What is deliberately
+> absent, and which story owns it, is listed at the bottom.
 
 Planning artefacts (PRD, architecture spine, epics, stories) live under
 `_bmad-output/planning-artifacts/`. The previous implementation at
@@ -235,6 +237,59 @@ each data-bearing *tenant*'s audit chain, naming a one-way key fingerprint, neve
 *(The transient user-supplied credential channel — a document password — is AD-47's second rule,
 owned by the failure-register work in epic 2.)*
 
+## Configuration-as-data & the provisioning surface (AD-24/AD-25)
+
+Per-*tenant* behaviour is **data rows, never code** (AD-24) — one code base for many firms, so a
+firm's bespoke need never becomes a per-site fork. Every configurable value has a declared type
+and a **default** (`apx/core/domain/config.py`); a *tenant*'s non-default values live in a
+`tenant_setting(tenant, key, value)` table, edited through **one audited surface** (AD-25):
+`set_config` validates against the schema, records the change on the audit trail with actor / key
+/ **before** / **after** (so it is reversible — set the before back), and refuses an unknown key or
+a wrong-typed value. A value written by a direct DB edit (bypassing the surface) is **detectable**
+(`GET /api/admin/config/provenance`). The admin API — `GET /api/admin/config`, `PUT
+/api/admin/config/{key}` — is inside the *tenant* boundary; the tenant comes from the session,
+never the request.
+
+A *tenant* is **provisioned** off-line (the first-run bootstrap, before any admin exists to
+authenticate) — establishing its first administrative grant, scopes and taxonomy in one audited
+act, failing closed if the *tenant* already has an administrator:
+
+```
+python -m apx.manage provision --tenant cabinet --admin-email patron@cabinet.fr \
+    --admin-name "Le Patron" --scope pole-assurance --taxonomy conclusions --taxonomy "pièce adverse"
+# (the admin password comes from APX_NEW_PASSWORD or an interactive prompt, never argv)
+```
+
+Three build gates back the guarantees (`python -m apx.checks`): **no conditional under `core/`
+branches on a *tenant* identifier** (a *tenant* is a filter argument and a row key, never a
+branch); **every documented key exists** in the schema (no key that lives in zero source files);
+**no default disables the guarantee its key governs** (the v1 off-corpus gate shipped disabled —
+that default is now build-checked to stay on). The visual settings/provisioning SPA is deferred
+with the rest of the front-end (AD-29).
+
+The configuration keys (each editable as data, no redeploy):
+
+<!-- config-keys:start -->
+
+| Key | Type | Default | Governs |
+|---|---|---|---|
+| `interface_language` | enum | `fr` | the interface language the tenant's users see |
+| `mfa_required` | bool | `false` | whether a second factor (TOTP) is demanded (FR-48) |
+| `model_provider` | str | `mistral` | which inference provider serves the judgment LLM (AD-27) |
+| `model_endpoint` | str | Mistral EU | the OpenAI-compatible inference endpoint (AD-27) |
+| `chunking_config_version` | str | `v1` | the chunking configuration identity (AD-9/AD-40) |
+| `configured_sources` | list | `[]` | the enumerated data sources a corpus may be drawn from (AD-16) |
+| `exclusion_list` | list | `[]` | filename/path patterns excluded from ingestion |
+| `taxonomy` | list | `[]` | the tenant's classification taxonomy (seeded at provisioning) |
+| `off_corpus_refusal_enabled` | bool | `true` | the honest "not in the corpus" refusal (AD-20) — **on by default** |
+| `cascade_stage3_max_share` | float | `0.5` | the ceiling on the share of a matter reaching the LLM (AD-18) |
+
+<!-- config-keys:end -->
+
+Wiring each value into its consumer (the cascade share into stage-3 gating, sources into
+ingestion, chunking into the chunker) lands in the consuming story (epics 2/4/5); 1.9 delivers the
+surface, the defaults and the guarantees.
+
 ## What does NOT belong in this repo yet
 
 Scaffolding only. Each item below has an owning story; building it here is a
@@ -245,7 +300,7 @@ scope violation.
 | Internal service tokens (PyJWT), WebAuthn as a 2nd factor; MFA enrolment UX | later |
 | Transient user-supplied credential channel (document passwords, AD-47 rule 2) | epic 2 |
 | Single read entry point (`core/app/read/`) + outside-read grep (AD-14) | later (1.12 / epic 3) |
-| Config / provisioning surface | 1.9 |
+| Visual settings / provisioning SPA (the mechanism exists; the UI is deferred) | front-end (AD-29) |
 | Content-free projection, egress check | 1.10 / 1.12 |
 | Backup, restore, `upgrade.sh`, cosign packaging | 1.11 / deploy |
 | Embedder, extraction, OCR, LLM client, ML weights | Epic 2 |

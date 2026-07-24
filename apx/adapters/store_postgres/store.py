@@ -14,6 +14,7 @@ check are stories 1.3 / 3.3; this slice carries the working pre-filter.
 from __future__ import annotations
 
 import hashlib
+import json
 import random
 import secrets
 from collections.abc import Callable
@@ -34,13 +35,21 @@ from apx.adapters.store_postgres.models import (
     Piece,
     RecallReview,
     SessionRecord,
-    TenantConfig,
+    TenantSetting,
     User,
     UserScope,
 )
 from apx.core.app.ingest import IngestionResult
 from apx.core.domain.auth import hash_password, verify_and_upgrade, verify_password
 from apx.core.domain.confidence import prevalence_upper_bound
+from apx.core.domain.config import (
+    CONFIG_SCHEMA,
+    ConfigKey,
+    coerce,
+    dumps_value,
+    loads_value,
+    require_key,
+)
 from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.dedup import cluster
 from apx.core.domain.inventory import Inventory
@@ -59,6 +68,41 @@ class ScopeDenied(Exception):
 class ScopeConflict(Exception):
     """An ingest would change an existing matter's scope. A matter's wall may only move via
     the audited admin re-scope path (AD-13/FR-49), never silently through a re-ingest."""
+
+
+class TenantAlreadyProvisioned(Exception):
+    """Provisioning was asked to establish a tenant that already has an administrator. Fail
+    closed — never silently take over a live firm (AD-25)."""
+
+
+@dataclass(frozen=True)
+class ConfigChange:
+    """The recorded result of one audited configuration edit (AD-25) — before/after make it
+    reversible (set ``before`` back to restore)."""
+
+    key: str
+    before: object
+    after: object
+    changed: bool  # False when the new value equalled the old (a no-op, no audit entry written)
+
+
+@dataclass(frozen=True)
+class ConfigItem:
+    key: str
+    value: object
+    default: object
+    governs: str
+
+
+@dataclass(frozen=True)
+class ConfigProvenance:
+    """Whether a stored configuration value is traceable to an audited change through the surface
+    (AD-25). ``audited`` is False when a value matches neither the last audited change for its key
+    nor the schema default — i.e. it was written by a direct DB edit that skipped the surface."""
+
+    key: str
+    value: object
+    audited: bool
 
 
 @dataclass(frozen=True)
@@ -200,6 +244,40 @@ def _excerpt(text: str, width: int = 240) -> str:
 
 def _failure_id(matter: str, submitted_path: str) -> str:
     return hashlib.sha256(f"{matter}\x00{submitted_path}".encode()).hexdigest()
+
+
+def _config_value(spec: ConfigKey, row: TenantSetting | None) -> object:
+    """A setting row's value coerced to the key's declared type, or the schema default when the
+    row is absent or its stored value is unreadable (fail safe to the default — a value that
+    never came through the audited surface is caught by ``config_provenance``, not here)."""
+    if row is None:
+        return spec.default
+    try:
+        return spec.coerce(loads_value(row.value))
+    except ValueError:
+        return spec.default
+
+
+def _config_change_detail(key: str, before: object, after: object, retrieval: bool) -> str:
+    """The audit detail for one config change — a JSON object (not a fragile ``k=v`` line, since
+    ``before``/``after`` are arbitrary JSON values that could contain any delimiter). Carries the
+    retrieval-staleness flag (AD-23) when set. ``config_provenance`` parses it back structurally."""
+    payload: dict[str, object] = {"key": key, "before": before, "after": after}
+    if retrieval:
+        payload["retrieval"] = True
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _parse_config_detail(detail: str) -> tuple[str, object] | None:
+    """Recover (key, after-value) from a ``config_changed`` audit detail, or None if it is not a
+    parseable config change (only ``config_changed`` details are ever passed here)."""
+    try:
+        obj = json.loads(detail)
+    except ValueError:
+        return None
+    if not isinstance(obj, dict) or "key" not in obj or "after" not in obj:
+        return None
+    return obj["key"], obj["after"]
 
 
 def _audit_ts(dt: datetime) -> str:
@@ -769,12 +847,139 @@ class SqlStore:
                 continue
         raise RuntimeError("unreachable")  # the loop returns or raises
 
-    # ── MFA: configuration-as-data per tenant (AD-15/FR-48, [ASSUMPTION] carried) ──
+    # ── configuration-as-data: one audited surface for every per-tenant value (AD-24/AD-25) ──
 
-    def set_mfa_required(self, tenant: str, required: bool) -> None:
-        """Turn MFA (TOTP) on or off for a tenant — configuration-as-data (AD-24)."""
+    def set_config(self, tenant: str, actor: str, key: str, value: object) -> ConfigChange:
+        """The one write path for a configuration-as-data value (AD-25). Validates ``value``
+        against the declared schema (an unknown key or a wrong-typed value raises ``ConfigError``
+        — never a silent default), records an audit entry carrying actor/key/before/after
+        atomically with the write (so the change is reversible — set ``before`` back to restore),
+        and is a no-op that writes NO audit entry when the value is unchanged. A change to a
+        retrieval-affecting key is flagged on the entry as the AD-23 staleness hook."""
+        spec = require_key(key)          # ConfigError on an unknown key
+        new_value = spec.coerce(value)    # ConfigError on a wrong-typed value
+        for attempt in range(4):
+            try:
+                with self._sf() as session, session.begin():
+                    row = session.get(TenantSetting, {"tenant": tenant, "key": key})
+                    before = _config_value(spec, row)
+                    if before == new_value:
+                        return ConfigChange(key, before, new_value, changed=False)
+                    if row is None:
+                        session.add(TenantSetting(
+                            tenant=tenant, key=key, value=dumps_value(new_value)))
+                    else:
+                        row.value = dumps_value(new_value)
+                    self._append_audit(
+                        session, tenant, None, actor, "config_changed",
+                        _config_change_detail(key, before, new_value, spec.affects_retrieval),
+                        datetime.now(UTC))
+                    session.flush()  # surface a (tenant, seq) collision inside the try
+                return ConfigChange(key, before, new_value, changed=True)
+            except IntegrityError:
+                if attempt == 3:
+                    raise
+        raise RuntimeError("unreachable")  # the loop returns or raises
+
+    def get_config(self, tenant: str, key: str) -> object:
+        """One configuration value — the tenant's stored value, or the schema default when it
+        was never set. Raises ``ConfigError`` on an unknown key."""
+        spec = require_key(key)
+        with self._sf() as session:
+            row = session.get(TenantSetting, {"tenant": tenant, "key": key})
+        return _config_value(spec, row)
+
+    def get_all_config(self, tenant: str) -> list[ConfigItem]:
+        """Every configuration-as-data value for the tenant — the schema, each key carrying its
+        current value (stored or default) and its default. This is the read half of the one
+        surface (AD-25)."""
+        with self._sf() as session:
+            stored = {
+                r.key: r for r in session.execute(
+                    select(TenantSetting).where(TenantSetting.tenant == tenant)
+                ).scalars().all()
+            }
+        return [
+            ConfigItem(key, _config_value(spec, stored.get(key)), spec.default, spec.governs)
+            for key, spec in CONFIG_SCHEMA.items()
+        ]
+
+    def config_provenance(self, tenant: str) -> list[ConfigProvenance]:
+        """Reconcile every stored setting row against the tenant's audited config changes, so a
+        value written by a direct DB edit (bypassing the surface) is detectable (AD-25). A row is
+        ``audited`` only when its current value equals the last audited change for its key."""
+        with self._sf() as session:
+            rows = session.execute(
+                select(TenantSetting).where(TenantSetting.tenant == tenant)
+            ).scalars().all()
+            details = session.execute(
+                select(AuditRecord.detail)
+                .where(AuditRecord.tenant == tenant, AuditRecord.action == "config_changed")
+                .order_by(AuditRecord.seq)
+            ).scalars().all()
+        audited_after: dict[str, object] = {}
+        for detail in details:
+            parsed = _parse_config_detail(detail)
+            if parsed is not None:
+                audited_after[parsed[0]] = parsed[1]  # last write wins (ordered by seq)
+        out: list[ConfigProvenance] = []
+        for row in rows:
+            try:
+                value = loads_value(row.value)
+            except ValueError:
+                value = None
+            audited = row.key in audited_after and audited_after[row.key] == value
+            out.append(ConfigProvenance(row.key, value, audited))
+        return out
+
+    def provision_tenant(
+        self, tenant: str, admin_email: str, admin_password: str, admin_name: str,
+        scopes: set[str], taxonomy: list[str], *, actor: str = "system:provisioning",
+    ) -> str:
+        """Provision a tenant through the surface (AD-25): establish its FIRST administrative
+        grant (an is_admin user with its scopes) and seed its taxonomy as an audited configuration
+        value, in ONE transaction, writing a ``tenant_provisioned`` audit entry. Fails closed with
+        ``TenantAlreadyProvisioned`` if the tenant already has an administrator — never a silent
+        takeover of a live firm. Returns the new administrator's id."""
+        email = admin_email.strip().lower()
+        coerced_tax = coerce("taxonomy", list(taxonomy))  # validate before opening the tx
+        wall_set = set(scopes)
+        uid = uuid4().hex
+        now = datetime.now(UTC)
         with self._sf() as session, session.begin():
-            session.merge(TenantConfig(tenant=tenant, mfa_required=required))
+            existing_admin = session.scalar(
+                select(func.count()).select_from(User).where(
+                    User.tenant == tenant, User.is_admin.is_(True)))
+            if (existing_admin or 0) > 0:
+                raise TenantAlreadyProvisioned(
+                    f"tenant {tenant!r} already has an administrator")
+            session.add(User(
+                id=uid, tenant=tenant, email=email, password_hash=hash_password(admin_password),
+                display_name=admin_name, is_admin=True))
+            for scope in sorted(wall_set):
+                session.add(UserScope(user_id=uid, scope=scope))
+            self._append_audit(
+                session, tenant, None, actor, "tenant_provisioned",
+                f"admin={email} scopes={sorted(wall_set)} taxonomy={len(coerced_tax)}", now)
+            session.flush()
+            self._append_audit(
+                session, tenant, None, actor, "create_user",
+                f"subject={uid} email={email} scopes={sorted(wall_set)} admin=True", now)
+            session.flush()
+            if coerced_tax:  # seed the taxonomy as an audited value (empty is the default already)
+                session.add(TenantSetting(
+                    tenant=tenant, key="taxonomy", value=dumps_value(coerced_tax)))
+                self._append_audit(
+                    session, tenant, None, actor, "config_changed",
+                    _config_change_detail("taxonomy", [], coerced_tax, retrieval=False), now)
+                session.flush()
+        return uid
+
+    # ── MFA reads/writes route through the config surface (one audited path, AD-25) ──
+
+    def set_mfa_required(self, tenant: str, required: bool, actor: str = "system:config") -> None:
+        """Turn MFA (TOTP) on or off for a tenant — through the audited config surface (AD-25)."""
+        self.set_config(tenant, actor, "mfa_required", required)
 
     def set_mfa_secret(self, user_id: str, secret: str) -> None:
         """Enrol a user's TOTP secret (minimal enrolment; the secret is a shared secret,
@@ -788,9 +993,8 @@ class SqlStore:
     def mfa_status(self, tenant: str, user_id: str) -> tuple[bool, str | None]:
         """(whether the tenant requires MFA, the user's TOTP secret or None) — the login
         gate reads this to decide whether a second factor is demanded."""
+        required = bool(self.get_config(tenant, "mfa_required"))
         with self._sf() as session:
-            cfg = session.get(TenantConfig, tenant)
-            required = bool(cfg.mfa_required) if cfg is not None else False
             secret = session.scalar(select(User.mfa_secret).where(User.id == user_id))
         return required, secret
 

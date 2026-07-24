@@ -17,6 +17,7 @@ import sys
 from collections.abc import Callable
 
 from apx.checks import (
+    configuration,
     credential_storage,
     encryption,
     import_contracts,
@@ -51,6 +52,10 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # story 1.8 — secret & key management (AD-47/FR-51).
     secrets.no_secret_in_source,
     secrets.no_secret_column_in_models,
+    # story 1.9 — configuration-as-data & the provisioning surface (AD-24/AD-25).
+    configuration.no_tenant_conditional_in_core,
+    configuration.config_defaults_preserve_guarantees,
+    configuration.documented_config_keys_exist,
 ]
 
 
