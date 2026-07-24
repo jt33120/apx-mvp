@@ -55,6 +55,24 @@ def test_the_wrong_key_fails_closed() -> None:
         Cipher(_key()).decrypt(token)  # a different key
 
 
+def test_associated_data_binds_the_ciphertext_to_its_context() -> None:
+    # a value encrypted under one AAD (its column identity) will not decrypt under another — so a
+    # ciphertext cannot be relocated from one column/table into another and silently decrypt.
+    c = Cipher(_key())
+    token = c.encrypt("secret", aad="piece.provenance_path")
+    assert c.decrypt(token, aad="piece.provenance_path") == "secret"  # right context
+    with pytest.raises(DecryptionError):
+        c.decrypt(token, aad="piece.custodian")  # relocated to another column
+    with pytest.raises(DecryptionError):
+        c.decrypt(token)  # no context at all
+
+
+def test_an_all_zero_key_is_rejected() -> None:
+    import base64
+    with pytest.raises(MissingEncryptionKey):
+        load_key_from_env({"APX_ENCRYPTION_KEY": base64.urlsafe_b64encode(bytes(32)).decode()})
+
+
 def test_a_plaintext_value_in_an_encrypted_column_is_a_loud_error() -> None:
     # the whole point: a value that never went through encrypt() is refused on read, so a
     # plaintext leak into an encrypted column surfaces instead of being silently accepted.

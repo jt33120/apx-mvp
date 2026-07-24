@@ -21,10 +21,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import Text, cast, delete, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.models import (
     AuditRecord,
     Failure,
@@ -40,6 +41,7 @@ from apx.adapters.store_postgres.models import (
 from apx.core.app.ingest import IngestionResult
 from apx.core.domain.auth import hash_password, verify_and_upgrade, verify_password
 from apx.core.domain.confidence import prevalence_upper_bound
+from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.dedup import cluster
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.search import snippet
@@ -225,6 +227,18 @@ def _audit_content(seq: int, tenant: str, matter: str | None, actor: str, action
 
 def _audit_chain(prev_chain: str, content: str) -> str:
     return hashlib.sha256(f"{prev_chain}\x00{content}".encode()).hexdigest()
+
+
+def _safe_decrypt(ciphertext: str | None, context: str) -> str | None:
+    """Decrypt a raw-read encrypted column, or ``None`` if it cannot be authenticated — a
+    tamper, the wrong key, or a legacy plaintext value. Lets the audit read degrade ONE bad row
+    to verified=False instead of 500-ing the whole tenant trail (FR-24 tamper-evidence)."""
+    if ciphertext is None:
+        return None
+    try:
+        return cipher().decrypt(ciphertext, aad=context)
+    except DecryptionError:
+        return None
 
 
 class SqlStore:
@@ -884,25 +898,37 @@ class SqlStore:
             )
             if scope is None or scope not in scopes:
                 raise ScopeDenied(matter)
-            all_rows = session.execute(
-                select(AuditRecord)
+            # Read the encrypted actor/detail as RAW ciphertext — cast(..., Text) uses Text's
+            # (identity) result processor, bypassing EncryptedText's eager decryption — so ONE
+            # undecryptable row (a tamper, a wrong key, a legacy plaintext value) degrades the
+            # trail to verified=False instead of raising and 500-ing the whole tenant read.
+            # Every other column keeps its native ORM type (timestamp stays a datetime).
+            rows = session.execute(
+                select(
+                    AuditRecord.seq, AuditRecord.matter,
+                    cast(AuditRecord.actor, Text), AuditRecord.action,
+                    cast(AuditRecord.detail, Text), AuditRecord.chain, AuditRecord.timestamp,
+                )
                 .where(AuditRecord.tenant == tenant)
                 .order_by(AuditRecord.seq)
-            ).scalars().all()
+            ).all()
 
         verified = True
         prev_chain = ""
-        for i, r in enumerate(all_rows):
+        entries: list[AuditEntry] = []
+        for i, (seq, r_matter, actor_ct, action, detail_ct, chain, ts) in enumerate(rows):
+            actor = _safe_decrypt(actor_ct, "audit_record.actor")
+            detail = _safe_decrypt(detail_ct, "audit_record.detail")
+            if actor is None or detail is None:
+                verified = False  # an unreadable field cannot be authenticated
             content = _audit_content(
-                r.seq, tenant, r.matter, r.actor, r.action, r.detail, _audit_ts(r.timestamp)
+                seq, tenant, r_matter, actor or "", action, detail or "", _audit_ts(ts)
             )
-            if r.seq != i + 1 or _audit_chain(prev_chain, content) != r.chain:
+            if seq != i + 1 or _audit_chain(prev_chain, content) != chain:
                 verified = False
-            prev_chain = r.chain
-
-        entries = [
-            AuditEntry(r.seq, r.actor, r.action, r.detail, r.chain, r.timestamp.isoformat())
-            for r in all_rows
-            if r.matter == matter
-        ]
+            prev_chain = chain
+            if r_matter == matter:
+                entries.append(AuditEntry(
+                    seq, actor if actor is not None else "«illisible»", action,
+                    detail if detail is not None else "«illisible»", chain, ts.isoformat()))
         return AuditTrail(entries, verified)

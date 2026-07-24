@@ -25,10 +25,11 @@ services:
       # Encryption at rest (AD-31), layer 1: the application key — REQUIRED, no default. The
       # start-up gate refuses to boot without it. Generate once: `openssl rand -base64 32`.
       APX_ENCRYPTION_KEY: ${APX_ENCRYPTION_KEY:?set APX_ENCRYPTION_KEY (e.g. openssl rand -base64 32)}
-      # Layer 2: attest the host data volume is encrypted. On this single-machine form-factor
-      # YOU must back this with a real encrypted disk (dm-crypt/LUKS) under ./apx-data — the
-      # attestation is the operator's promise; the app cannot verify the block device itself.
-      APX_VOLUME_ENCRYPTED: ${APX_VOLUME_ENCRYPTED:-1}
+      # Layer 2: attest the host data volume is encrypted. REQUIRED, no default — set it to 1
+      # only AFTER backing the data volume with a real encrypted disk (dm-crypt/LUKS). A default
+      # of 1 would be a permissive attestation (the gate would pass on a plaintext disk); the
+      # attestation must be YOUR conscious act. The app cannot verify the block device itself.
+      APX_VOLUME_ENCRYPTED: ${APX_VOLUME_ENCRYPTED:?set 1 only after encrypting the data volume (dm-crypt/LUKS)}
       # app↔db is a same-host link on the compose network (it never leaves the machine), so TLS
       # is not required here; a multi-host or hardened install should enable Postgres SSL and
       # set APX_DB_SSLMODE=require. Documented same-machine exemption (AD-31).

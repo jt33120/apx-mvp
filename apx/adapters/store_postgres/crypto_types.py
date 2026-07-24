@@ -27,26 +27,39 @@ from apx.core.domain.crypto import Cipher
 
 
 @lru_cache(maxsize=1)
-def _cipher() -> Cipher:
+def cipher() -> Cipher:
     """The process-wide cipher, from ``APX_ENCRYPTION_KEY``. Cached after first use;
-    fails closed if the key is absent or unusable (MissingEncryptionKey)."""
+    fails closed if the key is absent or unusable (MissingEncryptionKey). Public so the store
+    can decrypt raw-read columns defensively (the audit trail's graceful-degrade path)."""
     return Cipher.from_env()
 
 
 class EncryptedText(TypeDecorator):
     """Application-layer AES-256-GCM at rest. ``None`` round-trips as ``None`` (a nullable
     column stays nullable); every non-null value is stored encrypted and returned decrypted.
-    A stored value that is not ciphertext fails closed on read (crypto.DecryptionError)."""
+    A stored value that is not ciphertext fails closed on read (crypto.DecryptionError).
+
+    Each column passes its identity (``"table.column"``) as the cipher's associated data, so a
+    ciphertext is bound to its column: a stolen-disk / DB-write attacker cannot relocate one
+    column's ciphertext into another column or table and have it decrypt (AAD mismatch → fail
+    closed). (Cross-row relocation within the SAME column is not closed by a column-level AAD —
+    that needs row-bound AAD in the store layer; recorded as a residual.)"""
 
     impl = Text
     cache_ok = True
 
+    def __init__(self, context: str) -> None:
+        # `context` is the AAD — the column's logical identity, e.g. "piece.provenance_path".
+        # Stored as an attribute so it participates in SQLAlchemy's type cache key (cache_ok).
+        self.context = context
+        super().__init__()
+
     def process_bind_param(self, value: str | None, dialect: object) -> str | None:
         if value is None:
             return None
-        return _cipher().encrypt(value)
+        return cipher().encrypt(value, aad=self.context)
 
     def process_result_value(self, value: str | None, dialect: object) -> str | None:
         if value is None:
             return None
-        return _cipher().decrypt(value)
+        return cipher().decrypt(value, aad=self.context)

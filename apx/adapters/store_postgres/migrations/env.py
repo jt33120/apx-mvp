@@ -16,13 +16,15 @@ config = context.config
 # AD-46 and belongs to the backup/deploy story (1.11), not here.
 import os as _os
 
-from apx.adapters.store_postgres.engine import _normalise
+from apx.adapters.store_postgres.engine import _normalise, _with_sslmode
 
 _db_url = _os.environ.get("DATABASE_URL")
 if _db_url:
     # Normalise like the app does, so a managed host's driverless URL (postgres:// or
-    # postgresql://, e.g. Railway) binds psycopg 3 instead of the absent psycopg2.
-    config.set_main_option("sqlalchemy.url", _normalise(_db_url))
+    # postgresql://, e.g. Railway) binds psycopg 3 instead of the absent psycopg2. Apply the
+    # same TLS-in-transit posture (AD-31) as the app so the migration connection is not a
+    # cleartext gap; a same-machine loopback (CI, compose) sets APX_DB_SSLMODE=disable.
+    config.set_main_option("sqlalchemy.url", _with_sslmode(_normalise(_db_url)))
 elif not config.get_main_option("sqlalchemy.url"):
     # Story 1.1 has no schema and never runs a migration, so this branch is inert
     # here; it fails loudly rather than with an opaque empty-URL error once the

@@ -188,10 +188,14 @@ anywhere but that named index. In transit, the app↔store connection requires T
 HTTPS.
 
 The **start-up gate fails closed on both layers**: no application key, or no attested data
-volume (`APX_VOLUME_ENCRYPTED`), and the app **refuses to boot** — no permissive default, no
-warning-and-continue. Two build-time guards (`python -m apx.checks`) hold the line: one fails
-the build if a content-bearing column is left plaintext or the text index is encrypted (it
-would break search); the other if the gate stops covering both layers or stops raising.
+volume (`APX_VOLUME_ENCRYPTED` — a conscious per-deployment act, never baked into the image),
+and the app **refuses to boot** — no permissive default, no warning-and-continue. Each
+ciphertext is bound to its column (AES-GCM associated data), so a stolen-disk attacker cannot
+relocate one column's value into another. Two build-time guards (`python -m apx.checks`) hold
+the line: one requires every string column to be encrypted **unless allowlisted** (so a new
+content column is encrypted-by-default) and forbids encrypting the text index; the other
+*executes* the gate to prove it refuses a missing-layer env. Enabling encryption on a store
+that already holds data is supported — a one-shot backfill migration re-encrypts existing rows.
 
 > The volume attestation is an honest operator promise (the app cannot verify a block device
 > from inside a container) — back it with dm-crypt/LUKS on a single-machine install, or a

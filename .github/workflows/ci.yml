@@ -70,6 +70,10 @@ jobs:
           --health-interval 10s --health-timeout 5s --health-retries 5
     env:
       DATABASE_URL: postgresql+psycopg://apx:apxci@localhost:5432/apx
+      # The service Postgres is a same-host loopback with no TLS; opt out of the require default
+      # (the documented same-machine exemption, AD-31) so alembic + the app connect. The store
+      # integration tests get their encryption key from the pytest conftest fixture.
+      APX_DB_SSLMODE: disable
     steps:
       - uses: actions/checkout@v4
       - name: Install uv

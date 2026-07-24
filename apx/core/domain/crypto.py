@@ -51,7 +51,8 @@ def generate_key() -> str:
 
 def _decode_key(raw: str) -> bytes:
     """Decode a configured key (urlsafe-base64, standard-base64, or hex) to 32 bytes.
-    Raises :class:`MissingEncryptionKey` on anything that is not exactly 32 bytes."""
+    Raises :class:`MissingEncryptionKey` on anything that is not exactly 32 bytes, or on an
+    all-zero key (the classic placeholder — a real key is never all zeros)."""
     raw = raw.strip()
     if not raw:
         raise MissingEncryptionKey(f"{_ENV_KEY} is empty")
@@ -65,6 +66,9 @@ def _decode_key(raw: str) -> bytes:
         except (ValueError, TypeError):
             continue
         if len(key) == KEY_BYTES:
+            if key == bytes(KEY_BYTES):
+                raise MissingEncryptionKey(
+                    f"{_ENV_KEY} is all-zero — that is a placeholder, not a real key")
             return key
     raise MissingEncryptionKey(
         f"{_ENV_KEY} must decode (base64 or hex) to exactly {KEY_BYTES} bytes"
@@ -100,18 +104,28 @@ class Cipher:
     def from_env(cls, env: Mapping[str, str] | None = None) -> Cipher:
         return cls(load_key_from_env(env))
 
-    def encrypt(self, plaintext: str) -> str:
+    def encrypt(self, plaintext: str, aad: str | None = None) -> str:
+        """Encrypt, binding ``aad`` (associated data) into the authentication tag. A value
+        encrypted under one ``aad`` will not decrypt under another — so a ciphertext bound to
+        one column/table cannot be relocated into another and silently decrypt (the AAD is the
+        column identity, so a stolen-disk / DB-write attacker cannot shuffle ciphertexts across
+        columns)."""
         nonce = os.urandom(_NONCE_BYTES)
-        blob = nonce + self._aead.encrypt(nonce, plaintext.encode("utf-8"), None)
+        extra = aad.encode("utf-8") if aad else None
+        blob = nonce + self._aead.encrypt(nonce, plaintext.encode("utf-8"), extra)
         return _PREFIX + base64.urlsafe_b64encode(blob).decode("ascii")
 
-    def decrypt(self, token: str) -> str:
+    def decrypt(self, token: str, aad: str | None = None) -> str:
+        """Decrypt and authenticate. Fails closed (``DecryptionError``) on a wrong key, a
+        tamper, a truncation, a plaintext value, OR an ``aad`` that does not match the one the
+        value was encrypted under (a relocated ciphertext)."""
         if not is_ciphertext(token):
             # A plaintext value in an encrypted column — surface it, never accept it.
             raise DecryptionError("value is not an apxenc ciphertext token")
         try:
             blob = base64.urlsafe_b64decode(token[len(_PREFIX):])
             nonce, ct = blob[:_NONCE_BYTES], blob[_NONCE_BYTES:]
-            return self._aead.decrypt(nonce, ct, None).decode("utf-8")
+            extra = aad.encode("utf-8") if aad else None
+            return self._aead.decrypt(nonce, ct, extra).decode("utf-8")
         except (InvalidTag, ValueError) as exc:
             raise DecryptionError("ciphertext failed authentication") from exc

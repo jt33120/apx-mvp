@@ -7,6 +7,22 @@ if [ -z "$APX_SECRET_KEY" ]; then
   exit 1
 fi
 
+# Encryption pre-flight (AD-31), BEFORE migrations/bootstrap and independent of the ASGI
+# lifespan gate — so a real boot fails fast even under --lifespan off, and the backfill
+# migration has the key it needs. The lifespan gate does the rigorous key validation; this is
+# the fast fail-closed check on both layers.
+if [ -z "$APX_ENCRYPTION_KEY" ]; then
+  echo "APX_ENCRYPTION_KEY is required (encryption at rest, AD-31 — no insecure default)." >&2
+  exit 1
+fi
+case "$APX_VOLUME_ENCRYPTED" in
+  1|true|yes|TRUE|YES) ;;
+  *)
+    echo "APX_VOLUME_ENCRYPTED must attest the data volume is encrypted (set 1 once the disk is" \
+         "backed by dm-crypt/LUKS or a provider-managed encrypted volume), AD-31." >&2
+    exit 1 ;;
+esac
+
 echo "apx: applying migrations…"
 alembic upgrade head
 

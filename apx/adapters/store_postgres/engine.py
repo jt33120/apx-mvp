@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from urllib.parse import parse_qs, urlsplit
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
@@ -28,10 +29,13 @@ def _with_sslmode(url: str) -> str:
     loopback (the single-machine install, a CI service container) may set
     ``APX_DB_SSLMODE=disable`` with a documented rationale — traffic that never leaves the
     host. Non-PostgreSQL URLs (sqlite in tests) pass through untouched."""
-    if not url.startswith("postgresql") or "sslmode=" in url:
+    if not url.startswith("postgresql"):
         return url
+    query = urlsplit(url).query
+    if "sslmode" in parse_qs(query):
+        return url  # an explicit sslmode (anywhere it's already set) is never overridden
     sslmode = os.environ.get("APX_DB_SSLMODE", "require").strip() or "require"
-    sep = "&" if "?" in url else "?"
+    sep = "&" if query else "?"
     return f"{url}{sep}sslmode={sslmode}"
 
 

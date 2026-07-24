@@ -4,7 +4,7 @@ baseline_commit: c6657b0
 
 # Story 1.7: Encryption at rest and in transit, with a fail-closed start
 
-Status: review
+Status: done
 
 ## Story
 
@@ -93,3 +93,45 @@ Built the AC1 cipher → column type → model wiring → the two ORDER-BY recon
 ### Change Log
 
 - 2026-07-24 — Story 1.7 implemented: application-layer AES-256-GCM at rest on every content-bearing column (the two searchable surfaces exempt, per AD-31), TLS in transit, and a fail-closed start-up gate on both layers. `cryptography` added. Status → review.
+- 2026-07-24 — Code review addressed (2 HIGH + 5 MED + LOWs). Status → done.
+
+## Senior Developer Review (AI)
+
+**Reviewed:** 2026-07-24 · diff `c6657b0..7270741` · **Outcome: Changes Requested → all addressed.** Three adversarial reviewers ran in parallel under distinct lenses (AD-31 faithfulness; correctness/regressions; fail-closed posture & circumventable checks), each verifying hypotheses against the code (bypasses constructed and run, tests executed). Consensus on the core: the cipher is sound (AES-256-GCM, authenticated, random nonce, fails closed), no key/plaintext leaks, the audit chain survives encryption, no encrypted column is used in any SQL predicate, and the `full_text`-as-text-index exemption is a **faithful** reading of AD-31 — the weaknesses were in the guardrails and the deploy artifacts.
+
+### Findings and resolutions
+
+| # | Sev | Finding | Resolution |
+|---|-----|---------|------------|
+| 1 | **HIGH** | `APX_VOLUME_ENCRYPTED=1` baked into the Dockerfile (and defaulted in compose) — a permissive default that defeats AC5; the gate passes on an unencrypted disk with no conscious act, and it is the sole control over the plaintext `full_text`. | **Fixed.** Removed the bake; compose now requires it (`:?`). The attestation is a deliberate per-deployment act, like the key. |
+| 2 | **HIGH** | No backfill: deploying onto a store with existing rows makes historical pieces/failures/labels/audit/MFA unreadable (read fails closed on plaintext). | **Fixed.** `apx/adapters/store_postgres/backfill.py` + migration `0013` re-encrypt existing plaintext rows — idempotent, key-free when there's nothing to do. Tested. |
+| 3 | MED | The column check is bypassable — a sensitive column with an *inferred* type (`mapped_column()` no positional) or a *novel name* escapes the denylist while staying green. | **Fixed.** Inverted to an **allowlist**: every string column must be `EncryptedText` unless explicitly allowlisted (routing/identity/categorical keys + the exempt index); inferred types are caught via the `Mapped[str]` annotation. New fixture + test. |
+| 4 | MED | The gate check is AST-gameable — a warn-and-continue gate with one unrelated `raise` passes. | **Fixed.** Added a **behavioural** leg that *executes* the real `startup_gate` against missing-key / missing-volume envs and asserts it refuses. Test with a monkeypatched permissive gate proves it fires. |
+| 5 | MED | `audit_record.actor` and `recall_review.reviewer` are person display names (PII) left plaintext under a rationale ("query surface") that is factually wrong — confirmed never SQL-filtered. | **Fixed.** Both now `EncryptedText`; added to the seeded-token inspection. Chain still verifies (computed over plaintext, decrypted on read). |
+| 6 | MED | One undecryptable `audit_record.detail` 500s the whole tenant's audit read instead of `verified=False` — a tamper-evidence (FR-24) regression. | **Fixed.** `read_audit` raw-reads actor/detail (via `cast(..., Text)`) and decrypts defensively → a bad row degrades to `verified=False` with a redacted placeholder. Tested. |
+| 7 | MED | No AAD on AES-GCM — a DB-write attacker can relocate a ciphertext across columns/tables and it decrypts (confused deputy). | **Fixed.** Each column binds its identity (`"table.column"`) as AAD; a relocated ciphertext fails closed. Tested at the cipher and store level. **Residual (documented):** column-level AAD does not close *same-column cross-row* relocation (needs row-bound AAD in the store layer) — a write-integrity concern beyond the stolen-disk threat, deferred; RBAC + audit constrain writes. |
+| 8 | LOW | `entrypoint.sh` pre-flights `APX_SECRET_KEY` but not the encryption key; migrations run before the lifespan gate. | **Fixed.** Symmetric pre-flight for `APX_ENCRYPTION_KEY` + `APX_VOLUME_ENCRYPTED` before migrations, so a real boot fails fast regardless of lifespan config. |
+| 9 | LOW | Alembic connected without TLS while the app required it; `sslmode` substring-matched (a password containing `sslmode=` false-positived). | **Fixed.** Alembic routes through `_with_sslmode`; the guard parses the query string. CI `db` job sets the documented same-host `disable`. |
+| 10 | LOW | All-zero 32-byte key accepted. | **Fixed.** `_decode_key` rejects an all-zero key (the classic placeholder). |
+
+### Deliberately deferred (documented, not fixed)
+
+- **Real device verification of the data volume** (vs the operator attestation). The app cannot portably prove block-device encryption from inside a container; the attestation is the honest, portable second layer, and finding #1 removed the permissive default so it is now a conscious act. Real verification (inspect dm-crypt/LUKS, or a provider marker) belongs to the deploy/DR story (1.11). **Accepted risk**, recorded.
+- **`sslmode=verify-full`** (server-authentication, not just encryption) — defaulting it needs a CA bundle that would break the simple case; `require` (encrypt-in-transit) is the MVP baseline, hardened at the deploy layer. Named, not silently chosen.
+- **`search` capped subset tie-breaks on `piece.id`** (provenance is ciphertext) rather than provenance — `total` and the all-hits-match guarantee are unchanged; documented in the code and story.
+- **Random-nonce ceiling** (~2³² values/key) — an INFO note for the key-rotation story (1.8), irrelevant at MVP scale.
+
+### Gate after fixes
+
+`ruff` clean · `python -m apx.checks` 13/13 (incl. the behavioural gate leg) · `pytest` **294 passed, 8 skipped** · fitness green · migration chain `0012 → 0013 (head)`.
+
+### Review Follow-ups (AI)
+
+- [x] [HIGH] Un-bake `APX_VOLUME_ENCRYPTED`; require the attestation per-deployment (Dockerfile, compose)
+- [x] [HIGH] Backfill migration + reusable function for existing plaintext rows (0013, `backfill.py`)
+- [x] [MED] Invert the column check to an allowlist; catch inferred-type columns
+- [x] [MED] Make the gate check behavioural (execute the real gate against bad envs)
+- [x] [MED] Encrypt `audit_record.actor` and `recall_review.reviewer` (PII)
+- [x] [MED] Graceful-degrade `read_audit` on an undecryptable field (verified=False, no crash)
+- [x] [MED] Bind per-column AAD; document the cross-row residual
+- [x] [LOW] Entrypoint encryption pre-flight; Alembic TLS + query-string sslmode parse; reject all-zero key

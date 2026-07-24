@@ -45,3 +45,11 @@ def test_sslmode_joins_an_existing_query_with_ampersand(monkeypatch: pytest.Monk
 def test_sqlite_is_never_given_an_sslmode(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("APX_DB_SSLMODE", "require")
     assert _with_sslmode("sqlite:////tmp/x.db") == "sqlite:////tmp/x.db"
+
+
+def test_sslmode_in_the_password_is_not_a_false_positive(monkeypatch: pytest.MonkeyPatch) -> None:
+    # the guard parses the query string, not the whole URL — a password containing "sslmode="
+    # must not be read as an already-set sslmode and silently skip TLS.
+    monkeypatch.delenv("APX_DB_SSLMODE", raising=False)
+    url = "postgresql+psycopg://u:p-sslmode=x@h:5432/db"
+    assert _with_sslmode(url) == url + "?sslmode=require"

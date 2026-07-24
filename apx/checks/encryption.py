@@ -1,15 +1,18 @@
 """Encryption structural properties (story 1.7; AD-31, AD-33). Two static checks:
 
-- **sensitive_columns_are_encrypted:** every content-bearing model column uses the
-  ``EncryptedText`` type, AND ``piece.full_text`` does **not** — it is the AD-31 named
-  exception (the deterministic text index; you cannot ILIKE ciphertext). So a future edit can
-  neither silently leave a new sensitive column plaintext (a name heuristic catches a reused
-  sensitive name on any table) nor accidentally encrypt the search surface and break FR-13.
-- **startup_gate_is_fail_closed:** the ``startup_gate`` covers BOTH layers — the application
-  key (``load_key_from_env``) and the data volume (``APX_VOLUME_ENCRYPTED``) — and **raises**,
-  so it cannot be silently downgraded to a warning-and-continue.
+- **sensitive_columns_are_encrypted (allowlist model):** EVERY string-typed (``String``/``Text``,
+  including a ``Mapped[str]`` column with an inferred type) model column must be ``EncryptedText``
+  UNLESS its name is on an explicit plaintext allowlist (routing/identity/categorical keys, the
+  searchable text index). So a NEW content-bearing column — any name, even one declared with an
+  inferred type — is encrypted-by-default: leaving it plaintext fails the build unless someone
+  consciously adds it to the allowlist. ``piece.full_text`` is additionally asserted NOT
+  encrypted (the AD-31 named exception; encrypting it would break exhaustive search, FR-13).
+- **startup_gate_is_fail_closed:** a static leg asserts the gate names both layers and raises,
+  and — on the real gate — a BEHAVIOURAL leg actually executes ``startup_gate`` and asserts it
+  refuses a missing-key and a missing-volume env (AST-sniffing alone is gameable by a
+  warn-and-continue gate carrying an unrelated ``raise``).
 
-Both are AST-only (never import the target), and both fail closed on an unparseable file.
+Both fail closed on an unparseable file.
 """
 
 from __future__ import annotations
@@ -26,29 +29,29 @@ _MODELS_FILE = _APX_ROOT / "adapters" / "store_postgres" / "models.py"
 _STARTUP_FILE = _APX_ROOT / "api" / "startup.py"
 
 _ENCRYPTED = "EncryptedText"
-
-# The content-bearing columns that MUST be application-encrypted at rest (the AC1 set).
-_REQUIRED_ENCRYPTED = {
-    ("Piece", "provenance_path"), ("Piece", "custodian"),
-    ("Failure", "filename"), ("Failure", "submitted_path"), ("Failure", "detail"),
-    ("AuditRecord", "detail"),
-    ("LabelRecord", "rationale"),
-    ("User", "mfa_secret"),
-}
-# The AD-31 named exceptions — MUST NOT be application-encrypted (they are searchable surfaces
-# protected by volume encryption; encrypting them would break exhaustive search / the index).
+_STRING_TYPES = {"String", "Text", _ENCRYPTED}
+# The AD-31 named exception — MUST NOT be application-encrypted (a searchable surface protected
+# by volume encryption; encrypting it would break exhaustive search / the index).
 _FORBIDDEN_ENCRYPTED = {("Piece", "full_text")}
-# Forward protection: a column with one of these names, on ANY table, must be encrypted — so a
-# new table cannot reintroduce a known-sensitive column in the clear. `full_text` is not here.
-_SENSITIVE_NAMES = {
-    "provenance_path", "submitted_path", "custodian", "rationale", "filename", "mfa_secret",
+# The ONLY string columns allowed to stay plaintext: routing/identity/categorical keys, the
+# one-way password hash, operator-identity login fields, and the AD-31 exempt text index. Any
+# other string column must be EncryptedText. Keep this list conscious and small — adding to it
+# is the deliberate act of declaring a column non-content.
+_PLAINTEXT_ALLOWLIST = {
+    "id", "tenant", "matter", "scope", "user_id", "piece_id", "chunk_id",
+    "content_hash", "text_key", "text_identity",
+    "extraction_method", "extractor_version", "schema_version", "text_version",
+    "full_text_version", "chunking_config_version", "piece_date_status", "external_ref",
+    "error_class", "resolution_state", "action", "chain", "label", "judge",
+    "email", "password_hash", "display_name",
+    "full_text",  # the AD-31 exempt deterministic text index (also asserted un-encrypted below)
 }
 
 
-def _column_type_name(value: ast.expr) -> str | None:
-    """The type token of a ``mapped_column(TYPE, ...)`` call — the first positional arg's
-    name (``EncryptedText``, ``Text``, ``String`` from ``String(64)``), or ``None`` when the
-    assignment is not a ``mapped_column`` call or has no positional type."""
+def _column_type_name(value: ast.expr | None) -> str | None:
+    """The type token of a ``mapped_column(TYPE, ...)`` call — the first positional arg's name
+    (``EncryptedText`` from ``EncryptedText("ctx")``, ``Text``, ``String`` from ``String(64)``),
+    or ``None`` when there is no positional type (the type is inferred from the annotation)."""
     if not (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
             and value.func.id == "mapped_column" and value.args):
         return None
@@ -56,61 +59,69 @@ def _column_type_name(value: ast.expr) -> str | None:
     if isinstance(arg, ast.Name):
         return arg.id
     if isinstance(arg, ast.Call) and isinstance(arg.func, ast.Name):
-        return arg.func.id  # e.g. String(64)
+        return arg.func.id  # String(64) or EncryptedText("ctx")
     return None
 
 
-def _mapped_columns(trees: Iterable[tuple[Path, ast.Module]]) -> dict[tuple[str, str], str | None]:
-    """Map ``(class_name, attr_name) -> type token`` for every ``mapped_column`` assignment."""
-    columns: dict[tuple[str, str], str | None] = {}
-    for _path, tree in trees:
-        for cls in ast.walk(tree):
-            if not isinstance(cls, ast.ClassDef):
-                continue
-            for stmt in cls.body:
-                if isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name):
-                    tname = _column_type_name(stmt.value) if stmt.value is not None else None
-                    if tname is not None:
-                        columns[(cls.name, stmt.target.id)] = tname
-    return columns
+def _annotation_is_str(annotation: ast.expr | None) -> bool:
+    """True if the column annotation is ``Mapped[str]`` or ``Mapped[str | None]`` — i.e. a
+    string column even when ``mapped_column`` has no positional type (SQLAlchemy infers String)."""
+    if not (isinstance(annotation, ast.Subscript) and isinstance(annotation.value, ast.Name)
+            and annotation.value.id == "Mapped"):
+        return False
+    inner = annotation.slice
+    names = {n.id for n in ast.walk(inner) if isinstance(n, ast.Name)}
+    return "str" in names
+
+
+def _is_mapped_column(value: ast.expr | None) -> bool:
+    return (isinstance(value, ast.Call) and isinstance(value.func, ast.Name)
+            and value.func.id == "mapped_column")
 
 
 def sensitive_columns_are_encrypted(roots: Iterable[Path] | None = None) -> CheckResult:
-    """Content-bearing columns are EncryptedText; the named searchable surfaces are not."""
+    """Every string column is EncryptedText unless allowlisted; the text index is not encrypted."""
     name, ad = "content-bearing columns are application-encrypted", "AD-31"
     roots = list(roots) if roots is not None else [_MODELS_FILE]
     trees, unparseable = _load_trees(roots)
     if unparseable:
         return _fail_closed(name, ad, unparseable)
-    columns = _mapped_columns(trees)
 
-    for key in sorted(_REQUIRED_ENCRYPTED):
-        if key not in columns:
-            continue  # the class/column is not in this (possibly fixture) tree — nothing to assert
-        if columns[key] != _ENCRYPTED:
-            return CheckResult(name, ad, False,
-                               f"{key[0]}.{key[1]} is {columns[key]}, not {_ENCRYPTED} — a "
-                               "content-bearing column must be application-encrypted (AD-31)")
-    for key in sorted(_FORBIDDEN_ENCRYPTED):
-        if columns.get(key) == _ENCRYPTED:
-            return CheckResult(name, ad, False,
-                               f"{key[0]}.{key[1]} is {_ENCRYPTED} — it is an AD-31 named "
-                               "exception (the searchable text index) and must stay plaintext; "
-                               "encrypting it breaks exhaustive search (FR-13)")
-    for (cls, attr), tname in sorted(columns.items()):
-        if attr in _SENSITIVE_NAMES and tname != _ENCRYPTED:
-            return CheckResult(name, ad, False,
-                               f"{cls}.{attr} is {tname}, not {_ENCRYPTED} — a column with a "
-                               "known-sensitive name must be application-encrypted (AD-31)")
+    for _path, tree in trees:
+        for cls in ast.walk(tree):
+            if not isinstance(cls, ast.ClassDef):
+                continue
+            for stmt in cls.body:
+                if not (isinstance(stmt, ast.AnnAssign) and isinstance(stmt.target, ast.Name)
+                        and _is_mapped_column(stmt.value)):
+                    continue
+                attr = stmt.target.id
+                type_name = _column_type_name(stmt.value)
+                if (cls.name, attr) in _FORBIDDEN_ENCRYPTED and type_name == _ENCRYPTED:
+                    return CheckResult(name, ad, False,
+                                       f"{cls.name}.{attr} is {_ENCRYPTED} — it is an AD-31 named "
+                                       "exception (the searchable text index) and must stay "
+                                       "plaintext; encrypting it breaks exhaustive search (FR-13)")
+                string_capable = type_name in _STRING_TYPES or (
+                    type_name is None and _annotation_is_str(stmt.annotation))
+                if string_capable and type_name != _ENCRYPTED and attr not in _PLAINTEXT_ALLOWLIST:
+                    shown = type_name or "an inferred String"
+                    return CheckResult(name, ad, False,
+                                       f"{cls.name}.{attr} is {shown}, not {_ENCRYPTED}, and is "
+                                       "not on the plaintext allowlist — a content-bearing column "
+                                       "must be application-encrypted at rest (AD-31)")
     return CheckResult(name, ad, True,
-                       "content-bearing columns are EncryptedText; the text index is not")
+                       "every string column is EncryptedText or an allowlisted key; the text "
+                       "index is not encrypted")
 
 
-def _find_function(trees: Iterable[tuple[Path, ast.Module]], fn: str) -> ast.FunctionDef | None:
+def _find_gate(
+    trees: Iterable[tuple[Path, ast.Module]],
+) -> tuple[ast.FunctionDef, ast.Module] | None:
     for _path, tree in trees:
         for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == fn:
-                return node
+            if isinstance(node, ast.FunctionDef) and node.name == "startup_gate":
+                return node, tree
     return None
 
 
@@ -126,23 +137,46 @@ def _names_and_strings(tree: ast.Module) -> set[str]:
     return out
 
 
+def _gate_behaves_fail_closed() -> str | None:
+    """Execute the REAL startup_gate: it must accept a fully-provisioned env and REFUSE a
+    missing-key and a missing-volume env. Returns an error string on the first failure, else
+    None. This is the ungameable leg — a warn-and-continue gate fails here even if it carries an
+    unrelated ``raise`` that satisfies the AST leg."""
+    from apx.api.startup import StartupRefused, startup_gate
+    from apx.core.domain.crypto import generate_key
+
+    good = {"APX_ENCRYPTION_KEY": generate_key(), "APX_VOLUME_ENCRYPTED": "1"}
+    try:
+        startup_gate(good)
+    except Exception as exc:  # noqa: BLE001 — any refusal of a good env is a failure
+        return f"startup_gate refused a fully-provisioned env: {exc!r}"
+    for label, bad in (
+        ("a missing key", {"APX_VOLUME_ENCRYPTED": "1"}),
+        ("a missing volume attestation", {"APX_ENCRYPTION_KEY": good["APX_ENCRYPTION_KEY"]}),
+        ("an empty env", {}),
+    ):
+        try:
+            startup_gate(bad)
+            return f"startup_gate did NOT refuse {label} — not fail-closed (AD-31)"
+        except StartupRefused:
+            continue
+    return None
+
+
 def startup_gate_is_fail_closed(roots: Iterable[Path] | None = None) -> CheckResult:
-    """``startup_gate`` names both encryption layers and raises (never a bare warning)."""
+    """``startup_gate`` names both layers and raises (static), and — on the real gate — actually
+    refuses a missing-key and a missing-volume env (behavioural)."""
     name, ad = "the start-up gate fails closed on both layers", "AD-31"
+    is_real = roots is None
     roots = list(roots) if roots is not None else [_STARTUP_FILE]
     trees, unparseable = _load_trees(roots)
     if unparseable:
         return _fail_closed(name, ad, unparseable)
 
-    gate = None
-    gate_tree = None
-    for _path, tree in trees:
-        for node in ast.walk(tree):
-            if isinstance(node, ast.FunctionDef) and node.name == "startup_gate":
-                gate, gate_tree = node, tree
-    if gate is None or gate_tree is None:
+    found = _find_gate(trees)
+    if found is None:
         return CheckResult(name, ad, False, "no startup_gate function found (AD-31 gate absent)")
-
+    gate, gate_tree = found
     tokens = _names_and_strings(gate_tree)
     if "load_key_from_env" not in tokens:
         return CheckResult(name, ad, False,
@@ -156,8 +190,13 @@ def startup_gate_is_fail_closed(roots: Iterable[Path] | None = None) -> CheckRes
         return CheckResult(name, ad, False,
                            "startup_gate never raises — a warning-and-continue is not a "
                            "fail-closed gate (AD-31: no permissive default)")
+    if is_real:  # the ungameable leg: run the real gate against bad envs
+        problem = _gate_behaves_fail_closed()
+        if problem is not None:
+            return CheckResult(name, ad, False, problem)
     return CheckResult(name, ad, True,
-                       "startup_gate checks the key and the volume layers, and raises")
+                       "startup_gate checks the key and volume layers, raises, and refuses a "
+                       "missing-layer env")
 
 
 def run() -> list[CheckResult]:

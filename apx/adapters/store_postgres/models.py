@@ -53,8 +53,9 @@ class Piece(Base):
     text_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     # content-bearing → application-encrypted at rest (AD-31). A path leaks custodian
     # folder structure and client names; custodianship is PII. Neither is a query key.
-    provenance_path: Mapped[str] = mapped_column(EncryptedText, nullable=False)  # attribute
-    custodian: Mapped[str] = mapped_column(EncryptedText, nullable=False)
+    provenance_path: Mapped[str] = mapped_column(
+        EncryptedText("piece.provenance_path"), nullable=False)  # attribute, not identity
+    custodian: Mapped[str] = mapped_column(EncryptedText("piece.custodian"), nullable=False)
     extraction_method: Mapped[str] = mapped_column(String, nullable=False)
     extractor_version: Mapped[str] = mapped_column(String, nullable=False)
     schema_version: Mapped[str] = mapped_column(String, nullable=False)
@@ -127,11 +128,12 @@ class Failure(Base):
     matter: Mapped[str] = mapped_column(String, nullable=False)
     # content-bearing → application-encrypted (AD-31): filenames/paths/details name the
     # documents that did not enter the corpus. error_class/resolution_state are categorical.
-    filename: Mapped[str] = mapped_column(EncryptedText, nullable=False)
-    submitted_path: Mapped[str] = mapped_column(EncryptedText, nullable=False)
+    filename: Mapped[str] = mapped_column(EncryptedText("failure.filename"), nullable=False)
+    submitted_path: Mapped[str] = mapped_column(
+        EncryptedText("failure.submitted_path"), nullable=False)
     error_class: Mapped[str] = mapped_column(String, nullable=False)
     resolution_state: Mapped[str] = mapped_column(String, nullable=False)  # open|resolved
-    detail: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
+    detail: Mapped[str | None] = mapped_column(EncryptedText("failure.detail"), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
@@ -168,14 +170,16 @@ class AuditRecord(Base):
     tenant: Mapped[str] = mapped_column(String, nullable=False)
     seq: Mapped[int] = mapped_column(nullable=False)          # monotonic per tenant
     matter: Mapped[str | None] = mapped_column(String, nullable=True)
-    actor: Mapped[str] = mapped_column(String, nullable=False)
+    # actor is a person's display name (PII) and is never a SQL predicate → encrypted (AD-31
+    # puts "the audit record" in the encrypted set). action stays plaintext: a categorical
+    # verb ("ingest"/"judge"/"login_failed") that may be filtered/counted, not personal data.
+    actor: Mapped[str] = mapped_column(EncryptedText("audit_record.actor"), nullable=False)
     action: Mapped[str] = mapped_column(String, nullable=False)
-    # the free-text field carries emails, IPs, counts, subjects → application-encrypted
-    # (AD-31). The chain is computed over the PLAINTEXT detail before the column encrypts it,
-    # and read_audit decrypts before recomputing — so tamper-evidence survives (AC3).
-    # actor/action/seq/chain/timestamp stay plaintext: categorical metadata and the query
-    # surface, not tenant document content.
-    detail: Mapped[str] = mapped_column(EncryptedText, nullable=False)
+    # the free-text field carries emails, IPs, counts, subjects → application-encrypted (AD-31).
+    # Both actor and detail: the chain is computed over the PLAINTEXT values before the columns
+    # encrypt them, and read_audit decrypts before recomputing — so tamper-evidence survives
+    # (AC3). seq/chain/timestamp stay plaintext: structural metadata and the query surface.
+    detail: Mapped[str] = mapped_column(EncryptedText("audit_record.detail"), nullable=False)
     chain: Mapped[str] = mapped_column(String(64), nullable=False)  # sha256(prev.chain + content)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -196,7 +200,8 @@ class LabelRecord(Base):
     matter: Mapped[str] = mapped_column(String, nullable=False, index=True)
     label: Mapped[str] = mapped_column(String, nullable=False)  # relevant | uncertain | discard
     # the judge's rationale quotes the evidence → application-encrypted (AD-31)
-    rationale: Mapped[str] = mapped_column(EncryptedText, nullable=False)  # why — never empty
+    rationale: Mapped[str] = mapped_column(
+        EncryptedText("piece_label.rationale"), nullable=False)  # why — never empty
     judge: Mapped[str] = mapped_column(String, nullable=False)  # which judge decided (transparency)
     judged_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
@@ -221,7 +226,8 @@ class User(Base):
     # A literal secret at rest → application-encrypted (AD-31); fetched by user id, never
     # queried by value, so encryption is transparent. (email/display_name stay plaintext:
     # email is the login lookup key; both are operator identity, not tenant document content.)
-    mfa_secret: Mapped[str | None] = mapped_column(EncryptedText, nullable=True)
+    mfa_secret: Mapped[str | None] = mapped_column(
+        EncryptedText("user_account.mfa_secret"), nullable=True)
 
 
 class UserScope(Base):
@@ -283,5 +289,6 @@ class RecallReview(Base):
     confidence: Mapped[float] = mapped_column(nullable=False)
     count_upper: Mapped[int] = mapped_column(nullable=False)      # <= this many wrongly discarded
     prevalence_upper: Mapped[float] = mapped_column(nullable=False)
-    reviewer: Mapped[str] = mapped_column(String, nullable=False)
+    # the reviewer's display name (PII), never a SQL predicate → application-encrypted (AD-31)
+    reviewer: Mapped[str] = mapped_column(EncryptedText("recall_review.reviewer"), nullable=False)
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

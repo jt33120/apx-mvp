@@ -14,28 +14,32 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy import create_engine, text
+from sqlalchemy.orm import Session, sessionmaker
 
-from apx.adapters.store_postgres.models import Base
+from apx.adapters.store_postgres.models import Base, Piece
 from apx.adapters.store_postgres.store import SqlStore
 from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
+from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.failures import ErrorClass
 from apx.core.domain.triage import Label, PieceLabel, TriageOutcome
 
 TOKEN = "SEEDED-TOKEN-9F3A2C1D"  # distinctive; a raw store that holds it in cleartext leaks
 TENANT, MATTER, SCOPE = "t", "m", "wall"
 
-# every content-bearing column that MUST be ciphertext at rest (the AC1 set)
+# every content-bearing column that MUST be ciphertext at rest (the AC1 set, incl. the PII
+# actor/reviewer columns the review added)
 ENCRYPTED_COLUMNS = [
     ("piece", "provenance_path"),
     ("piece", "custodian"),
     ("failure", "filename"),
     ("failure", "submitted_path"),
     ("failure", "detail"),
+    ("audit_record", "actor"),
     ("audit_record", "detail"),
     ("piece_label", "rationale"),
     ("user_account", "mfa_secret"),
+    ("recall_review", "reviewer"),
 ]
 
 
@@ -59,12 +63,14 @@ def seeded(tmp_path):  # noqa: ANN001, ANN201
         matter=MATTER, tenant=TENANT, error_class=ErrorClass.EXTRACTION_ERROR,
         detail=f"could not open {TOKEN}",
     )
-    store.save(IngestionResult(pieces=[piece], failures=[failure]), SCOPE, actor="avocat")
+    store.save(IngestionResult(pieces=[piece], failures=[failure]), SCOPE, actor=f"Me {TOKEN}")
     store.save_labels(
         MATTER, TENANT, {SCOPE},
         TriageOutcome(labels=(PieceLabel("piece-1", Label.DISCARD, f"écarté car {TOKEN}"),)),
         "criteria", "avocat",
     )
+    # a recall review seeds recall_review.reviewer (PII) with the token
+    store.record_recall_review(MATTER, TENANT, {SCOPE}, {"piece-1": False}, f"reviewer {TOKEN}")
     uid = store.create_user(TENANT, "a@a.test", "password1", "Avocat A", set())
     store.set_mfa_secret(uid, f"TOTPSEED{TOKEN}")
     store.record_auth_event(TENANT, "system:auth", "login_failed", f"email={TOKEN}@x ip=1.2.3.4")
@@ -103,8 +109,32 @@ def test_the_orm_decrypts_transparently_and_search_still_works(seeded) -> None: 
 
 
 def test_the_audit_chain_verifies_after_the_encrypted_detail_round_trips(seeded) -> None:  # noqa: ANN001
-    # the chain is computed over the PLAINTEXT detail, and read_audit decrypts before it
-    # recomputes — so encrypting the detail column does not break tamper-evidence.
+    # the chain is computed over the PLAINTEXT detail/actor, and read_audit decrypts before it
+    # recomputes — so encrypting those columns does not break tamper-evidence.
     _engine, store = seeded
     trail = store.read_audit(MATTER, TENANT, {SCOPE})
     assert trail.verified
+
+
+def test_a_relocated_ciphertext_fails_to_decrypt(seeded) -> None:  # noqa: ANN001
+    # AAD binding: a ciphertext is bound to its column. Copy piece.provenance_path's ciphertext
+    # into piece.custodian (a DB-write attacker relocating a value across columns) — the AAD no
+    # longer matches, so a read fails closed instead of silently decrypting one column's value as
+    # another's. Without AAD both columns share a key and the relocation would succeed.
+    engine, store = seeded
+    with engine.begin() as conn:
+        prov_ct = conn.exec_driver_sql("SELECT provenance_path FROM piece").scalar()
+        conn.execute(text("UPDATE piece SET custodian = :v"), {"v": prov_ct})
+    with pytest.raises(DecryptionError), Session(engine) as session:
+        _ = session.get(Piece, "piece-1").custodian  # decrypting the relocated ciphertext fails
+
+
+def test_a_tampered_audit_field_degrades_to_unverified_not_a_crash(seeded) -> None:  # noqa: ANN001
+    # Pre-encryption a tampered audit row → verified=False. That must survive encryption: a
+    # non-ciphertext (tampered / legacy) detail must NOT 500 the whole tenant read (FR-24).
+    engine, store = seeded
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE audit_record SET detail = 'tampered plaintext' WHERE seq = 1"))
+    trail = store.read_audit(MATTER, TENANT, {SCOPE})  # does not raise
+    assert trail.verified is False
+    assert any("illisible" in e.detail for e in trail.entries)  # the bad row is shown, redacted

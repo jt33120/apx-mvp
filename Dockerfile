@@ -41,11 +41,14 @@ ENV APX_TRUST_FORWARDED_FOR=1
 # Encryption in transit to the store (AD-31): require TLS on the DB connection. A hosted
 # managed Postgres offers it; a same-machine loopback may override APX_DB_SSLMODE=disable.
 ENV APX_DB_SSLMODE=require
-# Encryption at rest, layer 2 (AD-31): attest the data volume is encrypted (must be backed by
-# a provider-managed encrypted volume or dm-crypt/LUKS). Layer 1 — the application key
-# APX_ENCRYPTION_KEY — is REQUIRED at runtime with no default; the start-up gate refuses to
-# boot without both. Deliberately NOT baked in here: the key never lives in the image.
-ENV APX_VOLUME_ENCRYPTED=1
+# Encryption at rest (AD-31): BOTH layers are supplied per-deployment, never baked here.
+#  - layer 1, APX_ENCRYPTION_KEY (the application key), and
+#  - layer 2, APX_VOLUME_ENCRYPTED (the operator's attestation that the data volume is
+#    encrypted, backed by a provider-managed encrypted volume or dm-crypt/LUKS).
+# Baking APX_VOLUME_ENCRYPTED=1 into the image would be a permissive default — the gate would
+# pass on an unencrypted disk with no conscious act. The start-up gate refuses to boot unless
+# the deployment sets both. (Same reasoning as never baking the key: the attestation must be
+# a deliberate per-deployment decision.)
 
 COPY alembic.ini ./
 COPY docker/entrypoint.sh /entrypoint.sh

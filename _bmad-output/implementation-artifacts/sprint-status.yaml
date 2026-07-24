@@ -39,7 +39,7 @@ development_status:
   1-4-tenant-isolation-enforced-at-the-boundary: done
   1-5-authentication-and-sessions-the-application-owns: done
   1-6-grant-time-authorisation-and-scope-administration: done
-  1-7-encryption-at-rest-and-in-transit-with-a-fail-closed-start: review
+  1-7-encryption-at-rest-and-in-transit-with-a-fail-closed-start: done
   1-8-secret-and-key-management: backlog
   1-9-configuration-as-data-and-the-provisioning-surface: backlog
   1-10-the-content-free-projection-primitive: backlog
