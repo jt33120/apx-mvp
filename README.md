@@ -213,22 +213,27 @@ config** — a known credential pattern (a GitHub PAT, an `sk-`/`AKIA` token, a 
 high-entropy token — the one mistake that ends a client relationship.
 
 The encryption key is **rotatable in place**, no redeploy and no re-index: the cipher encrypts
-with a **primary** key and decrypts with primary-or-previous, so a rotation is —
+with a **primary** key and decrypts with primary-or-previous. A rotation is a config change plus
+a restart (the live cipher is process-cached), never a code deploy:
 
 ```
-# 1. set the new key as primary, keep the old as a decrypt-only fallback
-export APX_ENCRYPTION_KEY="$(openssl rand -base64 32)"   # the NEW key
-export APX_ENCRYPTION_KEYS_OLD="$OLD_KEY"                # the previous key
-# 2. re-encrypt every stored value under the new key (audited per tenant)
+# 1. RESTART the app with the new key primary and the old key as a decrypt-only fallback
+export APX_ENCRYPTION_KEY="$(openssl rand -base64 32)"   # the NEW key (primary)
+export APX_ENCRYPTION_KEYS_OLD="$OLD_KEY"                # the previous key (decrypt-only)
+#    …restart the app so it reads both — now it decrypts old values and writes new ones…
+# 2. re-encrypt every stored value under the new key (atomic; audited per tenant)
 python -m apx.manage rekey
-# 3. drop APX_ENCRYPTION_KEYS_OLD once the re-key completes
+# 3. RESTART again with APX_ENCRYPTION_KEYS_OLD removed, once the re-key completes
 ```
 
-The re-key touches only the application-encrypted columns — never the searchable surfaces (the
-vector column and text index are not application-encrypted), which is why a rotation needs no
-re-index. Rotation is recorded on each *tenant*'s audit chain, naming a one-way key fingerprint,
-never the key. *(The transient user-supplied credential channel — a document password — is
-AD-47's second rule, owned by the failure-register work in epic 2.)*
+The restart in step 1 is required — a running app caches its cipher, so it must be restarted to
+pick up the new key set *before* the re-key rewrites values (otherwise the live app would fail to
+read the newly re-encrypted rows). The re-key touches only the application-encrypted columns —
+never the searchable surfaces (the vector column and text index are not application-encrypted),
+which is why a rotation needs no re-index. It runs in one transaction, and records the rotation on
+each data-bearing *tenant*'s audit chain, naming a one-way key fingerprint, never the key.
+*(The transient user-supplied credential channel — a document password — is AD-47's second rule,
+owned by the failure-register work in epic 2.)*
 
 ## What does NOT belong in this repo yet
 

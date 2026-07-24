@@ -1,0 +1,5 @@
+# Deliberately violating fixture (story 1.8, AD-47): a real password embedded in a DSN.
+services:
+  app:
+    environment:
+      DATABASE_URL: postgresql+psycopg://apx:SuperSecretDbPassw0rd@db:5432/apx

@@ -4,7 +4,7 @@ baseline_commit: 1ce2d80
 
 # Story 1.8: Secret and key management
 
-Status: review
+Status: done
 
 ## Story
 
@@ -83,3 +83,49 @@ so that the one mistake that ends a client relationship — a secret in the wron
 ### Change Log
 
 - 2026-07-24 — Story 1.8 implemented: multi-key cipher + in-place re-key (rotatable without redeploy/re-index, audited), log redaction, and a no-secret-in-source structural guard. Status → review.
+- 2026-07-24 — Code review addressed (3 HIGH + 6 MED + LOWs). Status → done.
+
+## Senior Developer Review (AI)
+
+**Reviewed:** 2026-07-24 · diff `1ce2d80..7ea725d` · **Outcome: Changes Requested → all addressed.** Three adversarial reviewers ran in parallel (AD-47 faithfulness & the source check; key-rotation data-safety; leakage & circumventable checks), each verifying by running code. Consensus: the **rotation engine is sound** (atomic rollback, fails-loud on an unknown key, idempotent, AAD-column-exact, chain-preserving, one-way fingerprint — all verified) — but the story's **two headline guarantees shipped non-functional**: log redaction was inert under uvicorn, and the no-secret-in-source guard was evadable, both green only because the tests exercised the happy path.
+
+### Findings and resolutions
+
+| # | Sev | Finding | Resolution |
+|---|-----|---------|------------|
+| 1 | **HIGH** | **Log redaction inert in the real app** — the filter landed on zero handlers (root has none under uvicorn) and never saw `propagate=False` loggers (uvicorn/sqlalchemy); a psycopg failure logs the DSN. The test hand-attached the filter, never calling the installer. | **Fixed.** Rewrote as a **global `LogRecord` factory** (scrubs every record's message across all loggers + late handlers + `propagate=False`), plus a redacting **formatter** on existing handlers for tracebacks. Tests now drive `install_secret_redaction()` and assert a child AND a `propagate=False` logger come out masked. |
+| 2 | **HIGH** | **`no_secret_in_source` evadable** — 32-char **hex keys** (entropy 3.9 < 4.0, the app's own key format), 24–27-char keys, **unquoted config values**, a per-line `_ENV_REF` bypass (an "example" comment excused a real key), split literals; missed `deploy/docker-compose.yml`, `.json`, `.pem`. | **Fixed.** Per-**chunk** env-ref/URL checks; a **pure-hex length leg**; token floor 24; an **unquoted-config-value** leg; a **DSN-password** leg; coverage broadened to `apx/`+`docker/`+`deploy/`+`.github/`+root config, `tests/` named-only, excluding the `.claude/`/`_bmad` tooling. Five evasion fixtures added; real tree still clean. |
+| 3 | **HIGH** | **`decrypt` regression** — 1.8's multi-key loop caught only `InvalidTag`; a truncated ciphertext raised a bare `ValueError` that escaped 1.7's `read_audit` graceful-degrade → a truncating tamper 500s the whole tenant trail (tamper-evidence bypass, FR-24). | **Fixed.** The loop catches `(InvalidTag, ValueError)` → `DecryptionError`. Truncation tests at the cipher and the `read_audit` level. |
+| 4 | MED | Re-key and its per-tenant audit were two separate transactions — a crash leaves data rotated, audit partial. | **Fixed.** `store.rekey_and_record` does the re-key AND every tenant's audit in **one transaction**. |
+| 5 | MED | "No redeploy" hid a mandatory app restart (`cipher()` is process-cached); the runbook was misleading. | **Fixed.** README runbook corrected to **restart-first** ordering, with the reason; "config change + restart, not a redeploy" stated. |
+| 6 | MED | `tenants()` derived from `user_account`, so a data-only tenant (pieces, no user) was re-keyed but not audited. | **Fixed.** `_tenants` unions across the data-bearing tables; a data-only tenant is now audited (tested). |
+| 7 | MED | Redactor secret-set (missed embedder/bootstrap secrets) and the no-secret-column name list (`token`/`credential`/…) both too narrow. | **Fixed.** Redaction gathers secrets **by policy** (any secret-shaped env name, long enough); the column list broadened with an exact-name allowlist (`mfa_secret`/`password_hash`). |
+| 8 | MED | **Honest catch:** Task 6/AC4 claimed a seeded-secret test that the diff never added (it leaned on 1.7's incidental TOTP token). | **Fixed.** Added an explicit `test_a_seeded_secret_value_is_absent_from_every_raw_store`. |
+| 9 | LOW | A poison row aborts the whole (atomic) re-key with no `(table, pk)`. | **Fixed.** `rekey_all` re-raises naming `table.col pk=…`. |
+| 10 | LOW | Redaction not installed for the manage CLI. | **Fixed.** `manage.main()` installs it. |
+
+### Deliberately deferred (documented)
+
+- **Split-literal evasion** (`"a" "b"` concatenation) and a **bare unquoted hex key in config** — narrow, deliberate-evasion edges; the check targets accidental commits (single literals) and the base64/named/DSN/quoted-hex cases are closed. Named-pattern scanning of `tests/` catches a prefixed key in a test.
+- **`rekey_all` at 100k scale** — loads per-table into memory in one transaction; fine for a rare rotation, chunked iteration is a future refinement.
+- **Transient user-supplied credential channel** (AD-47 rule 2) → epic 2; the **content-free projection** (FR-31) → 1.10.
+
+### Verified sound (unchanged)
+
+The multi-key cipher (encrypt=primary, decrypt=trial), atomic rollback on a poison row, fails-loud on a forgotten old key, idempotent re-run, AAD contexts matching the models exactly, audit-chain integrity after rotation, and the one-way fingerprint — all confirmed by the reviewers running code.
+
+### Gate after fixes
+
+`ruff` clean · `python -m apx.checks` **15/15** · `pytest` **325 passed, 8 skipped** · fitness green.
+
+### Review Follow-ups (AI)
+
+- [x] [HIGH] Real log redaction (global record factory + formatter; test the installer, `propagate=False`)
+- [x] [HIGH] Harden `no_secret_in_source` (per-chunk, hex leg, unquoted config, DSN password, broadened coverage)
+- [x] [HIGH] Fix `decrypt` regression (catch ValueError → DecryptionError) + truncation tests
+- [x] [MED] Atomic re-key + audit in one transaction
+- [x] [MED] Restart-first rotation runbook
+- [x] [MED] Audit data-only tenants (union across data tables)
+- [x] [MED] Redact-by-policy secret set; broaden the no-secret-column list
+- [x] [MED] Add the AC4 seeded-secret assertion
+- [x] [LOW] Name the poison row on a re-key failure; install redaction in the CLI

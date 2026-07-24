@@ -159,6 +159,10 @@ class Cipher:
         for aead in self._aeads:
             try:
                 return aead.decrypt(nonce, ct, extra).decode("utf-8")
-            except InvalidTag:
-                continue  # try the next (previous) key during a rotation
+            except (InvalidTag, ValueError):
+                # InvalidTag: wrong key / tamper — try the next (previous) key during a rotation.
+                # ValueError: a truncated blob (a too-short nonce) — a corrupt/tampered value; it
+                # will not match any key, so fail closed below rather than escaping as a bare
+                # ValueError (which would crash read_audit's graceful-degrade path, FR-24).
+                continue
         raise DecryptionError("ciphertext failed authentication (no configured key matched)")

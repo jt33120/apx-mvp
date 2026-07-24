@@ -731,29 +731,43 @@ class SqlStore:
                     raise
                 continue
 
-    def tenants(self) -> list[str]:
-        """Every tenant that exists (has at least one user) — the authoritative tenant list, for
-        maintenance acts that must touch each firm (e.g. record a key rotation, AD-47/AD-48)."""
-        with self._sf() as session:
-            rows = session.execute(select(User.tenant).distinct()).scalars().all()
-        return sorted(rows)
+    def _tenants(self, session: Session) -> list[str]:
+        """Every tenant that has DATA — the union across the tenant-bearing tables, not just
+        `user_account`. A tenant can hold ingested pieces before any user is enrolled (or after
+        all are removed), and a maintenance act (a key rotation) must account for its data too."""
+        found: set[str] = set()
+        for col in (User.tenant, MatterScope.tenant, Piece.tenant, Failure.tenant,
+                    AuditRecord.tenant, LabelRecord.tenant, RecallReview.tenant):
+            found.update(session.execute(select(col).distinct()).scalars().all())
+        return sorted(found)
 
-    def record_key_rotation(self, tenant: str, actor: str, fingerprint: str) -> None:
-        """Record a key rotation on the tenant's audit chain (AD-47: rotation is recorded, never
-        the key). `fingerprint` is a one-way hash naming WHICH key is now primary — the record
-        answers "which key, when, on whose authority" without ever holding the key value."""
+    def tenants(self) -> list[str]:
+        """Every data-bearing tenant (see :meth:`_tenants`)."""
+        with self._sf() as session:
+            return self._tenants(session)
+
+    def rekey_and_record(self, fingerprint: str, actor: str = "system:maintenance") -> int:
+        """Rotate the key in place (AD-47): re-encrypt every application-encrypted value under
+        the PRIMARY key AND record the rotation on every data-bearing tenant's chain — ALL in one
+        transaction, so a crash cannot leave data rotated but the audit partial. `fingerprint`
+        names WHICH key (a one-way hash), never the key. Returns the number of values rewritten."""
+        from apx.adapters.store_postgres.backfill import rekey_all
+
         now = datetime.now(UTC)
         for attempt in range(4):
             try:
                 with self._sf() as session, session.begin():
-                    self._append_audit(
-                        session, tenant, None, actor, "key_rotated", f"key={fingerprint}", now)
+                    count = rekey_all(session.connection())
+                    for tenant in self._tenants(session):
+                        self._append_audit(
+                            session, tenant, None, actor, "key_rotated", f"key={fingerprint}", now)
                     session.flush()  # surface a (tenant, seq) collision inside the try
-                return
+                return count
             except IntegrityError:
                 if attempt == 3:
                     raise
                 continue
+        raise RuntimeError("unreachable")  # the loop returns or raises
 
     # ── MFA: configuration-as-data per tenant (AD-15/FR-48, [ASSUMPTION] carried) ──
 

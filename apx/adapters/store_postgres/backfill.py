@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from sqlalchemy import Connection, text
 
-from apx.core.domain.crypto import Cipher, is_ciphertext
+from apx.core.domain.crypto import Cipher, DecryptionError, is_ciphertext
 
 # (table, primary-key column, encrypted column, AAD context) — must match the EncryptedText
 # contexts declared on the models (the 1.7 encrypted set).
@@ -74,7 +74,12 @@ def rekey_all(conn: Connection, cipher: Cipher | None = None) -> int:
             text(f"SELECT {pk} AS k, {col} AS v FROM {table} WHERE {col} IS NOT NULL")  # noqa: S608
         ).all()
         for key, value in [(r.k, r.v) for r in rows]:
-            plain = cipher.decrypt(value, aad=context) if is_ciphertext(value) else value
+            try:
+                plain = cipher.decrypt(value, aad=context) if is_ciphertext(value) else value
+            except DecryptionError as exc:
+                # name the poison row so an operator can find it, instead of an opaque
+                # "no key matched" that blocks the whole (atomic) rotation.
+                raise DecryptionError(f"cannot decrypt {table}.{col} pk={key!r}: {exc}") from exc
             conn.execute(
                 text(f"UPDATE {table} SET {col} = :v WHERE {pk} = :k"),  # noqa: S608
                 {"v": cipher.encrypt(plain, aad=context), "k": key},

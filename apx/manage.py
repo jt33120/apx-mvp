@@ -49,19 +49,16 @@ def ensure_admin(store: SqlStore) -> str:
 
 def rekey(store: SqlStore) -> str:
     """Rotate the encryption key in place (story 1.8, AD-47): re-encrypt every application-
-    encrypted value under the current PRIMARY key, then record the rotation on each tenant's
-    audit chain. The runbook: set the new key as APX_ENCRYPTION_KEY, move the old to
-    APX_ENCRYPTION_KEYS_OLD, run this, then drop the old key. No redeploy, no re-index (the
-    searchable surfaces are never application-encrypted)."""
-    from apx.adapters.store_postgres.backfill import rekey_all
+    encrypted value under the current PRIMARY key and record the rotation on each data-bearing
+    tenant's audit chain — atomically. Runbook (README): (1) RESTART the app with the new key as
+    APX_ENCRYPTION_KEY and the old as APX_ENCRYPTION_KEYS_OLD, (2) run this, (3) restart dropping
+    the old key. The restart is required because the live cipher is process-cached; it is a config
+    change, not a redeploy, and needs no re-index (the searchable surfaces are never encrypted)."""
     from apx.core.domain.crypto import key_fingerprint, load_key_from_env
 
     fingerprint = key_fingerprint(load_key_from_env())
-    with store._sf() as session, session.begin():
-        count = rekey_all(session.connection())
+    count = store.rekey_and_record(fingerprint)
     firms = store.tenants()
-    for tenant in firms:
-        store.record_key_rotation(tenant, "system:maintenance", fingerprint)
     return (f"rekey: {count} value(s) re-encrypted under key {fingerprint}; "
             f"rotation recorded for {len(firms)} tenant(s)")
 
@@ -81,6 +78,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> None:
+    from apx.api.logging import install_secret_redaction
+
+    install_secret_redaction()  # scrub secrets from any log this CLI emits (AD-47), like the app
     args = build_parser().parse_args(argv)
     if args.cmd == "create-user":
         password = os.environ.get("APX_NEW_PASSWORD") or getpass.getpass("Mot de passe : ")

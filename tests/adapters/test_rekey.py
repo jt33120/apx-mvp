@@ -83,6 +83,21 @@ def test_rekey_command_re_encrypts_and_records_rotation_per_tenant(tmp_path) -> 
     assert store.read_audit(MATTER, TENANT, {SCOPE}).verified
 
 
+def test_rekey_audits_a_data_only_tenant_with_no_user(tmp_path) -> None:  # noqa: ANN001
+    from apx.manage import rekey
+
+    _engine, store = _store(tmp_path)
+    # a tenant with ingested pieces but NO user row (data before user creation, or users removed)
+    store.save(IngestionResult(pieces=[_piece()]), SCOPE, actor="a")
+    message = rekey(store)
+    assert "1 tenant" in message  # the data-only tenant is counted from the DATA surface
+    with store._sf() as s:
+        actions = s.execute(
+            select(AuditRecord.action).where(AuditRecord.tenant == TENANT)
+        ).scalars().all()
+    assert "key_rotated" in actions  # its rotation IS on the record, not silently skipped
+
+
 def test_rekey_leaves_the_text_index_untouched(tmp_path) -> None:  # noqa: ANN001
     # full_text is the AD-31 exempt index — not application-encrypted — so a rotation must not
     # rewrite it (that is what "rotatable without re-indexing" means).

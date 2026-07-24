@@ -118,6 +118,15 @@ def test_key_fingerprint_names_the_key_without_revealing_it() -> None:
     assert key.hex() != fp and fp in key_fingerprint(key)    # one-way, not the key itself
 
 
+def test_a_truncated_ciphertext_fails_closed_not_with_a_bare_valueerror() -> None:
+    # a blob too short to hold a nonce makes AESGCM raise ValueError, not InvalidTag; decrypt
+    # must map it to DecryptionError (the multi-key loop must catch BOTH) — else read_audit's
+    # graceful-degrade path (which catches only DecryptionError) crashes the whole trail (FR-24).
+    truncated = "apxenc:v1:" + base64.urlsafe_b64encode(b"AAAA").decode()
+    with pytest.raises(DecryptionError):
+        Cipher(_key()).decrypt(truncated, aad="c")
+
+
 def test_a_plaintext_value_in_an_encrypted_column_is_a_loud_error() -> None:
     # the whole point: a value that never went through encrypt() is refused on read, so a
     # plaintext leak into an encrypted column surfaces instead of being silently accepted.

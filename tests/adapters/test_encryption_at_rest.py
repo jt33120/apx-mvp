@@ -96,6 +96,18 @@ def test_no_plaintext_token_in_any_raw_store_except_the_named_index(seeded) -> N
         )
 
 
+def test_a_seeded_secret_value_is_absent_from_every_raw_store(seeded) -> None:  # noqa: ANN001
+    # FR-51/AC4 (story 1.8): the raw-store inspection extends to seeded SECRET values, not only
+    # content tokens. The seed includes a TOTP secret; assert that secret appears in no store.
+    engine, _store = seeded
+    secret = f"TOTPSEED{TOKEN}"
+    with engine.connect() as conn:
+        for table, col in ENCRYPTED_COLUMNS:
+            rows = conn.exec_driver_sql(f"SELECT {col} FROM {table}").fetchall()
+            blob = "\n".join(str(v[0]) for v in rows if v[0] is not None)
+            assert secret not in blob, f"the seeded secret leaked in cleartext in {table}.{col}"
+
+
 def test_the_orm_decrypts_transparently_and_search_still_works(seeded) -> None:  # noqa: ANN001
     _engine, store = seeded
     # read back through the ORM: the encrypted columns decrypt to their plaintext
@@ -138,3 +150,14 @@ def test_a_tampered_audit_field_degrades_to_unverified_not_a_crash(seeded) -> No
     trail = store.read_audit(MATTER, TENANT, {SCOPE})  # does not raise
     assert trail.verified is False
     assert any("illisible" in e.detail for e in trail.entries)  # the bad row is shown, redacted
+
+
+def test_a_truncated_ciphertext_audit_field_degrades_not_crashes(seeded) -> None:  # noqa: ANN001
+    # the 1.8 regression: a TRUNCATED apxenc token (too short for a nonce) made AESGCM raise a
+    # bare ValueError that escaped read_audit's DecryptionError catch → whole-tenant 500. It must
+    # degrade to verified=False like any other unreadable row.
+    engine, store = seeded
+    with engine.begin() as conn:
+        conn.execute(text("UPDATE audit_record SET actor = 'apxenc:v1:AAAA' WHERE seq = 1"))
+    trail = store.read_audit(MATTER, TENANT, {SCOPE})  # does not raise
+    assert trail.verified is False
