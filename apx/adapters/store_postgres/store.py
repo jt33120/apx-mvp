@@ -22,7 +22,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import Text, cast, delete, func, select
+from sqlalchemy import Text, cast, delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -857,7 +857,7 @@ class SqlStore:
         and is a no-op that writes NO audit entry when the value is unchanged. A change to a
         retrieval-affecting key is flagged on the entry as the AD-23 staleness hook."""
         spec = require_key(key)          # ConfigError on an unknown key
-        new_value = spec.coerce(value)    # ConfigError on a wrong-typed value
+        new_value = spec.coerce(value)    # ConfigError on a wrong-typed / out-of-range value
         for attempt in range(4):
             try:
                 with self._sf() as session, session.begin():
@@ -865,21 +865,28 @@ class SqlStore:
                     before = _config_value(spec, row)
                     if before == new_value:
                         return ConfigChange(key, before, new_value, changed=False)
-                    if row is None:
-                        session.add(TenantSetting(
-                            tenant=tenant, key=key, value=dumps_value(new_value)))
-                    else:
-                        row.value = dumps_value(new_value)
-                    self._append_audit(
-                        session, tenant, None, actor, "config_changed",
-                        _config_change_detail(key, before, new_value, spec.affects_retrieval),
-                        datetime.now(UTC))
+                    self._apply_config_change(session, tenant, actor, spec, before, new_value)
                     session.flush()  # surface a (tenant, seq) collision inside the try
                 return ConfigChange(key, before, new_value, changed=True)
             except IntegrityError:
                 if attempt == 3:
                     raise
         raise RuntimeError("unreachable")  # the loop returns or raises
+
+    def _apply_config_change(self, session: Session, tenant: str, actor: str, spec: ConfigKey,
+                             before: object, after: object) -> None:
+        """Write (or update) one setting row and append its ``config_changed`` audit entry — the
+        single place the row + audit shape live, shared by ``set_config`` and ``provision_tenant``
+        so the two never drift. Runs inside the caller's transaction."""
+        row = session.get(TenantSetting, {"tenant": tenant, "key": spec.name})
+        if row is None:
+            session.add(TenantSetting(tenant=tenant, key=spec.name, value=dumps_value(after)))
+        else:
+            row.value = dumps_value(after)
+        self._append_audit(
+            session, tenant, None, actor, "config_changed",
+            _config_change_detail(spec.name, before, after, spec.affects_retrieval),
+            datetime.now(UTC))
 
     def get_config(self, tenant: str, key: str) -> object:
         """One configuration value — the tenant's stored value, or the schema default when it
@@ -907,29 +914,44 @@ class SqlStore:
     def config_provenance(self, tenant: str) -> list[ConfigProvenance]:
         """Reconcile every stored setting row against the tenant's audited config changes, so a
         value written by a direct DB edit (bypassing the surface) is detectable (AD-25). A row is
-        ``audited`` only when its current value equals the last audited change for its key."""
+        ``audited`` only when its current value equals the last audited change for its key; a key
+        whose last audited change set a non-default value but which now has NO row was reverted by
+        a direct DELETE and is reported ``audited=False`` (its effective value is the default).
+        Reads the audit detail as RAW ciphertext + ``_safe_decrypt`` (like ``read_audit``), so one
+        undecryptable row — after a key rotation, say — degrades instead of 500-ing the surface."""
         with self._sf() as session:
             rows = session.execute(
                 select(TenantSetting).where(TenantSetting.tenant == tenant)
             ).scalars().all()
-            details = session.execute(
-                select(AuditRecord.detail)
+            detail_cts = session.execute(
+                select(cast(AuditRecord.detail, Text))
                 .where(AuditRecord.tenant == tenant, AuditRecord.action == "config_changed")
                 .order_by(AuditRecord.seq)
             ).scalars().all()
         audited_after: dict[str, object] = {}
-        for detail in details:
+        for detail_ct in detail_cts:
+            detail = _safe_decrypt(detail_ct, "audit_record.detail")
+            if detail is None:
+                continue  # undecryptable → contributes no audited value (no 500)
             parsed = _parse_config_detail(detail)
             if parsed is not None:
                 audited_after[parsed[0]] = parsed[1]  # last write wins (ordered by seq)
         out: list[ConfigProvenance] = []
+        row_keys: set[str] = set()
         for row in rows:
+            row_keys.add(row.key)
             try:
                 value = loads_value(row.value)
             except ValueError:
                 value = None
             audited = row.key in audited_after and audited_after[row.key] == value
             out.append(ConfigProvenance(row.key, value, audited))
+        # a key last audited to a NON-default value but with no row now = a direct DELETE that
+        # reverted it off the record (e.g. silently turning MFA back off) — surface it.
+        for key, after in audited_after.items():
+            spec = CONFIG_SCHEMA.get(key)
+            if key not in row_keys and spec is not None and after != spec.default:
+                out.append(ConfigProvenance(key, spec.default, audited=False))
         return out
 
     def provision_tenant(
@@ -939,40 +961,46 @@ class SqlStore:
         """Provision a tenant through the surface (AD-25): establish its FIRST administrative
         grant (an is_admin user with its scopes) and seed its taxonomy as an audited configuration
         value, in ONE transaction, writing a ``tenant_provisioned`` audit entry. Fails closed with
-        ``TenantAlreadyProvisioned`` if the tenant already has an administrator — never a silent
-        takeover of a live firm. Returns the new administrator's id."""
+        ``TenantAlreadyProvisioned`` if the tenant already has an administrator OR the admin email
+        is already taken — never a silent takeover of a live firm, and never a raw IntegrityError
+        (a concurrent bootstrap loser is translated too). Returns the new administrator's id."""
         email = admin_email.strip().lower()
         coerced_tax = coerce("taxonomy", list(taxonomy))  # validate before opening the tx
         wall_set = set(scopes)
         uid = uuid4().hex
         now = datetime.now(UTC)
-        with self._sf() as session, session.begin():
-            existing_admin = session.scalar(
-                select(func.count()).select_from(User).where(
-                    User.tenant == tenant, User.is_admin.is_(True)))
-            if (existing_admin or 0) > 0:
-                raise TenantAlreadyProvisioned(
-                    f"tenant {tenant!r} already has an administrator")
-            session.add(User(
-                id=uid, tenant=tenant, email=email, password_hash=hash_password(admin_password),
-                display_name=admin_name, is_admin=True))
-            for scope in sorted(wall_set):
-                session.add(UserScope(user_id=uid, scope=scope))
-            self._append_audit(
-                session, tenant, None, actor, "tenant_provisioned",
-                f"admin={email} scopes={sorted(wall_set)} taxonomy={len(coerced_tax)}", now)
-            session.flush()
-            self._append_audit(
-                session, tenant, None, actor, "create_user",
-                f"subject={uid} email={email} scopes={sorted(wall_set)} admin=True", now)
-            session.flush()
-            if coerced_tax:  # seed the taxonomy as an audited value (empty is the default already)
-                session.add(TenantSetting(
-                    tenant=tenant, key="taxonomy", value=dumps_value(coerced_tax)))
+        try:
+            with self._sf() as session, session.begin():
+                # fail closed on an existing admin OR an existing user with this email (a
+                # non-admin user already holding the email would otherwise IntegrityError on insert)
+                clash = session.scalar(
+                    select(func.count()).select_from(User).where(
+                        User.tenant == tenant,
+                        or_(User.is_admin.is_(True), User.email == email)))
+                if (clash or 0) > 0:
+                    raise TenantAlreadyProvisioned(
+                        f"tenant {tenant!r} already has an administrator or a user {email!r}")
+                session.add(User(
+                    id=uid, tenant=tenant, email=email,
+                    password_hash=hash_password(admin_password),
+                    display_name=admin_name, is_admin=True))
+                for scope in sorted(wall_set):
+                    session.add(UserScope(user_id=uid, scope=scope))
                 self._append_audit(
-                    session, tenant, None, actor, "config_changed",
-                    _config_change_detail("taxonomy", [], coerced_tax, retrieval=False), now)
+                    session, tenant, None, actor, "tenant_provisioned",
+                    f"admin={email} scopes={sorted(wall_set)} taxonomy={len(coerced_tax)}", now)
                 session.flush()
+                self._append_audit(
+                    session, tenant, None, actor, "create_user",
+                    f"subject={uid} email={email} scopes={sorted(wall_set)} admin=True", now)
+                session.flush()
+                if coerced_tax:  # seed the taxonomy as an audited value (empty is the default)
+                    self._apply_config_change(
+                        session, tenant, actor, require_key("taxonomy"), [], coerced_tax)
+                    session.flush()
+        except IntegrityError as exc:  # a concurrent bootstrap that slipped past the guard
+            raise TenantAlreadyProvisioned(
+                f"tenant {tenant!r} was provisioned concurrently") from exc
         return uid
 
     # ── MFA reads/writes route through the config surface (one audited path, AD-25) ──
@@ -992,9 +1020,11 @@ class SqlStore:
 
     def mfa_status(self, tenant: str, user_id: str) -> tuple[bool, str | None]:
         """(whether the tenant requires MFA, the user's TOTP secret or None) — the login
-        gate reads this to decide whether a second factor is demanded."""
-        required = bool(self.get_config(tenant, "mfa_required"))
+        gate reads this to decide whether a second factor is demanded. One session (the login
+        hot path): the mfa_required config row and the user's secret in a single round trip."""
         with self._sf() as session:
+            cfg = session.get(TenantSetting, {"tenant": tenant, "key": "mfa_required"})
+            required = bool(_config_value(require_key("mfa_required"), cfg))
             secret = session.scalar(select(User.mfa_secret).where(User.id == user_id))
         return required, secret
 

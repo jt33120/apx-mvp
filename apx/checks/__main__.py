@@ -56,6 +56,7 @@ CHECKS: list[Callable[[], CheckResult]] = [
     configuration.no_tenant_conditional_in_core,
     configuration.config_defaults_preserve_guarantees,
     configuration.documented_config_keys_exist,
+    configuration.config_reference_is_complete,
 ]
 
 

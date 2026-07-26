@@ -101,3 +101,57 @@ def test_provenance_flags_a_direct_edit_of_an_already_audited_key(store: SqlStor
         row.value = dumps_value("de-sneaked")
     prov = {p.key: p for p in store.config_provenance(TENANT)}
     assert prov["interface_language"].audited is False  # value no longer matches the audit
+
+
+def test_provenance_flags_a_direct_delete_that_reverts_off_the_record(store: SqlStore) -> None:
+    # a value set to non-default through the surface, then the row DELETEd straight in the DB —
+    # the effective value silently reverts to the default (e.g. MFA turned back off), undetected
+    # unless provenance reconciles the audit against the ABSENCE of a row (AD-25).
+    store.set_config(TENANT, "patron", "mfa_required", True)
+    with store._sf() as s, s.begin():
+        s.delete(s.get(TenantSetting, {"tenant": TENANT, "key": "mfa_required"}))
+    prov = {p.key: p for p in store.config_provenance(TENANT)}
+    assert "mfa_required" in prov and prov["mfa_required"].audited is False
+
+
+def test_provenance_degrades_not_500_on_an_undecryptable_audit_detail(store: SqlStore) -> None:
+    # after a key rotation (or a tamper), a config_changed detail may not decrypt; provenance must
+    # degrade like read_audit, not raise (the detection surface must survive the state it detects).
+    store.set_config(TENANT, "patron", "interface_language", "en")
+    with store._sf() as s, s.begin():  # overwrite the ciphertext with a non-decryptable token
+        rec = s.execute(
+            select(AuditRecord).where(AuditRecord.action == "config_changed")).scalars().one()
+        s.execute(
+            AuditRecord.__table__.update()
+            .where(AuditRecord.id == rec.id)
+            .values(detail="apxenc:v1:not-a-real-ciphertext"))
+    prov = store.config_provenance(TENANT)  # must not raise
+    assert isinstance(prov, list)
+
+
+def test_out_of_range_and_non_finite_numeric_values_are_refused(store: SqlStore) -> None:
+    for bad in (2.0, -1.0, 0.0, float("inf"), float("nan")):
+        with pytest.raises(ConfigError):
+            store.set_config(TENANT, "patron", "cascade_stage3_max_share", bad)
+    ok = store.set_config(TENANT, "patron", "cascade_stage3_max_share", 0.9)
+    assert ok.changed and store.get_config(TENANT, "cascade_stage3_max_share") == 0.9
+
+
+def test_audit_chain_verifies_with_a_config_change_interleaved(store: SqlStore) -> None:
+    # a config_changed row (matter=None, JSON detail, non-ASCII) sits on the per-tenant chain
+    # among matter entries; the whole-chain verification must still recompute cleanly, and the
+    # config entry must NOT appear in a matter's slice (it is matterless).
+    from datetime import UTC, datetime
+
+    from apx.core.app.ingest import IngestedPiece, IngestionResult
+
+    piece = IngestedPiece(
+        id="p1", matter="m1", tenant=TENANT, content_hash="c" * 8, text_key="t" * 8,
+        provenance_path="/x.pdf", custodian="c", extraction_method="text", extractor_version="v",
+        schema_version="s", ingestion_timestamp=datetime.now(UTC), full_text="le contrat",
+        text_version="v")
+    store.save(IngestionResult(pieces=[piece]), "wall", actor="a")
+    store.set_config(TENANT, "patron", "taxonomy", ["pièce adverse"])  # non-ASCII JSON detail
+    trail = store.read_audit("m1", TENANT, {"wall"})
+    assert trail.verified is True
+    assert all(e.action != "config_changed" for e in trail.entries)  # matterless → not in slice

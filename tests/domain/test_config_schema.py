@@ -61,8 +61,8 @@ def test_float_key_accepts_an_int_and_normalises() -> None:
 
 def test_enum_key_rejects_a_value_outside_its_allowed_set() -> None:
     with pytest.raises(ConfigError):
-        coerce("interface_language", "de")  # not in the allowed set
-    assert coerce("interface_language", "en") == "en"
+        coerce("interface_language", "es")  # not in the allowed set (fr/en/de/lb)
+    assert coerce("interface_language", "de") == "de"  # a Luxembourg-market language is allowed
 
 
 def test_str_list_rejects_a_non_list_of_strings() -> None:

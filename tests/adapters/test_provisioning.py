@@ -61,6 +61,18 @@ def test_provision_fails_closed_if_an_admin_already_exists(store: SqlStore) -> N
     assert [u.email for u in users] == ["first@c.fr"]
 
 
+def test_provision_fails_closed_on_a_pre_existing_non_admin_email(store: SqlStore) -> None:
+    # a tenant can have users but no admin (create-user without --admin). If one already holds the
+    # provisioning email, provisioning must fail closed with a typed error, not an IntegrityError.
+    store.create_user(TENANT, "patron@c.fr", "pw12345678", "Clerk", {"w"}, is_admin=False)
+    with pytest.raises(TenantAlreadyProvisioned):
+        store.provision_tenant(
+            TENANT, "patron@c.fr", "pw12345678", "Patron", scopes={"w"}, taxonomy=["x"])
+    # the pre-existing user is untouched; no admin was created
+    users = store.list_users(TENANT)
+    assert [(u.email, u.is_admin) for u in users] == [("patron@c.fr", False)]
+
+
 def test_provision_with_empty_taxonomy_seeds_no_setting_row(store: SqlStore) -> None:
     store.provision_tenant(TENANT, "p@c.fr", "pw12345678", "P", scopes={"w"}, taxonomy=[])
     assert store.get_config(TENANT, "taxonomy") == []      # the schema default

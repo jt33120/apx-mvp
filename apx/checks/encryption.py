@@ -49,9 +49,14 @@ _PLAINTEXT_ALLOWLIST = {
 # Table-qualified plaintext columns — used where the bare name is too generic to allow globally.
 # ``tenant_setting.key``/``value`` are configuration-as-data metadata (a language code, an
 # endpoint, thresholds, taxonomy labels) — configuration the admin surface reads and DISPLAYS in
-# the clear, comparable to the already-plaintext ``matter``/``scope`` names, and less sensitive
-# than a matter (client) name. The audited before/after of a config change lives in the encrypted
-# ``audit_record.detail``; the live config value is operational metadata, not document content.
+# the clear, comparable to the already-plaintext ``matter``/``scope`` names and less sensitive than
+# a matter (client) name. Kept plaintext by conscious decision (weighed against a code review that
+# flagged the free-text keys): the disk is covered by AD-31's volume layer; the audited
+# before/after already lives in the encrypted ``audit_record.detail``; and application-encrypting
+# it would couple config into 1.8's single-PK re-key/backfill machinery (``ENCRYPTED_COLUMNS``),
+# which a rotation would silently skip on this composite-PK table — a rotation bug for marginal
+# benefit on admin-set, admin-displayed values. Revisit (a cheap one-column change) if a key ever
+# needs to hold client-secret content rather than operational config.
 _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     ("TenantSetting", "key"),
     ("TenantSetting", "value"),

@@ -23,6 +23,7 @@ are provisioned as data.
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -56,15 +57,24 @@ class ConfigKey:
     # exists yet (epics 4–5); the flag is recorded on the audited change as the future hook.
     affects_retrieval: bool = False
     allowed: tuple[Any, ...] | None = None  # a closed value set, when the key is an enum
+    # A domain predicate every WRITE must satisfy (a numeric range, say) — enforced by ``coerce``
+    # on every set, so the surface refuses a nonsensical value, not only the build. Distinct from
+    # ``preserves_guarantee`` (a DEFAULT-only check): a value may be a deliberate, audited policy
+    # choice (disabling a boolean guarantee) yet still have to be *in range* (a share in (0, 1]).
+    valid: Callable[[Any], bool] | None = None
 
     def coerce(self, value: Any) -> Any:
-        """Validate ``value`` against this key's declared type and return the canonical form.
-        Raises ``ConfigError`` on a type mismatch or a value outside a closed ``allowed`` set —
-        never coerces silently across kinds (a string ``"true"`` is not a bool)."""
+        """Validate ``value`` against this key's declared type + domain and return the canonical
+        form. Raises ``ConfigError`` on a type mismatch, a value outside a closed ``allowed`` set,
+        or one that fails the ``valid`` domain predicate — never coerces silently across kinds (a
+        string ``"true"`` is not a bool) and never accepts an out-of-range number (AC2: every
+        change is validated against the declared schema)."""
         v = _coerce_kind(self.name, self.kind, value)
         if self.allowed is not None and v not in self.allowed:
             raise ConfigError(
                 f"{self.name}: {v!r} is not one of {list(self.allowed)}")
+        if self.valid is not None and not self.valid(v):
+            raise ConfigError(f"{self.name}: {v!r} is outside the permitted range")
         return v
 
     def default_preserves_guarantee(self) -> bool:
@@ -86,7 +96,10 @@ def _coerce_kind(name: str, kind: Kind, value: Any) -> Any:
     if kind == "float":
         if isinstance(value, bool) or not isinstance(value, int | float):
             raise ConfigError(f"{name}: expected a number, got {type(value).__name__}")
-        return float(value)
+        f = float(value)
+        if not math.isfinite(f):  # reject NaN/Infinity — they break == and any range check
+            raise ConfigError(f"{name}: expected a finite number, got {value!r}")
+        return f
     if kind == "str":
         if not isinstance(value, str):
             raise ConfigError(f"{name}: expected a string, got {type(value).__name__}")
@@ -107,7 +120,7 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
     ConfigKey(
         "interface_language", "str", "fr",
         governs="the interface language the tenant's users see",
-        allowed=("fr", "en"),
+        allowed=("fr", "en", "de", "lb"),  # France + Luxembourg (de/lb) markets
     ),
     ConfigKey(
         "mfa_required", "bool", False,
@@ -119,7 +132,13 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
     ),
     ConfigKey(
         "model_endpoint", "str", "https://api.mistral.ai/v1",
-        governs="the OpenAI-compatible endpoint the inference profile calls (AD-27)",
+        governs="the OpenAI-compatible endpoint the inference profile calls (AD-27) — a "
+                "tenant's non-default value is honoured by the live judge",
+        affects_retrieval=True,
+    ),
+    ConfigKey(
+        "model_name", "str", "mistral-small-latest",
+        governs="the model the inference endpoint serves (AD-27)",
         affects_retrieval=True,
     ),
     ConfigKey(
@@ -150,8 +169,11 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         "cascade_stage3_max_share", "float", 0.5,
         governs="the ceiling on the share of a matter that may reach the LLM stage (AD-18) — the "
                 "system's biggest cost and egress",
-        # a config widening the uncertain band to *everything* (share 1.0) is a policy escape,
-        # not a default; the bound must be a real fraction, 0 < share < 1.
+        # WRITE domain: a share must be a real fraction in (0, 1] — 1.0 is the deliberate widest
+        # policy (audited), but 0, negative, >1 or non-finite are nonsense and are refused on set.
+        valid=lambda v: 0.0 < v <= 1.0,
+        # DEFAULT must keep the guarantee on: strictly < 1 (v1's off-corpus gate shipped disabled;
+        # a default of 1.0 would send everything to the LLM). Checked on the default by the build.
         preserves_guarantee=lambda v: 0.0 < v < 1.0,
         affects_retrieval=True,
     ),

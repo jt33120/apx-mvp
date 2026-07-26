@@ -273,10 +273,11 @@ The configuration keys (each editable as data, no redeploy):
 
 | Key | Type | Default | Governs |
 |---|---|---|---|
-| `interface_language` | enum | `fr` | the interface language the tenant's users see |
+| `interface_language` | enum | `fr` | the interface language the tenant's users see (fr/en/de/lb) |
 | `mfa_required` | bool | `false` | whether a second factor (TOTP) is demanded (FR-48) |
 | `model_provider` | str | `mistral` | which inference provider serves the judgment LLM (AD-27) |
-| `model_endpoint` | str | Mistral EU | the OpenAI-compatible inference endpoint (AD-27) |
+| `model_endpoint` | str | Mistral EU | the OpenAI-compatible inference endpoint (AD-27) — honoured live by the judge |
+| `model_name` | str | `mistral-small-latest` | the model the endpoint serves (AD-27) |
 | `chunking_config_version` | str | `v1` | the chunking configuration identity (AD-9/AD-40) |
 | `configured_sources` | list | `[]` | the enumerated data sources a corpus may be drawn from (AD-16) |
 | `exclusion_list` | list | `[]` | filename/path patterns excluded from ingestion |

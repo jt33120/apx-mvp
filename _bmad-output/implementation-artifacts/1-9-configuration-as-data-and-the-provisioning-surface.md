@@ -4,7 +4,7 @@ baseline_commit: 8b35467
 
 # Story 1.9: Configuration-as-data and the provisioning surface
 
-Status: review
+Status: done
 
 ## Story
 
@@ -90,4 +90,36 @@ Architecture: AD-24 (customisation is data, never code), AD-25 (one audited surf
 
 ### Change Log
 
-- 2026-07-24 — Story 1.9 implemented: configuration-as-data schema + one audited surface + provisioning + three structural checks (AD-24/AD-25). 18 checks, 367 tests green.
+- 2026-07-24 — Story 1.9 implemented: configuration-as-data schema + one audited surface + provisioning + three structural checks (AD-24/AD-25). 18 checks, 367 tests green (feat `fc6877b`).
+- 2026-07-26 — Code review (3 adversarial reviewers, all findings execution-verified) addressed: 2 HIGH + 5 MED + LOWs fixed. 19 checks, 381 tests green.
+
+## Senior Developer Review (AI)
+
+**Reviewers:** three parallel adversarial passes over `8b35467..fc6877b` — (A) AD-24/AD-25 faithfulness + checks, (B) correctness/transactions/migration, (C) scope/data-sensitivity/edge cases. Every finding was verified by executing the code, not by reading alone. Outcome: **Changes Requested → all addressed**. The write-side of AD-25 was found solid from the start (one audited path, `mfa_required` genuinely folded in, atomic provisioning, 422-not-500, no cross-tenant, allowlist table-scoped, no MFA regression — all confirmed by the reviewers); the weaknesses were on the **guarantee / detectability** side.
+
+### HIGH
+
+1. **The tenant-branch check enforced far less than AD-24's rule, and had a false positive.** `no_tenant_conditional_in_core` only caught `tenant == "literal"` — it MISSED `tenant.startswith("cabinet-")`, a literal hidden behind a module constant (`SPECIAL = "cabinet-x"`), a dict-literal membership, and a dict-dispatch; and it wrongly FAILED a legitimate sentinel guard `row.tenant == ""`. The exact per-tenant fork an engineer writes under deadline was invisible while a defensive guard broke the build. **Fixed:** the check now catches equality/membership against a non-empty literal (resolving top-level string constants), a `.startswith`/`.endswith`/`re.match`-style prefix branch, and a `match` on a tenant; it allows tenant-vs-tenant isolation and tenant-vs-empty/None sentinels. New fixtures (`tenant_prefix`, `tenant_module_const`, `tenant_sentinel_ok`) prove each path. The README/story claim is now "no equality/membership/prefix test of a tenant against a literal (a structure *keyed* by tenant is the correct config-as-data pattern and is allowed)."
+2. **`config_provenance` 500'd on an undecryptable audit detail — the detection endpoint died on exactly the tamper/rotation state it exists to surface.** It read the encrypted `audit_record.detail` through the eager-decrypting ORM type; one row left under a dropped key by the documented `manage.py rekey` would make the whole provenance view un-loadable. **Fixed:** it now reads `cast(detail, Text)` raw + `_safe_decrypt` (the exact pattern `read_audit` already uses), degrading an unreadable row instead of raising. Test seeds a non-decryptable ciphertext and asserts no 500.
+
+### MEDIUM
+
+3. **`set_config` validated type only — no range/domain.** The surface accepted `cascade_stage3_max_share = 42.0 / -1 / 0 / NaN` (the schema's own comment calls it a fraction in (0,1)) and `NaN` broke provenance idempotence forever (`nan != nan`). **Fixed:** `ConfigKey` gained a `valid` write-domain predicate (distinct from the default-only `preserves_guarantee`), enforced in `coerce`; `cascade_stage3_max_share` is `0 < v ≤ 1`; the float kind rejects non-finite values globally. `off_corpus_refusal_enabled=False` stays a permitted, audited policy escape (a bool is always in-domain).
+4. **`documented_config_keys_exist` passed vacuously.** A missing or mis-cased config-keys block short-circuited to PASS, so a doc edit could silently neuter the FR-56 gate; and schema→doc completeness lived only in a pytest, not in the every-install artefact. **Fixed:** scanning the shipped README now FAILS on a missing block, and a new registered check `config_reference_is_complete` enforces schema→doc (every key documented) — the two directions ship as build gates.
+5. **Provenance was blind to a direct DELETE.** Deleting a `mfa_required` row (silently turning MFA back off) reverted the value to its default with nothing flagged. **Fixed:** provenance now also reconciles the audit against the ABSENCE of a row — a key last audited to a non-default value with no backing row is reported `audited=False`.
+6. **Provisioning's fail-closed guard was incomplete.** It counted only admins; a pre-existing non-admin user holding the target email leaked a raw `IntegrityError` instead of `TenantAlreadyProvisioned`, and a concurrent bootstrap loser did the same. **Fixed:** the guard rejects any existing admin OR the email; the transaction translates a slipped-through `IntegrityError` to `TenantAlreadyProvisioned`.
+7. **`model_endpoint`/`model_provider` were declared editable-as-data but the live judge ignored them** and read `LLM_BASE_URL` from the environment — an admin could `PUT` a new (EU/on-prem) endpoint, see it audited as changed, and the judge would keep calling the env URL: a silent no-op on a **data-egress** control. **Fixed:** `_llm_judge(store, tenant)` now honours a tenant's non-default `model_endpoint`/`model_name` live (env remains the deployment default; the API key stays an env-only secret; `model_provider` is recorded/displayed but never branched on, per AD-27 "application code never knows which engine serves it"). Added the `model_name` key; whitebox tests assert the endpoint/model wiring.
+
+### Conscious decision — `tenant_setting.value` stays plaintext (C-M1)
+
+The reviewer flagged that the value is plaintext while the same before/after is encrypted in `audit_record.detail`, and that free-text keys (`taxonomy`, `configured_sources`, `exclusion_list`) can carry client identifiers. Weighed and **kept plaintext**: config values are admin-set and admin-**displayed** operational metadata, comparable to the already-plaintext `matter`/`scope` names (and less sensitive than a matter/client name); the disk is covered by AD-31's volume layer; the audit detail is encrypted as a whole-column policy (a mixed free-text field), not a per-value classification; and application-encrypting `value` would couple config into story 1.8's **single-PK** re-key/backfill machinery (`ENCRYPTED_COLUMNS`), which a rotation would silently skip on this composite-PK table — a rotation bug for marginal benefit. Recorded in the allowlist comment as a cheap one-column change to revisit if a key ever needs to hold secret content.
+
+### LOW (addressed)
+
+- `mfa_status` folded to one session (the login hot path); `interface_language` widened to `fr/en/de/lb` (the Luxembourg market); the config row+audit write extracted to one shared `_apply_config_change` so `set_config` and `provision_tenant` cannot drift; a test now asserts the audit chain still verifies with a (matterless, non-ASCII JSON) `config_changed` entry interleaved among matter entries.
+
+### Deferred (unchanged, documented decisions)
+
+- The visual settings/provisioning **SPA** (AD-29, with the whole front-end — the story's "UX pass required" note gates the *visual* surface; the API + CLI mechanism is the CI-testable deliverable). The **AD-23 staleness engine** (no derived artefact exists yet; `affects_retrieval` is carried on the audit as the hook). **`scopes`** are configuration-as-data handled by the story-1.6 RBAC grant surface (relational per-user state), not a `tenant_setting` scalar — so the AD-24 bind list is delivered across two surfaces, both audited.
+
+**Final gate:** ruff · `python -m apx.checks` **19/19** · `pytest` **381 passed, 8 skipped** · fitness — green.

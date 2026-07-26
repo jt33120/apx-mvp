@@ -39,6 +39,10 @@ _TENANT_NAMES = frozenset({
 _BRANCH_OPS = (ast.Eq, ast.NotEq, ast.In, ast.NotIn)
 
 
+# String methods that turn a *tenant* into a prefix/pattern branch (``tenant.startswith("x-")``).
+_TENANT_BRANCH_METHODS = frozenset({"startswith", "endswith", "match", "search", "fullmatch"})
+
+
 def _is_tenant_expr(node: ast.expr) -> bool:
     if isinstance(node, ast.Name):
         return node.id in _TENANT_NAMES
@@ -47,29 +51,65 @@ def _is_tenant_expr(node: ast.expr) -> bool:
     return False
 
 
-def _is_constant_operand(node: ast.expr) -> bool:
-    """A literal the code could branch a tenant against — a constant, or a container of them."""
+def _module_string_consts(tree: ast.Module) -> dict[str, str]:
+    """Top-level ``NAME = "literal"`` string constants, so a branch that hides the literal behind
+    a module constant (``SPECIAL = "cabinet-x"`` … ``if tenant == SPECIAL``) is still caught."""
+    consts: dict[str, str] = {}
+    for node in tree.body:
+        targets = node.targets if isinstance(node, ast.Assign) else (
+            [node.target] if isinstance(node, ast.AnnAssign) and node.value is not None else [])
+        if (isinstance(node, ast.Assign | ast.AnnAssign) and isinstance(node.value, ast.Constant)
+                and isinstance(node.value.value, str)):
+            for t in targets:
+                if isinstance(t, ast.Name):
+                    consts[t.id] = node.value.value
+    return consts
+
+
+def _is_literal_operand(node: ast.expr, consts: dict[str, str]) -> bool:
+    """A NON-EMPTY literal a tenant could be branched against — a non-empty constant, a non-empty
+    container/dict of constants, or a Name resolving to a non-empty module string constant. An
+    EMPTY string, ``None`` or an empty container is a sentinel/defensive guard and is NOT a branch
+    on a tenant identity (so ``if row.tenant == "":`` is allowed, the MED-5 false positive)."""
     if isinstance(node, ast.Constant):
-        return True
+        return node.value not in ("", None, b"")
     if isinstance(node, ast.List | ast.Tuple | ast.Set):
         return bool(node.elts) and all(isinstance(e, ast.Constant) for e in node.elts)
+    if isinstance(node, ast.Dict):  # `tenant in {"cabinet-x": handler}` — dispatch by literal key
+        return bool(node.keys)
+    if isinstance(node, ast.Name):
+        return bool(consts.get(node.id))
     return False
 
 
-def _tenant_vs_constant(compare: ast.Compare) -> bool:
-    """True if the comparison pits a *tenant* expression against a constant with an equality /
-    membership op — i.e. a branch on a specific tenant identity. A tenant-vs-tenant comparison
-    (both operands non-constant) is the legitimate isolation check and is NOT flagged."""
+def _tenant_vs_literal(compare: ast.Compare, consts: dict[str, str]) -> bool:
+    """A *tenant* expression tested (==/!=/in/not in) against a non-empty literal — a branch on a
+    specific tenant identity. Tenant-vs-tenant (both operands tenant expressions) is the legitimate
+    isolation comparison and is NOT flagged; nor is tenant-vs-empty/None (a sentinel guard)."""
     operands = [compare.left, *compare.comparators]
     for i, op in enumerate(compare.ops):
         if not isinstance(op, _BRANCH_OPS):
             continue
         a, b = operands[i], operands[i + 1]
-        if (_is_tenant_expr(a) and _is_constant_operand(b)) or (
-            _is_tenant_expr(b) and _is_constant_operand(a)
-        ):
+        if _is_tenant_expr(a) and not _is_tenant_expr(b) and _is_literal_operand(b, consts):
+            return True
+        if _is_tenant_expr(b) and not _is_tenant_expr(a) and _is_literal_operand(a, consts):
             return True
     return False
+
+
+def _tenant_prefix_call(node: ast.Call, consts: dict[str, str]) -> bool:
+    """A ``tenant.startswith("cabinet-")`` / ``.endswith`` / ``re.match``-style branch — the
+    prefix-routing form that a plain equality check misses."""
+    func = node.func
+    if not (isinstance(func, ast.Attribute) and func.attr in _TENANT_BRANCH_METHODS):
+        return False
+    # `tenant.startswith(...)` (method on the tenant) OR `re.match(pat, tenant)` (tenant as arg)
+    subject_is_tenant = _is_tenant_expr(func.value)
+    tenant_arg = any(_is_tenant_expr(a) for a in node.args)
+    if not (subject_is_tenant or tenant_arg):
+        return False
+    return any(_is_literal_operand(a, consts) for a in node.args)
 
 
 def _match_on_tenant(node: ast.Match) -> bool:
@@ -84,22 +124,29 @@ def _match_on_tenant(node: ast.Match) -> bool:
 
 
 def no_tenant_conditional_in_core(roots: Iterable[Path] | None = None) -> CheckResult:
-    """No conditional under ``core/`` reads a *tenant* identifier (AD-24)."""
+    """No conditional under ``core/`` branches on a *tenant* identifier (AD-24). Catches equality /
+    membership against a literal (incl. one hidden behind a module constant or a dict-literal), a
+    ``.startswith``/``.endswith``/``re.match`` prefix branch, and a ``match`` on a tenant. It does
+    NOT flag tenant-vs-tenant isolation checks, sentinel/empty guards, or a data structure *keyed*
+    by tenant (``config[tenant]`` — the correct configuration-as-data pattern)."""
     name, ad = "no tenant identifier is a branch in core", "AD-24"
     roots = list(roots) if roots is not None else [_CORE_DIR]
     trees, unparseable = _load_trees(roots)
     if unparseable:
         return _fail_closed(name, ad, unparseable)
     for path, tree in trees:
+        consts = _module_string_consts(tree)
         for node in ast.walk(tree):
-            hit = (isinstance(node, ast.Compare) and _tenant_vs_constant(node)) or (
-                isinstance(node, ast.Match) and _match_on_tenant(node))
+            hit = (
+                (isinstance(node, ast.Compare) and _tenant_vs_literal(node, consts))
+                or (isinstance(node, ast.Call) and _tenant_prefix_call(node, consts))
+                or (isinstance(node, ast.Match) and _match_on_tenant(node)))
             if hit:
                 where = path.relative_to(_REPO_ROOT) if path.is_relative_to(_REPO_ROOT) else path
                 return CheckResult(
                     name, ad, False,
-                    f"{where}:{node.lineno} a tenant identifier is compared to a literal — a "
-                    "tenant is a filter argument and a row key, never a branch (AD-24)")
+                    f"{where}:{node.lineno} a tenant identifier is used as a branch — a tenant is "
+                    "a filter argument and a row key, never a branch (AD-24)")
     return CheckResult(name, ad, True, f"no tenant branch in {len(trees)} core module(s)")
 
 
@@ -128,6 +175,7 @@ def config_defaults_preserve_guarantees(
 _DOC_START = "<!-- config-keys:start -->"
 _DOC_END = "<!-- config-keys:end -->"
 _BACKTICKED = re.compile(r"`([a-z][a-z0-9_]+)`")
+_README = _REPO_ROOT / "README.md"
 
 
 def _documented_keys(block: str) -> list[str]:
@@ -146,25 +194,41 @@ def _documented_keys(block: str) -> list[str]:
     return keys
 
 
+def _read_block(path: Path) -> tuple[str | None, str | None]:
+    """Return (block-text, error). The block is between the two markers; a missing marker yields
+    (None, None) — 'no block here'. An unreadable file yields (None, <error>) — fail closed."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return None, f"cannot read {path.name} (failing closed, cannot verify)"
+    start, end = text.find(_DOC_START), text.find(_DOC_END)
+    if start == -1 or end == -1 or end < start:
+        return None, None
+    return text[start + len(_DOC_START):end], None
+
+
 def documented_config_keys_exist(
     doc_paths: Iterable[Path] | None = None, schema: Mapping[str, ConfigKey] | None = None
 ) -> CheckResult:
     """Every configuration key named in the documentation's config-reference block exists in the
-    schema (AD-24/FR-56). Fails closed on an unreadable documentation file."""
+    schema (AD-24/FR-56). When scanning the shipped README (the default), a MISSING or mis-marked
+    block is itself a failure — the every-install artefact cannot be silently neutered by a doc
+    edit. Fails closed on an unreadable file."""
     name, ad = "every documented config key exists", "AD-24"
     schema = CONFIG_SCHEMA if schema is None else schema
-    paths = list(doc_paths) if doc_paths is not None else [_REPO_ROOT / "README.md"]
+    scanning_readme = doc_paths is None
+    paths = list(doc_paths) if doc_paths is not None else [_README]
     for path in paths:
-        try:
-            text = path.read_text(encoding="utf-8")
-        except OSError:
-            return CheckResult(name, ad, False,
-                               f"cannot read {path.name} (failing closed, cannot verify)")
-        start = text.find(_DOC_START)
-        end = text.find(_DOC_END)
-        if start == -1 or end == -1 or end < start:
-            continue  # no config-reference block in this doc — nothing documented to check
-        for key in _documented_keys(text[start + len(_DOC_START):end]):
+        block, error = _read_block(path)
+        if error is not None:
+            return CheckResult(name, ad, False, error)
+        if block is None:
+            if scanning_readme:  # the README MUST carry the block — a missing one is not a pass
+                return CheckResult(name, ad, False,
+                                   "README.md has no config-keys block (the documented-keys guard "
+                                   "would be silently neutered) — restore the markers (AD-24)")
+            continue
+        for key in _documented_keys(block):
             if key not in schema:
                 return CheckResult(
                     name, ad, False,
@@ -173,10 +237,34 @@ def documented_config_keys_exist(
     return CheckResult(name, ad, True, "every documented config key exists in the schema")
 
 
+def config_reference_is_complete(
+    schema: Mapping[str, ConfigKey] | None = None, readme: Path | None = None
+) -> CheckResult:
+    """Every schema key appears in the README config-reference block (AD-24/FR-56) — the reverse
+    of ``documented_config_keys_exist``, shipped as its own build gate so a new key can never be
+    added without documenting it (the two directions together keep schema and docs in lock-step).
+    Fails closed on a missing block or an unreadable README."""
+    name, ad = "every config key is documented", "AD-24"
+    schema = CONFIG_SCHEMA if schema is None else schema
+    block, error = _read_block(readme if readme is not None else _README)
+    if error is not None:
+        return CheckResult(name, ad, False, error)
+    if block is None:
+        return CheckResult(name, ad, False, "README.md has no config-keys block (AD-24/FR-56)")
+    documented = set(_documented_keys(block))
+    missing = [k for k in schema if k not in documented]
+    if missing:
+        return CheckResult(name, ad, False,
+                           f"schema key(s) not documented in the README block: {sorted(missing)} "
+                           "— every key must be documented (AD-24)")
+    return CheckResult(name, ad, True, f"every schema key is documented ({len(schema)} key(s))")
+
+
 def run() -> list[CheckResult]:
     """The configuration-as-data checks, for the harness to fan out over."""
     return [
         no_tenant_conditional_in_core(),
         config_defaults_preserve_guarantees(),
         documented_config_keys_exist(),
+        config_reference_is_complete(),
     ]

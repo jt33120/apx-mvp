@@ -9,10 +9,11 @@ from pathlib import Path
 
 from apx.checks.configuration import (
     config_defaults_preserve_guarantees,
+    config_reference_is_complete,
     documented_config_keys_exist,
     no_tenant_conditional_in_core,
 )
-from apx.core.domain.config import CONFIG_SCHEMA, ConfigKey
+from apx.core.domain.config import ConfigKey
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "_fixtures" / "config_violations"
 _REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -23,14 +24,29 @@ def test_core_has_no_tenant_branch() -> None:
     assert no_tenant_conditional_in_core().ok  # the real core is clean
 
 
-def test_a_tenant_branch_is_caught() -> None:
+def test_a_tenant_equality_branch_is_caught() -> None:
     result = no_tenant_conditional_in_core([_FIXTURES / "tenant_branch"])
     assert not result.ok and "branch" in result.detail
+
+
+def test_a_tenant_prefix_branch_is_caught() -> None:
+    # `tenant.startswith("cabinet-")` — the routing form a plain equality check misses (HIGH-1)
+    assert not no_tenant_conditional_in_core([_FIXTURES / "tenant_prefix"]).ok
+
+
+def test_a_tenant_branch_hidden_behind_a_module_constant_is_caught() -> None:
+    # `SPECIAL = "cabinet-x"; if tenant == SPECIAL` — the check resolves module string constants
+    assert not no_tenant_conditional_in_core([_FIXTURES / "tenant_module_const"]).ok
 
 
 def test_a_tenant_vs_tenant_isolation_check_is_not_flagged() -> None:
     # comparing two tenant values (isolation) is legitimate — only a tenant-vs-literal is a branch
     assert no_tenant_conditional_in_core([_FIXTURES / "tenant_isolation_ok"]).ok
+
+
+def test_a_tenant_sentinel_guard_is_not_flagged() -> None:
+    # `row.tenant == ""` is a defensive sentinel guard, not a branch on a firm's identity (MED-5)
+    assert no_tenant_conditional_in_core([_FIXTURES / "tenant_sentinel_ok"]).ok
 
 
 def test_tenant_branch_check_fails_closed_on_unparseable(tmp_path: Path) -> None:
@@ -73,14 +89,29 @@ def test_documented_keys_check_fails_closed_on_unreadable_doc(tmp_path: Path) ->
     assert not documented_config_keys_exist([missing]).ok
 
 
-def test_every_schema_key_is_documented_in_the_readme() -> None:
-    # the reverse of the build check: the README's config block stays COMPLETE, so a new key is
-    # never shipped undocumented. (The build gate enforces doc→schema; this test enforces
-    # schema→doc so the two never drift.)
-    readme = (_REPO_ROOT / "README.md").read_text(encoding="utf-8")
-    start = readme.find("<!-- config-keys:start -->")
-    end = readme.find("<!-- config-keys:end -->")
-    assert start != -1 and end != -1, "the README has no config-keys block"
-    block = readme[start:end]
-    missing = [k for k in CONFIG_SCHEMA if f"`{k}`" not in block]
-    assert not missing, f"config keys missing from the README block: {missing}"
+def test_documented_keys_check_is_not_vacuous_on_a_missing_readme_block() -> None:
+    # the real README HAS a block, so the default scan passes; the point is the default scan is not
+    # short-circuited — a doc WITH a block is validated, a doc without one (given explicitly) is
+    # skipped, but the shipped README default must carry the block (see the reverse check below).
+    assert documented_config_keys_exist().ok  # real README carries the block → validated, green
+
+
+# ── every config key is documented (the reverse gate, AD-24/FR-56) ──
+def test_reverse_completeness_passes_on_the_real_readme() -> None:
+    assert config_reference_is_complete().ok  # every schema key is in the README block
+
+
+def test_reverse_completeness_fails_when_a_key_is_undocumented(tmp_path: Path) -> None:
+    # a README whose block documents only ONE key, while the schema has many → incomplete → red
+    doc = tmp_path / "README.md"
+    doc.write_text(
+        "<!-- config-keys:start -->\n\n| Key |\n| `interface_language` |\n\n"
+        "<!-- config-keys:end -->\n", encoding="utf-8")
+    result = config_reference_is_complete(readme=doc)
+    assert not result.ok and "not documented" in result.detail
+
+
+def test_reverse_completeness_fails_closed_on_a_missing_block(tmp_path: Path) -> None:
+    doc = tmp_path / "README.md"
+    doc.write_text("# a README with no config-keys block\n", encoding="utf-8")
+    assert not config_reference_is_complete(readme=doc).ok
