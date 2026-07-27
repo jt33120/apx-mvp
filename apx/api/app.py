@@ -12,6 +12,7 @@ audit trail is the session user. No fixtures, no demo override (FR-33).
 from __future__ import annotations
 
 import os
+import shutil
 import tempfile
 import threading
 import time
@@ -42,7 +43,9 @@ from apx.api.logging import install_secret_redaction
 from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.triage import triage_pieces
+from apx.core.domain import capacity
 from apx.core.domain.config import ConfigError, default_of
+from apx.core.domain.head_journal import open_journal
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
 from apx.core.projection import project_all
@@ -57,6 +60,12 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     Also install log redaction (AD-47) so a configured secret can never reach a log line."""
     startup_gate()
     install_secret_redaction()
+    store = _store()
+    if store is not None:
+        # AD-35: reconcile the live head against the journal at boot (a live head behind the journal
+        # is a restore-truncation), then advance the journal to the current live head.
+        store.reconcile_heads()
+        store.record_current_heads()
     yield
 
 
@@ -140,10 +149,13 @@ async def _security_headers(request: Request, call_next):  # noqa: ANN001, ANN20
 
 @lru_cache(maxsize=1)
 def _store() -> SqlStore | None:
-    """The durable store, built from DATABASE_URL. None when unset — the stateless
-    ingest computation still runs, but persistence, read-back and auth need it."""
+    """The durable store, built from DATABASE_URL, wired to the head journal (AD-35) so every
+    audited write records its chain head outside the restorable store. None when DATABASE_URL is
+    unset — the stateless ingest computation still runs, but persistence, read-back and auth need
+    it. The journal's presence is enforced at start-up (the gate); here it is opened best-effort."""
     try:
-        return SqlStore(make_session_factory())
+        journal = open_journal(dict(os.environ), required=False)
+        return SqlStore(make_session_factory(), head_journal=journal)
     except RuntimeError:
         return None
 
@@ -737,12 +749,88 @@ def admin_diagnostics(ident: Identity = Depends(require_admin)) -> list[Projecti
     ]
 
 
+# ── backup / restore / disaster recovery status (AD-32/AD-35) ──
+class BackupStatusOut(BaseModel):
+    last_success_at: str | None
+    overdue: bool
+    interval_hours: int
+
+
+class TruncationStatusOut(BaseModel):
+    active: bool
+    journal_seq: int
+    live_seq: int
+    detected_at: str | None
+    cleared_at: str | None
+
+
+class FootprintOut(BaseModel):
+    piece_count: int
+    total_bytes: int
+    human: str
+
+
+class DrStatusOut(BaseModel):
+    backup: BackupStatusOut
+    truncation: TruncationStatusOut
+    design_target_footprint: FootprintOut
+
+
+@app.get("/api/admin/dr", response_model=DrStatusOut)
+def admin_dr_status(ident: Identity = Depends(require_admin)) -> DrStatusOut:
+    """The tenant's disaster-recovery status (admin only): whether a backup is overdue (AD-32),
+    whether a restore-truncation is active and un-acknowledged (AD-35), and the stated storage
+    footprint at the design target (AD-32). The worklist/home-screen rendering is the front-end."""
+    store = _require_store()
+    interval = int(store.get_config(ident.tenant, "backup_interval_hours"))
+    bs = store.backup_status(ident.tenant, interval)
+    ts = store.truncation_status(ident.tenant)
+    fp = capacity.design_target_footprint()
+    return DrStatusOut(
+        backup=BackupStatusOut(
+            last_success_at=bs.last_success_at, overdue=bs.overdue,
+            interval_hours=bs.interval_hours),
+        truncation=TruncationStatusOut(
+            active=ts.active, journal_seq=ts.journal_seq, live_seq=ts.live_seq,
+            detected_at=ts.detected_at, cleared_at=ts.cleared_at),
+        design_target_footprint=FootprintOut(
+            piece_count=fp.piece_count, total_bytes=fp.total_bytes, human=fp.human))
+
+
+class TruncationOverrideIn(BaseModel):
+    reason: str
+
+
+@app.post("/api/admin/dr/truncation/clear")
+def admin_clear_truncation(
+    req: TruncationOverrideIn, ident: Identity = Depends(require_admin)
+) -> dict[str, str]:
+    """Acknowledge (override) an active restore-truncation with a reason (admin only, AD-35/AD-25).
+    A truncation is never repaired — it is cleared only by this recorded, audited override. 400 if
+    the reason is empty or there is no active truncation."""
+    store = _require_store()
+    try:
+        store.clear_truncation(ident.tenant, ident.actor, req.reason)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"status": "cleared"}
+
+
+def _capacity_preflight(projected_pieces: int) -> None:
+    """Refuse an import projected not to fit the free space, at submission, not at 70 % (AD-32)."""
+    free = shutil.disk_usage(tempfile.gettempdir()).free
+    verdict = capacity.fits(free, projected_pieces)
+    if not verdict.fits:
+        raise HTTPException(status_code=507, detail=verdict.reason)  # 507 Insufficient Storage
+
+
 @app.post("/api/ingest", response_model=IngestResponse)
 def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> IngestResponse:
     wall = _held_wall(req.scope, ident)
     folder = Path(req.folder)
     if not folder.is_dir():
         raise HTTPException(status_code=400, detail=f"not a folder: {req.folder}")
+    _capacity_preflight(sum(1 for p in folder.rglob("*") if p.is_file()))  # refuse if it won't fit
     result = ingest_folder(
         folder, matter=req.matter, tenant=ident.tenant,
         extractor=_extractor(), custodian=req.custodian, expander=_expander(),

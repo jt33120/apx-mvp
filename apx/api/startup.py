@@ -26,6 +26,7 @@ import os
 from collections.abc import Mapping
 
 from apx.core.domain.crypto import MissingEncryptionKey, load_key_from_env
+from apx.core.domain.head_journal import HeadJournalUnavailable, open_journal
 
 _VOLUME_ENV = "APX_VOLUME_ENCRYPTED"
 _TRUTHY = ("1", "true", "yes")
@@ -54,8 +55,12 @@ def startup_gate(env: Mapping[str, str] | None = None) -> None:
             f"data volume is not attested as encrypted (set {_VOLUME_ENV}=1, backed by "
             "dm-crypt/LUKS or a provider-managed encrypted volume)"
         )
+    try:
+        open_journal(dict(source), required=True)  # the head journal, outside the store (AD-35)
+    except HeadJournalUnavailable as exc:
+        problems.append(f"head journal: {exc}")
     if problems:
         raise StartupRefused(
-            "APX refuses to start — encryption is not fully in place (AD-31): "
+            "APX refuses to start — a durability precondition is not in place (AD-31/AD-35): "
             + "; ".join(problems)
         )

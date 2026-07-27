@@ -278,6 +278,40 @@ class TenantSetting(Base):
     value: Mapped[str] = mapped_column(Text, nullable=False)
 
 
+class BackupRecord(Base):
+    """A recorded backup run per tenant (story 1.11, AD-32): outcome + when + size, so "no
+    successful backup within the interval" is answerable and the worklist can render it."""
+
+    __tablename__ = "backup_record"
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    outcome: Mapped[str] = mapped_column(String, nullable=False)   # success | failure (categorical)
+    # a failure diagnostic may name a path → content-bearing, application-encrypted (AD-31)
+    detail: Mapped[str | None] = mapped_column(EncryptedText("backup_record.detail"), nullable=True)
+    byte_size: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class TruncationMarker(Base):
+    """A detected restore-truncation (story 1.11, AD-35): the live chain head fell BEHIND the head
+    journal — the record now ends earlier than it did. Persistent and **never repaired**; cleared
+    only by an audited override with a reason. One row per tenant (the latest detection)."""
+
+    __tablename__ = "truncation_marker"
+
+    tenant: Mapped[str] = mapped_column(String, primary_key=True)
+    detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    journal_seq: Mapped[int] = mapped_column(Integer, nullable=False)   # where the record was
+    live_seq: Mapped[int] = mapped_column(Integer, nullable=False)      # where it ends now
+    # the override actor (PII) and reason → application-encrypted (AD-31); NULL until cleared
+    cleared_by: Mapped[str | None] = mapped_column(
+        EncryptedText("truncation_marker.cleared_by"), nullable=True)
+    reason: Mapped[str | None] = mapped_column(
+        EncryptedText("truncation_marker.reason"), nullable=True)
+    cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
 class RecallReview(Base):
     """A recorded recall check on a matter's discard pile (the FR-… guarantee). A
     sample of the discards was reviewed; this stores the finite-population upper

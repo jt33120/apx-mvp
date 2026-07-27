@@ -4,16 +4,15 @@ Mass-document triage for law firms. Hexagonal core, adapters at the edges, **one
 stateful service** (PostgreSQL). Runs the same one artefact hosted, in CI, and
 air-gapped inside a firm (AD-3).
 
-> **Status: story 1.10 — the content-free projection primitive.** The frozen payload schema (1.3),
-> the *tenant* wall (1.4), owned auth — Argon2id + opaque server-side sessions, lockout-in-audit,
-> MFA (1.5) — privileged, audited, reversible scope administration (1.6), application-layer
-> encryption at rest with a fail-closed start-up gate (1.7), secrets held only in the environment —
-> rotatable in place, scrubbed from logs (1.8), per-*tenant* behaviour as data rows edited through
-> one audited surface with a *tenant* provisioned through it (1.9), and now **one mechanism for
-> emitting information *about* a *tenant*'s data without emitting the data** — a registry of named
-> projectors whose content-freedom is a build-checked structural property (1.10) — exist; ingestion,
-> retrieval and the model tiers do not yet. What is deliberately absent, and which story owns it, is
-> listed at the bottom.
+> **Status: story 1.11 — backup, restore & disaster recovery.** The frozen payload schema (1.3),
+> the *tenant* wall (1.4), owned auth (1.5), scope administration (1.6), encryption at rest with a
+> fail-closed start-up gate (1.7), secrets held only in the environment (1.8), configuration-as-data
+> through one audited surface (1.9), the content-free projection primitive (1.10), and now **a head
+> journal held outside the restorable store** so a dump restore can no longer silently truncate the
+> evidential record, a **complete tenant-boundary backup + an exercised restore**, and a **stated
+> storage footprint with a pre-flight capacity refusal** (1.11) — exist; ingestion, retrieval and the
+> model tiers do not yet. What is deliberately absent, and which story owns it, is listed at the
+> bottom.
 
 Planning artefacts (PRD, architecture spine, epics, stories) live under
 `_bmad-output/planning-artifacts/`. The previous implementation at
@@ -280,6 +279,7 @@ The configuration keys (each editable as data, no redeploy):
 | `model_endpoint` | str | Mistral EU | the OpenAI-compatible inference endpoint (AD-27) — honoured live by the judge |
 | `model_name` | str | `mistral-small-latest` | the model the endpoint serves (AD-27) |
 | `chunking_config_version` | str | `v1` | the chunking configuration identity (AD-9/AD-40) |
+| `backup_interval_hours` | int | `24` | the interval before a tenant with no successful backup is flagged overdue (AD-32) |
 | `configured_sources` | list | `[]` | the enumerated data sources a corpus may be drawn from (AD-16) |
 | `exclusion_list` | list | `[]` | filename/path patterns excluded from ingestion |
 | `taxonomy` | list | `[]` | the tenant's classification taxonomy (seeded at provisioning) |
@@ -322,6 +322,38 @@ unit would be dropped under pressure, so dropping it must not drop the egress gu
 diagnostic **export** (packaging, the push act as a named egress) is story 6.2; the style extractor
 is the next increment; the cockpit is the front-end (AD-29).
 
+## Backup, restore & disaster recovery (AD-32/AD-35)
+
+A dump restore is the one blessed operation that can hard-delete the evidential record — and a
+truncation to an earlier *consistent* point is **undetectable from inside the database** (every
+chain link still verifies). So the chain **head** — scope, sequence, chain value, wall-clock, app &
+schema versions — is recorded in a **head journal held OUTSIDE the restorable store**
+(`APX_HEAD_JOURNAL`, on a volume the dump does not cover), appended as it advances on every audited
+write. A **missing or unwritable** journal **fails start-up**, on the same gate as the encryption
+key. On start-up and after a restore the live head is **reconciled** against the journal: a live
+head **behind** the journal is a **truncation** — surfaced (`GET /api/admin/dr`), named on every
+future export, cleared only by a recorded, audited **override** with a reason, and **never
+repaired**.
+
+**Backup is logical and per-tenant** (inside the *tenant* boundary): it captures the tenant's
+*pièces*, *failure register*, *audit record*, configuration, users and scopes — content-bearing
+columns stay **ciphertext** (encrypted at rest, no re-encryption). Restore is **exercised, not
+assumed**: a restore into an **empty** store reproduces the tenant's inventory (the *denominator*),
+its audit sequence and its configuration **identically**, the chain **re-verifies**, and the head
+**reconciles**. On demand:
+
+```
+python -m apx.manage backup  --tenant cabinet --out /backups/cabinet.json
+python -m apx.manage restore --from /backups/cabinet.json     # into an empty store; head reconciled
+```
+
+The product **states** a tenant's storage footprint at the *design target* (100 000 *pièces*) and a
+**pre-flight capacity check refuses** an *import job* projected not to fit — at submission (`507`),
+not at 70 %. A tenant with **no successful backup within `backup_interval_hours`** reports itself
+**overdue** (`GET /api/admin/dr`). The physical `pg_dump`/`pg_restore`/`upgrade.sh` wrappers + the
+cron schedule are deploy artifacts (AD-46); the *worklist*/home-screen rendering is the front-end
+(AD-29); 1.11 builds and **tests** the mechanism they wrap.
+
 ## What does NOT belong in this repo yet
 
 Scaffolding only. Each item below has an owning story; building it here is a
@@ -335,7 +367,7 @@ scope violation.
 | Visual settings / provisioning SPA (the mechanism exists; the UI is deferred) | front-end (AD-29) |
 | Diagnostic export packaging + the push act (the projection primitive exists; 1.10) | 6.2 |
 | Style extractor (the projection primitive's next consumer) | next increment |
-| Backup, restore, `upgrade.sh`, cosign packaging | 1.11 / deploy |
+| Physical `pg_dump`/`pg_restore`/`upgrade.sh` wrappers + cron (the 1.11 mechanism exists) | deploy (AD-46) |
 | Embedder, extraction, OCR, LLM client, ML weights | Epic 2 |
 | Structural checks beyond the layering rule | 1.12 |
 | Offline-fitness CI job (network-isolated, end-to-end) | 1.2 |

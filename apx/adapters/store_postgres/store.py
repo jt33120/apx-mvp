@@ -18,17 +18,18 @@ import json
 import random
 import secrets
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import Text, cast, delete, func, or_, select
+from sqlalchemy import Text, cast, delete, event, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.models import (
     AuditRecord,
+    BackupRecord,
     Failure,
     LabelRecord,
     MatterScope,
@@ -36,6 +37,7 @@ from apx.adapters.store_postgres.models import (
     RecallReview,
     SessionRecord,
     TenantSetting,
+    TruncationMarker,
     User,
     UserScope,
 )
@@ -52,6 +54,7 @@ from apx.core.domain.config import (
 )
 from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.dedup import cluster
+from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.search import snippet
 from apx.core.domain.triage import TriageOutcome
@@ -60,6 +63,16 @@ from apx.core.projection import Snapshot
 # A valid hash to verify against when the user is unknown, so authentication takes the
 # same time whether or not the email exists (no user-enumeration by timing).
 _DUMMY_HASH = hash_password("timing-equalizer")
+
+_APP_VERSION = "0.1.0"           # the application version stamped on a head-journal entry (AD-35)
+_HEAD_SCHEMA_VERSION = "slice-a"  # the payload schema version (AD-40) stamped on the head
+# The tenant-owned tables a logical backup captures (each has a `tenant` column). `user_scope` is
+# keyed by user_id (tenant-bound via the user) and is handled specially in backup/restore.
+_BACKUP_TABLES = (
+    "matter_scope", "user_account", "session", "tenant_setting",
+    "piece", "chunk", "failure", "piece_label", "audit_record", "recall_review",
+    "backup_record", "truncation_marker",
+)
 
 
 class ScopeDenied(Exception):
@@ -104,6 +117,43 @@ class ConfigProvenance:
     key: str
     value: object
     audited: bool
+
+
+@dataclass(frozen=True)
+class TenantBackup:
+    """A complete, tenant-boundary logical backup (AD-32). ``tables`` holds each tenant-owned
+    table's rows as raw values — content-bearing columns stay CIPHERTEXT (read raw, restored raw),
+    so the backup is encrypted at rest without re-encryption. ``head_tail`` copies the tenant's
+    head-journal entries onto the backup (AD-35: a copy on every backup target)."""
+
+    tenant: str
+    schema_version: str
+    tables: dict[str, list[dict]]
+    user_scopes: list[dict]
+    head_tail: list[dict]
+
+
+@dataclass(frozen=True)
+class BackupStatus:
+    """Whether a tenant has a recent successful backup (AD-32)."""
+
+    tenant: str
+    last_success_at: str | None
+    overdue: bool
+    interval_hours: int
+
+
+@dataclass(frozen=True)
+class TruncationStatus:
+    """A detected restore-truncation, or its absence (AD-35). ``active`` is True while un-cleared —
+    named on the face of every export until an audited override clears it; never repaired."""
+
+    tenant: str
+    active: bool
+    journal_seq: int
+    live_seq: int
+    detected_at: str | None
+    cleared_at: str | None
 
 
 @dataclass(frozen=True)
@@ -321,8 +371,45 @@ def _safe_decrypt(ciphertext: str | None, context: str) -> str | None:
 
 
 class SqlStore:
-    def __init__(self, session_factory: sessionmaker[Session]) -> None:
+    def __init__(
+        self, session_factory: sessionmaker[Session], head_journal: HeadJournal | None = None
+    ) -> None:
         self._sf = session_factory
+        self._journal = head_journal
+        self.journal_degraded = False  # set if a post-commit head write failed (surfaced, AC5)
+        if head_journal is not None:
+            # Record each new chain head to the journal AS IT ADVANCES (AD-35 "on every append").
+            # Capture the pending heads during flush; write them AFTER commit — a file append is
+            # not transactional, so journaling after commit avoids a journal entry ahead of a
+            # rolled-back write (which would false-positive a truncation). A post-commit write
+            # failure is surfaced as degraded, never silent (AC5).
+            event.listen(session_factory, "before_flush", self._capture_heads)
+            event.listen(session_factory, "after_commit", self._write_heads)
+
+    def _capture_heads(self, session: Session, _ctx: object, _instances: object) -> None:
+        pending = [
+            (obj.tenant, obj.seq, obj.chain)
+            for obj in session.new if isinstance(obj, AuditRecord)
+        ]
+        if pending:
+            prior = session.info.get("_apx_heads", [])
+            session.info["_apx_heads"] = prior + pending
+
+    def _write_heads(self, session: Session) -> None:
+        heads = session.info.pop("_apx_heads", None)
+        if not heads or self._journal is None:
+            return
+        highest: dict[str, tuple[int, str]] = {}
+        for tenant, seq, chain in heads:  # keep the highest seq per tenant from this commit
+            if tenant not in highest or seq > highest[tenant][0]:
+                highest[tenant] = (seq, chain)
+        now = _audit_ts(datetime.now(UTC))
+        for tenant, (seq, chain) in highest.items():
+            try:
+                self._journal.record(HeadEntry(
+                    tenant, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
+            except OSError:
+                self.journal_degraded = True  # surfaced (a monitored condition), never silent
 
     def _append_audit(self, session: Session, tenant: str, matter: str | None,
                       actor: str, action: str, detail: str, ts: datetime) -> None:
@@ -856,6 +943,175 @@ class SqlStore:
             piece_count=piece_count, failure_count=failure_count, matter_count=matter_count,
             error_class_histogram=histogram, schema_versions=schema_versions,
             extractor_versions=extractor_versions)
+
+    # ── the chain head, recorded outside the restorable store, and reconciled (AD-35) ──
+
+    def _audit_heads(self, session: Session) -> dict[str, tuple[int, str]]:
+        """Each tenant's live chain head — (max seq, its chain value)."""
+        maxes = session.execute(
+            select(AuditRecord.tenant, func.max(AuditRecord.seq)).group_by(AuditRecord.tenant)
+        ).all()
+        heads: dict[str, tuple[int, str]] = {}
+        for tenant, max_seq in maxes:
+            chain = session.scalar(
+                select(AuditRecord.chain).where(
+                    AuditRecord.tenant == tenant, AuditRecord.seq == max_seq))
+            heads[tenant] = (int(max_seq), chain or "")
+        return heads
+
+    def audit_heads(self) -> dict[str, tuple[int, str]]:
+        with self._sf() as session:
+            return self._audit_heads(session)
+
+    def record_current_heads(self, journal: HeadJournal | None = None) -> int:
+        """Record every tenant's current live head to the journal (called at start-up and after a
+        backup). Returns how many heads were recorded."""
+        j = journal or self._journal
+        if j is None:
+            return 0
+        now = _audit_ts(datetime.now(UTC))
+        count = 0
+        for tenant, (seq, chain) in self.audit_heads().items():
+            j.record(HeadEntry(tenant, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
+            count += 1
+        return count
+
+    def reconcile_heads(self, journal: HeadJournal | None = None) -> list[Reconciliation]:
+        """Reconcile every scope's live head against the journal (AD-35). A live head BEHIND the
+        journal is a truncation — recorded as a persistent marker (named on exports, cleared only by
+        an audited override). Called on start-up and after a restore."""
+        j = journal or self._journal
+        if j is None:
+            return []
+        heads = self.audit_heads()
+        scopes = set(heads) | set(j.all_latest())
+        out: list[Reconciliation] = []
+        for scope in sorted(scopes):
+            rec = j.reconcile(scope, heads.get(scope, (0, ""))[0])
+            out.append(rec)
+            if rec.truncated:
+                self._record_truncation(scope, rec)
+        return out
+
+    def _record_truncation(self, tenant: str, rec: Reconciliation) -> None:
+        now = datetime.now(UTC)
+        with self._sf() as session, session.begin():
+            existing = session.get(TruncationMarker, tenant)
+            if existing is not None and existing.cleared_at is not None and (
+                    rec.journal_seq <= existing.journal_seq and rec.live_seq >= existing.live_seq):
+                return  # an acknowledged truncation of the same or lesser depth stays cleared
+            session.merge(TruncationMarker(
+                tenant=tenant, detected_at=now, journal_seq=rec.journal_seq,
+                live_seq=rec.live_seq, cleared_by=None, reason=None, cleared_at=None))
+
+    def truncation_status(self, tenant: str) -> TruncationStatus:
+        """A tenant's truncation status — active while un-cleared (named on every export, AD-35)."""
+        with self._sf() as session:
+            m = session.get(TruncationMarker, tenant)
+        if m is None:
+            return TruncationStatus(tenant, False, 0, 0, None, None)
+        return TruncationStatus(
+            tenant, active=m.cleared_at is None, journal_seq=m.journal_seq, live_seq=m.live_seq,
+            detected_at=m.detected_at.isoformat(),
+            cleared_at=m.cleared_at.isoformat() if m.cleared_at is not None else None)
+
+    def clear_truncation(self, tenant: str, actor: str, reason: str) -> None:
+        """Clear an active truncation by an audited OVERRIDE with a reason (AD-35/AD-25) — the only
+        way it clears; it is never repaired. Refuses an empty reason and a no-op (none active)."""
+        if not reason.strip():
+            raise ValueError("a reason is required to override a truncation")
+
+        def _work(session: Session, now: datetime) -> None:
+            m = session.get(TruncationMarker, tenant)
+            if m is None or m.cleared_at is not None:
+                raise ValueError("no active truncation to clear")
+            m.cleared_by, m.reason, m.cleared_at = actor, reason, now
+            self._append_audit(
+                session, tenant, None, actor, "truncation_override",
+                f"journal_seq={m.journal_seq} live_seq={m.live_seq}", now)
+
+        self._audited_tx(_work)
+
+    # ── logical, tenant-boundary backup + an exercised restore (AD-32) ──
+
+    def backup_tenant(self, tenant: str) -> TenantBackup:
+        """A complete, tenant-boundary logical backup (AD-32). Rows are read RAW so content-bearing
+        columns stay ciphertext (encrypted at rest); the tenant's head-journal tail is copied on."""
+        with self._sf() as session:
+            conn = session.connection()
+            tables: dict[str, list[dict]] = {}
+            for tbl in _BACKUP_TABLES:
+                rows = conn.execute(
+                    text(f"SELECT * FROM {tbl} WHERE tenant = :t"), {"t": tenant}  # noqa: S608
+                ).mappings().all()
+                tables[tbl] = [dict(r) for r in rows]
+            uids = [
+                uid for (uid,) in conn.execute(
+                    text("SELECT id FROM user_account WHERE tenant = :t"), {"t": tenant}).all()
+            ]
+            scopes = [
+                {"user_id": r.user_id, "scope": r.scope}
+                for r in session.execute(
+                    select(UserScope).where(UserScope.user_id.in_(uids))).scalars().all()
+            ] if uids else []
+        head_tail: list[dict] = []
+        if self._journal is not None:
+            latest = self._journal.latest(tenant)
+            if latest is not None:
+                head_tail = [asdict(latest)]
+        return TenantBackup(tenant, _HEAD_SCHEMA_VERSION, tables, scopes, head_tail)
+
+    def restore_tenant(
+        self, backup: TenantBackup, journal: HeadJournal | None = None
+    ) -> list[Reconciliation]:
+        """Restore a tenant into an EMPTY store (AD-32) — refuses to overwrite an existing tenant.
+        Rows go back RAW (ciphertext preserved byte-for-byte). After the restore the head is
+        reconciled against the journal: a restore that moved the head backwards is a truncation."""
+        with self._sf() as session, session.begin():
+            conn = session.connection()
+            for tbl in _BACKUP_TABLES:
+                if conn.execute(
+                    text(f"SELECT 1 FROM {tbl} WHERE tenant = :t LIMIT 1"),  # noqa: S608
+                    {"t": backup.tenant},
+                ).first():
+                    raise ValueError(
+                        f"tenant {backup.tenant!r} already has {tbl} rows — restore is into an "
+                        "empty store (AD-32)")
+            for tbl in _BACKUP_TABLES:
+                for row in backup.tables.get(tbl, []):
+                    cols = list(row.keys())
+                    collist = ", ".join(cols)
+                    binds = ", ".join(f":{c}" for c in cols)
+                    conn.execute(
+                        text(f"INSERT INTO {tbl} ({collist}) VALUES ({binds})"), row)  # noqa: S608
+            for sc in backup.user_scopes:
+                conn.execute(
+                    text("INSERT INTO user_scope (user_id, scope) VALUES (:user_id, :scope)"), sc)
+        return self.reconcile_heads(journal)
+
+    # ── backup status: overdue is answerable (AD-32) ──
+
+    def record_backup(
+        self, tenant: str, outcome: str, *, byte_size: int = 0, detail: str | None = None
+    ) -> None:
+        """Record a backup run's outcome (success|failure) — so "no backup within the interval" is
+        answerable and the worklist can render it (AD-32)."""
+        with self._sf() as session, session.begin():
+            session.add(BackupRecord(
+                id=uuid4().hex, tenant=tenant, outcome=outcome, detail=detail,
+                byte_size=byte_size, created_at=datetime.now(UTC)))
+
+    def backup_status(self, tenant: str, interval_hours: int) -> BackupStatus:
+        """Whether the tenant has a successful backup within the configured interval (AD-32)."""
+        with self._sf() as session:
+            last = session.scalar(
+                select(func.max(BackupRecord.created_at)).where(
+                    BackupRecord.tenant == tenant, BackupRecord.outcome == "success"))
+        if last is None:
+            return BackupStatus(tenant, None, overdue=True, interval_hours=interval_hours)
+        last_utc = _as_utc(last)
+        overdue = (datetime.now(UTC) - last_utc) > timedelta(hours=interval_hours)
+        return BackupStatus(tenant, last_utc.isoformat(), overdue, interval_hours)
 
     def rekey_and_record(self, fingerprint: str, actor: str = "system:maintenance") -> int:
         """Rotate the key in place (AD-47): re-encrypt every application-encrypted value under

@@ -41,6 +41,8 @@ OWNED_TABLES = frozenset({
     "user_account",
     "session",
     "tenant_setting",
+    "backup_record",
+    "truncation_marker",
 })
 
 

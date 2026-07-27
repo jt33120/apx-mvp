@@ -27,3 +27,18 @@ def _encryption_provisioned() -> None:
     # A fresh key per test run — never a committed constant (the static check forbids that).
     os.environ.setdefault("APX_ENCRYPTION_KEY", generate_key())
     os.environ.setdefault("APX_VOLUME_ENCRYPTED", "1")
+
+
+@pytest.fixture(autouse=True)
+def _fresh_head_journal(tmp_path) -> None:  # noqa: ANN001
+    # A throwaway head journal (story 1.11, AD-35) so the start-up gate passes under TestClient —
+    # PER TEST, so heads recorded by one test's app boot never make a later test's fresh-DB tenant
+    # look truncated (the journal is deliberately outside the DB and would otherwise persist). Tests
+    # that exercise the journal directly use their own path.
+    prior = os.environ.get("APX_HEAD_JOURNAL")
+    os.environ["APX_HEAD_JOURNAL"] = str(tmp_path / "heads.journal")
+    yield
+    if prior is None:
+        os.environ.pop("APX_HEAD_JOURNAL", None)
+    else:
+        os.environ["APX_HEAD_JOURNAL"] = prior

@@ -17,13 +17,24 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import json
 import os
 from collections.abc import Sequence
+from datetime import datetime
+from pathlib import Path
 
 from sqlalchemy.exc import IntegrityError
 
 from apx.adapters.store_postgres.engine import make_session_factory
-from apx.adapters.store_postgres.store import SqlStore, TenantAlreadyProvisioned
+from apx.adapters.store_postgres.store import SqlStore, TenantAlreadyProvisioned, TenantBackup
+from apx.core.domain.head_journal import open_journal
+
+
+def _open_store() -> SqlStore:
+    """The store wired to the head journal (AD-35) — so a manage command's audited writes and a
+    restore both reconcile the chain head outside the restorable store."""
+    journal = open_journal(dict(os.environ), required=False)
+    return SqlStore(make_session_factory(), head_journal=journal)
 
 
 def _create_user(store: SqlStore, args: argparse.Namespace, password: str) -> str:
@@ -68,6 +79,46 @@ def rekey(store: SqlStore) -> str:
             f"rotation recorded for {len(firms)} tenant(s)")
 
 
+def _json_default(o: object) -> object:
+    if isinstance(o, datetime):
+        return {"$dt": o.isoformat()}
+    raise TypeError(f"not serialisable: {type(o).__name__}")
+
+
+def _revive(d: dict) -> object:
+    if len(d) == 1 and "$dt" in d:
+        return datetime.fromisoformat(d["$dt"])
+    return d
+
+
+def backup(store: SqlStore, tenant: str, out_path: str) -> str:
+    """On-demand logical backup of a tenant to a file (AD-32) — content stays ciphertext (encrypted
+    at rest); the outcome is recorded so 'no backup within the interval' is answerable."""
+    b = store.backup_tenant(tenant)
+    payload = {"tenant": b.tenant, "schema_version": b.schema_version, "tables": b.tables,
+               "user_scopes": b.user_scopes, "head_tail": b.head_tail}
+    data = json.dumps(payload, default=_json_default, ensure_ascii=False)
+    Path(out_path).write_text(data, encoding="utf-8")
+    size = len(data.encode("utf-8"))
+    store.record_backup(tenant, "success", byte_size=size)
+    return f"backup : tenant={tenant} → {out_path} ({size} octets)"
+
+
+def restore(store: SqlStore, in_path: str) -> str:
+    """Restore a tenant from a backup file into an EMPTY store (AD-32); reconciles the head — a
+    restore that moved the head backwards is a truncation, named here (AD-35)."""
+    payload = json.loads(Path(in_path).read_text(encoding="utf-8"), object_hook=_revive)
+    b = TenantBackup(payload["tenant"], payload["schema_version"], payload["tables"],
+                     payload["user_scopes"], payload["head_tail"])
+    recs = store.restore_tenant(b)
+    truncated = [r.scope for r in recs if r.truncated]
+    msg = f"restore : tenant={b.tenant} restauré depuis {in_path}"
+    if truncated:
+        msg += (f" — ATTENTION : troncature détectée pour {truncated} (la tête vive est en deçà "
+                "du journal ; acquitter via l'override DR)")
+    return msg
+
+
 def _provision(store: SqlStore, args: argparse.Namespace, password: str) -> str:
     return store.provision_tenant(
         args.tenant, args.admin_email, password, args.admin_name,
@@ -93,6 +144,11 @@ def build_parser() -> argparse.ArgumentParser:
     create.add_argument("--scope", action="append", default=[], help="repeatable")
     sub.add_parser("ensure-admin", help="idempotent first-admin bootstrap from the environment")
     sub.add_parser("rekey", help="rotate the encryption key in place (re-encrypt + audit)")
+    bk = sub.add_parser("backup", help="on-demand logical backup of a tenant to a file (AD-32)")
+    bk.add_argument("--tenant", required=True)
+    bk.add_argument("--out", required=True, help="destination file (encrypted content at rest)")
+    rs = sub.add_parser("restore", help="restore a tenant from a backup file into an empty store")
+    rs.add_argument("--from", dest="src", required=True, help="the backup file")
     return parser
 
 
@@ -122,9 +178,13 @@ def main(argv: Sequence[str] | None = None) -> None:
         scopes = sorted(args.scope or [])
         print(f"créé : {uid} · {args.email} · admin={args.admin} · scopes={scopes}")
     elif args.cmd == "ensure-admin":
-        print(ensure_admin(SqlStore(make_session_factory())))
+        print(ensure_admin(_open_store()))
     elif args.cmd == "rekey":
-        print(rekey(SqlStore(make_session_factory())))
+        print(rekey(_open_store()))
+    elif args.cmd == "backup":
+        print(backup(_open_store(), args.tenant, args.out))
+    elif args.cmd == "restore":
+        print(restore(_open_store(), args.src))
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@ _PLAINTEXT_ALLOWLIST = {
     "content_hash", "text_key", "text_identity",
     "extraction_method", "extractor_version", "schema_version", "text_version",
     "full_text_version", "chunking_config_version", "piece_date_status", "external_ref",
-    "error_class", "resolution_state", "action", "chain", "label", "judge",
+    "error_class", "resolution_state", "action", "chain", "label", "judge", "outcome",
     "email", "password_hash", "display_name",
     "full_text",  # the AD-31 exempt deterministic text index (also asserted un-encrypted below)
 }
@@ -159,10 +159,18 @@ def _gate_behaves_fail_closed() -> str | None:
     missing-key and a missing-volume env. Returns an error string on the first failure, else
     None. This is the ungameable leg — a warn-and-continue gate fails here even if it carries an
     unrelated ``raise`` that satisfies the AST leg."""
+    import tempfile
+
     from apx.api.startup import StartupRefused, startup_gate
     from apx.core.domain.crypto import generate_key
 
-    good = {"APX_ENCRYPTION_KEY": generate_key(), "APX_VOLUME_ENCRYPTED": "1"}
+    # a fully-provisioned env carries all three durability preconditions the gate now enforces:
+    # the encryption key, the volume attestation (AD-31), and a writable head journal (AD-35).
+    journal = f"{tempfile.mkdtemp(prefix='apx-gate-')}/heads.journal"
+    good = {
+        "APX_ENCRYPTION_KEY": generate_key(), "APX_VOLUME_ENCRYPTED": "1",
+        "APX_HEAD_JOURNAL": journal,
+    }
     try:
         startup_gate(good)
     except Exception as exc:  # noqa: BLE001 — any refusal of a good env is a failure

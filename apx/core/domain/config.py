@@ -147,6 +147,12 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         affects_retrieval=True,
     ),
     ConfigKey(
+        "backup_interval_hours", "int", 24,
+        governs="the interval within which a backup must succeed before the tenant is flagged "
+                "overdue (AD-32)",
+        valid=lambda v: 1 <= v <= 8760,  # 1 hour … 1 year — a real cadence, never nonsensical
+    ),
+    ConfigKey(
         "configured_sources", "str_list", [],
         governs="the enumerated data sources a corpus may be drawn from (AD-16)",
     ),
