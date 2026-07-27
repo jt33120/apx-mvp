@@ -166,3 +166,53 @@ def test_search_empty_query_returns_nothing(tmp_path: Path, store: SqlStore) -> 
     (tmp_path / "a.txt").write_text("un texte", encoding="utf-8")
     store.save(_ingest(tmp_path, "m"), scope="wall-1")
     assert store.search("t", {"wall-1"}, "   ").total == 0
+
+
+# ── Story 2.1: the persist boundary — the empty-scope guard, the 0/0 matter, the case theory ──
+
+def test_save_fails_closed_on_an_empty_scope(tmp_path: Path, store: SqlStore) -> None:
+    # AC6: a null/empty/whitespace scope raises at the persist boundary and writes nothing —
+    # no code path may default to permissive (defence in depth beneath the API's _held_wall).
+    from sqlalchemy import func, select
+
+    from apx.adapters.store_postgres.chunk_writer import UnauthorizedScope
+    from apx.adapters.store_postgres.models import MatterScope, Piece
+    _matter(tmp_path)
+    r = _ingest(tmp_path, "m")
+    for bad in ("", "   "):
+        with pytest.raises(UnauthorizedScope):
+            store.save(r, scope=bad, matter="m", tenant="t")
+    with store._sf() as s:
+        assert s.scalar(select(func.count()).select_from(Piece)) == 0
+        assert s.scalar(select(func.count()).select_from(MatterScope)) == 0
+
+
+def test_a_zero_piece_result_still_creates_a_durable_matter(store: SqlStore) -> None:
+    # AC5: an empty result + explicit matter/tenant creates the matter at a consistent 0/0
+    # inventory (the folder of zero readable files — a completed job, never a silent no-op).
+    from apx.core.app.ingest import IngestionResult
+    out = store.save(IngestionResult(), scope="wall-1", matter="m", tenant="t")
+    assert out.pieces_written == 0 and out.failures_written == 0
+    inv = store.inventory("m", "t", {"wall-1"})   # does not raise -> the matter is durable
+    assert inv.submitted == 0 and inv.in_corpus == 0 and inv.failures == 0 and inv.is_consistent()
+
+
+def test_case_theory_is_persisted_and_a_skip_never_wipes_it(
+    tmp_path: Path, store: SqlStore
+) -> None:
+    # AC7: a provided case theory round-trips on the matter; a later skip (None) never wipes it;
+    # a first ingest without one leaves NULL. Versioning is Epic 4 — this is a single value.
+    from apx.adapters.store_postgres.models import MatterScope
+    _matter(tmp_path)
+    r = _ingest(tmp_path, "m")
+    store.save(r, scope="wall-1", matter="m", tenant="t", case_theory="contestation licenciement")
+    with store._sf() as s:
+        assert s.get(MatterScope, {"tenant": "t", "matter": "m"}).case_theory \
+            == "contestation licenciement"
+    store.save(r, scope="wall-1", matter="m", tenant="t")   # re-ingest, theory omitted
+    with store._sf() as s:
+        assert s.get(MatterScope, {"tenant": "t", "matter": "m"}).case_theory \
+            == "contestation licenciement"                  # not wiped by the skip
+    store.save(r, scope="wall-1", matter="m2", tenant="t")  # a fresh matter, no theory
+    with store._sf() as s:
+        assert s.get(MatterScope, {"tenant": "t", "matter": "m2"}).case_theory is None

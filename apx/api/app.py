@@ -258,6 +258,7 @@ class IngestRequest(BaseModel):
     matter: str
     scope: str  # which wall to file the matter under — must be one you hold
     custodian: str = "custodian-undeclared"
+    case_theory: str | None = None  # optional (FR-37): the lawyer's own words, or skipped
 
 
 class FailureOut(BaseModel):
@@ -390,14 +391,24 @@ def _inventory_out(inv) -> InventoryOut:  # noqa: ANN001
     )
 
 
-def _persist(result: IngestionResult, scope: str, actor: str) -> bool:
+def _persist(
+    result: IngestionResult,
+    scope: str,
+    actor: str,
+    *,
+    matter: str,
+    tenant: str,
+    case_theory: str | None = None,
+) -> bool:
     """Persist under the given Chinese-wall scope, if a database is configured.
-    The ingestion is recorded in the audit trail, atomically, under `actor`."""
+    The ingestion is recorded in the audit trail, atomically, under `actor`. matter/tenant
+    are passed explicitly so a folder of zero readable files still creates a durable matter
+    at a 0/0 inventory (Story 2.1 AC5); an empty scope fails closed at the store (AC6)."""
     store = _store()
     if store is None:
         return False
     try:
-        store.save(result, scope, actor)
+        store.save(result, scope, actor, matter=matter, tenant=tenant, case_theory=case_theory)
     except ScopeConflict as exc:
         # a re-ingest may not move a matter's wall — that is the admin re-scope path (409)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
@@ -862,7 +873,11 @@ def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> I
         folder, matter=req.matter, tenant=ident.tenant,
         extractor=_extractor(), custodian=req.custodian, expander=_expander(),
     )
-    persisted = _persist(result, wall, ident.actor)
+    persisted = _persist(
+        result, wall, ident.actor,
+        matter=req.matter, tenant=ident.tenant,
+        case_theory=(req.case_theory or "").strip() or None,
+    )
     return IngestResponse(
         matter=req.matter,
         inventory=_inventory_out(result.inventory),
@@ -880,31 +895,45 @@ async def ingest_upload(
     request: Request,
     matter: str = Form(...),
     scope: str = Form(...),
-    files: list[UploadFile] = Form(...),
+    custodian: str = Form(""),
+    case_theory: str | None = Form(None),
+    files: list[UploadFile] | None = Form(None),
     ident: Identity = Depends(current_identity),
 ) -> IngestResponse:
-    """The browser path: a lawyer drops files (or a folder) and sees the inventory.
-    Uploaded files are written to a per-request temp directory — reconstructing the
-    submitted folder tree from each file's relative path — then ingested through the
-    same one path (FR-33). The temp dir is discarded; only the piece text (and
-    failures) persist to the store."""
+    """The browser path (the onboarding gesture, Story 2.1): a lawyer drops a folder and
+    names the matter, its wall and the custodian (mandatory) — the case theory is the one
+    optional field. Uploaded files are written to a per-request temp directory,
+    reconstructing the submitted folder tree from each file's relative path, then ingested
+    through the one path (FR-33). The temp dir is discarded; only the piece text (and
+    failures) persist. A folder of zero readable files is a completed 0/0 matter, not an
+    error (AC5); an empty custodian (AC3) or scope (AC6) fails the job loudly."""
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="dépôt trop volumineux")
     wall = _held_wall(scope, ident)
-    if not files:
-        raise HTTPException(status_code=400, detail="no files uploaded")
+    custodian = custodian.strip()
+    if not custodian:
+        raise HTTPException(
+            status_code=400,
+            detail="un détenteur est requis (« détenteur inconnu » si vraiment inconnu)",
+        )
+    theory = (case_theory or "").strip() or None
     with tempfile.TemporaryDirectory(prefix="apx-upload-") as tmp:
         root = Path(tmp)
-        for f in files:
+        for f in files or []:
             # The SPA sends the folder-relative path as the filename; rebuild the tree.
             rel = Path(f.filename or "unnamed").as_posix().lstrip("/")
             dest = root / rel
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(await f.read())
-        result = ingest_folder(root, matter=matter, tenant=ident.tenant,
-                               extractor=_extractor(), expander=_expander())
-    persisted = _persist(result, wall, ident.actor)
+        result = ingest_folder(
+            root, matter=matter, tenant=ident.tenant,
+            extractor=_extractor(), custodian=custodian, expander=_expander(),
+        )
+    persisted = _persist(
+        result, wall, ident.actor,
+        matter=matter, tenant=ident.tenant, case_theory=theory,
+    )
     return IngestResponse(
         matter=matter,
         inventory=_inventory_out(result.inventory),

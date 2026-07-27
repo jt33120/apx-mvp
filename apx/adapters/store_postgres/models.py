@@ -153,6 +153,13 @@ class MatterScope(Base):
     tenant: Mapped[str] = mapped_column(String, primary_key=True)
     matter: Mapped[str] = mapped_column(String, primary_key=True)
     scope: Mapped[str] = mapped_column(String, nullable=False)
+    # The optional case theory (FR-37): free text, in the lawyer's own language, stated at
+    # import or later. Confidential legal strategy, not a query key → encrypted at rest
+    # (AD-31), nullable when skipped. A single current value here; the versioned/audited/
+    # re-rankable model is Epic 4 (story 4.1), which supersedes this column.
+    case_theory: Mapped[str | None] = mapped_column(
+        EncryptedText("matter_scope.case_theory"), nullable=True
+    )
 
 
 class AuditRecord(Base):

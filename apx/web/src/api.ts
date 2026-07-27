@@ -95,11 +95,21 @@ export async function revokeScope(userId: string, scope: string): Promise<void> 
   if (!res.ok) throw new Error(await detail(res));
 }
 
-// A lawyer drops files (or a folder) and files the matter under one of their walls.
-export async function ingestUpload(files: FileList, matter: string, scope: string): Promise<IngestResponse> {
+// The onboarding gesture (Story 2.1): a lawyer picks a folder, names the matter, its wall
+// and the custodian (mandatory); the case theory is the one optional field. The scope must
+// be one the caller holds; the server rejects anything else.
+export async function ingestUpload(
+  files: FileList,
+  matter: string,
+  scope: string,
+  custodian: string,
+  caseTheory?: string,
+): Promise<IngestResponse> {
   const form = new FormData();
   form.append("matter", matter);
   form.append("scope", scope);
+  form.append("custodian", custodian);
+  if (caseTheory && caseTheory.trim()) form.append("case_theory", caseTheory.trim());
   for (const file of Array.from(files)) {
     const rel = (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name;
     form.append("files", file, rel);

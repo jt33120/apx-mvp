@@ -106,6 +106,9 @@ function Console({ identity, onLogout, onCockpit }: {
 }) {
   const [matter, setMatter] = useState("");
   const [scope, setScope] = useState(identity.scopes[0] ?? "");
+  const [custodian, setCustodian] = useState("");
+  const [custodianUnknown, setCustodianUnknown] = useState(false);
+  const [caseTheory, setCaseTheory] = useState("");
   const [fileCount, setFileCount] = useState(0);
   const [result, setResult] = useState<IngestResponse | null>(null);
   const [matters, setMatters] = useState<MatterSummary[]>([]);
@@ -124,15 +127,19 @@ function Console({ identity, onLogout, onCockpit }: {
     void refreshMatters();
   }, []);
 
+  // The custodian is mandatory; "détenteur inconnu" is an explicit choice, never a blank.
+  const effectiveCustodian = custodianUnknown ? "custodian-undeclared" : custodian.trim();
+  const canSubmit = fileCount > 0 && !!matter.trim() && !!scope && !!effectiveCustodian;
+
   async function run(e: React.FormEvent) {
     e.preventDefault();
     const files = inputRef.current?.files;
-    if (!files || files.length === 0 || !scope) return;
+    if (!files || files.length === 0 || !scope || !matter.trim() || !effectiveCustodian) return;
     setBusy(true);
     setError(null);
     setResult(null);
     try {
-      setResult(await ingestUpload(files, matter, scope));
+      setResult(await ingestUpload(files, matter, scope, effectiveCustodian, caseTheory));
       await refreshMatters();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -159,19 +166,56 @@ function Console({ identity, onLogout, onCockpit }: {
       </p>
 
       <div className="apx-card apx-pad">
-        <form onSubmit={run} className="apx-controls">
-          {/* @ts-expect-error non-standard but supported: pick a whole folder */}
-          <input ref={inputRef} type="file" multiple webkitdirectory=""
-            onChange={(e) => setFileCount(e.target.files?.length ?? 0)} aria-label="Dossier" />
-          <input aria-label="Affaire" placeholder="Affaire" value={matter}
-            onChange={(e) => setMatter(e.target.value)} style={{ flex: "0 1 11rem" }} />
-          <select aria-label="Périmètre" value={scope} onChange={(e) => setScope(e.target.value)}
-            style={{ flex: "0 1 11rem" }}>
-            {identity.scopes.length === 0 && <option value="">aucun périmètre</option>}
-            {identity.scopes.map((s) => <option key={s} value={s}>{s}</option>)}
-          </select>
-          <button type="submit" disabled={busy || fileCount === 0 || !matter || !scope}>
-            {busy ? "Analyse…" : `Analyser${fileCount ? ` (${fileCount})` : ""}`}
+        <form onSubmit={run}
+          style={{ display: "flex", flexDirection: "column", gap: "1rem", maxWidth: "34rem" }}>
+          <label className="apx-field">
+            <span>Dossier *</span>
+            {/* @ts-expect-error non-standard but supported: pick a whole folder */}
+            <input ref={inputRef} type="file" multiple webkitdirectory=""
+              onChange={(e) => setFileCount(e.target.files?.length ?? 0)} aria-label="Dossier" />
+            <span className="apx-hint">
+              Sous-dossiers parcourus à toute profondeur.
+              {fileCount ? ` ${fileCount} fichier${fileCount > 1 ? "s" : ""}.` : ""}
+            </span>
+          </label>
+
+          <label className="apx-field">
+            <span>Affaire *</span>
+            <input aria-label="Affaire" placeholder="ex : Martin c/ Alpha Conseil" value={matter}
+              onChange={(e) => setMatter(e.target.value)} />
+          </label>
+
+          <label className="apx-field">
+            <span>Périmètre (accès) *</span>
+            <select aria-label="Périmètre" value={scope} onChange={(e) => setScope(e.target.value)}>
+              {identity.scopes.length === 0 && <option value="">aucun périmètre</option>}
+              {identity.scopes.map((s) => <option key={s} value={s}>{s}</option>)}
+            </select>
+            <span className="apx-hint">Limité aux périmètres que vous détenez.</span>
+          </label>
+
+          <div className="apx-field">
+            <span>Détenteur *</span>
+            <input aria-label="Détenteur" placeholder="nom du détenteur" value={custodian}
+              disabled={custodianUnknown} onChange={(e) => setCustodian(e.target.value)} />
+            <label className="apx-hint"
+              style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: ".35rem" }}>
+              <input type="checkbox" checked={custodianUnknown}
+                onChange={(e) => setCustodianUnknown(e.target.checked)} />
+              détenteur inconnu (jamais laissé vide)
+            </label>
+          </div>
+
+          <label className="apx-field">
+            <span>Thèse du dossier — facultatif</span>
+            <textarea aria-label="Thèse du dossier" rows={2}
+              placeholder="ce que vous cherchez à établir, dans vos mots — peut être ignoré"
+              value={caseTheory} onChange={(e) => setCaseTheory(e.target.value)} />
+            <span className="apx-hint">L'ignorer ne bloque rien.</span>
+          </label>
+
+          <button type="submit" disabled={busy || !canSubmit} style={{ alignSelf: "flex-start" }}>
+            {busy ? "Import…" : "Lancer l'import"}
           </button>
         </form>
         {error && <p className="apx-error" role="alert">{error}</p>}

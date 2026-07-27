@@ -194,7 +194,7 @@ def test_ingest_upload_reconstructs_the_tree_and_counts(tmp_path: Path, monkeypa
         _login(c, "me@cab.fr")
         r = c.post(
             "/api/ingest-upload",
-            data={"matter": "m", "scope": "wall-A"},
+            data={"matter": "m", "scope": "wall-A", "custodian": "M. Martin"},
             files=[
                 ("files", ("emails/letter.txt", b"Ma\xc3\xaetre, ci-joint", "text/plain")),
                 ("files", ("pieces/empty.txt", b"", "text/plain")),
@@ -390,3 +390,117 @@ def test_audit_trail_over_http(tmp_path: Path, monkeypatch) -> None:
         assert body["verified"] is True
         assert [e["action"] for e in body["entries"]] == ["ingest"]
         assert body["entries"][0]["actor"] == "Me Durand"  # the session user, not a typed field
+
+
+# ── Story 2.1: the onboarding gesture (custodian, scope, the two failure paths, provenance) ──
+
+def test_upload_requires_a_custodian(tmp_path: Path, monkeypatch) -> None:
+    # AC3: the custodian is mandatory at import; missing or blank fails the job loudly (400).
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        missing = c.post("/api/ingest-upload", data={"matter": "m", "scope": "wall-A"},
+                         files=[("files", ("a.txt", b"x", "text/plain"))])
+        assert missing.status_code == 400
+        blank = c.post(
+            "/api/ingest-upload", data={"matter": "m", "scope": "wall-A", "custodian": "   "},
+            files=[("files", ("a.txt", b"x", "text/plain"))])
+        assert blank.status_code == 400
+
+
+def test_upload_threads_the_custodian_and_the_explicit_unknown(tmp_path: Path, monkeypatch) -> None:
+    # AC3: a real custodian, and the explicit "custodian-undeclared" choice, both reach the piece.
+    from sqlalchemy import select
+
+    from apx.adapters.store_postgres.models import Piece
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        c.post("/api/ingest-upload",
+               data={"matter": "m", "scope": "wall-A", "custodian": "M. Martin"},
+               files=[("files", ("a.txt", b"lettre", "text/plain"))])
+        c.post("/api/ingest-upload",
+               data={"matter": "m2", "scope": "wall-A", "custodian": "custodian-undeclared"},
+               files=[("files", ("b.txt", b"note", "text/plain"))])
+    with store._sf() as s:
+        by_matter = {p.matter: p.custodian for p in s.scalars(select(Piece)).all()}
+    assert by_matter["m"] == "M. Martin"
+    assert by_matter["m2"] == "custodian-undeclared"  # explicit choice, never a blank
+
+
+def test_upload_cannot_file_into_a_wall_you_do_not_hold(tmp_path: Path, monkeypatch) -> None:
+    # AC4 (cannot broaden): the wall must be one the caller holds; wall-B is refused (403).
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        r = c.post("/api/ingest-upload",
+                   data={"matter": "m", "scope": "wall-B", "custodian": "M. Martin"},
+                   files=[("files", ("a.txt", b"x", "text/plain"))])
+        assert r.status_code == 403
+
+
+def test_a_folder_of_zero_readable_files_is_a_completed_0_0_matter(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # AC5: a zero-readable folder is a completed 0/0 matter (durable), not an error, not a no-op.
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        r = c.post("/api/ingest-upload",
+                   data={"matter": "vide", "scope": "wall-A", "custodian": "M. Martin"})
+        assert r.status_code == 200, r.text
+        inv = r.json()["inventory"]
+        assert inv["submitted"] == 0 and inv["in_corpus"] == 0
+        assert inv["failures"] == 0 and inv["exclusions"] == 0 and inv["consistent"] is True
+        back = c.get("/api/matters/vide/inventory")           # durable, reads back
+        assert back.status_code == 200 and back.json()["submitted"] == 0
+
+
+def test_upload_reconstructs_a_deep_tree_from_provenance(tmp_path: Path, monkeypatch) -> None:
+    # AC2: subfolders to arbitrary depth; the structure is reconstructible from provenance alone.
+    from sqlalchemy import select
+
+    from apx.adapters.store_postgres.models import Piece
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        r = c.post(
+            "/api/ingest-upload",
+            data={"matter": "m", "scope": "wall-A", "custodian": "M. Martin"},
+            files=[
+                ("files", ("emails/2021/mars/letter.txt", b"un", "text/plain")),
+                ("files", ("pieces/annexes/plan.txt", b"deux", "text/plain")),
+            ],
+        )
+        assert r.status_code == 200
+    with store._sf() as s:
+        provs = {p.provenance_path for p in s.scalars(select(Piece)).all()}
+    assert "emails/2021/mars/letter.txt" in provs   # full folder-relative path (≥3 levels)
+    assert "pieces/annexes/plan.txt" in provs
+
+
+def test_upload_persists_the_optional_case_theory(tmp_path: Path, monkeypatch) -> None:
+    # AC7: the case theory, when given, is persisted on the matter; when skipped it is NULL.
+    from sqlalchemy import select
+
+    from apx.adapters.store_postgres.models import MatterScope
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        c.post("/api/ingest-upload",
+               data={"matter": "avec", "scope": "wall-A", "custodian": "M. Martin",
+                     "case_theory": "contestation d'un licenciement pour insuffisance"},
+               files=[("files", ("a.txt", b"x", "text/plain"))])
+        c.post("/api/ingest-upload",
+               data={"matter": "sans", "scope": "wall-A", "custodian": "M. Martin"},
+               files=[("files", ("b.txt", b"y", "text/plain"))])
+    with store._sf() as s:
+        theories = {ms.matter: ms.case_theory for ms in s.scalars(select(MatterScope)).all()}
+    assert theories["avec"] == "contestation d'un licenciement pour insuffisance"
+    assert theories["sans"] is None  # skipped blocks nothing and leaves NULL

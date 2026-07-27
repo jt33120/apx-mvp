@@ -27,6 +27,7 @@ from sqlalchemy import Text, cast, delete, event, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from apx.adapters.store_postgres.chunk_writer import UnauthorizedScope
 from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.models import (
     AuditRecord,
@@ -443,14 +444,33 @@ class SqlStore:
             )
         )
 
-    def save(self, result: IngestionResult, scope: str, actor: str = "unknown") -> SaveOutcome:
+    def save(
+        self,
+        result: IngestionResult,
+        scope: str,
+        actor: str = "unknown",
+        *,
+        matter: str | None = None,
+        tenant: str | None = None,
+        case_theory: str | None = None,
+    ) -> SaveOutcome:
+        # Fail closed: a null/empty/whitespace scope is never permissive (AD-12). The guard
+        # lives here at the persist boundary, so no caller — API, CLI or test — can write a
+        # piece under no wall, even one that bypasses the API's _held_wall (Story 2.1 AC6).
+        if not scope or not scope.strip():
+            raise UnauthorizedScope("an empty RBAC scope is never authorised (fail closed)")
         now = result.pieces[0].ingestion_timestamp if result.pieces else datetime.now(UTC)
-        matter = result.pieces[0].matter if result.pieces else (
-            result.failures[0].matter if result.failures else None
-        )
-        tenant = result.pieces[0].tenant if result.pieces else (
-            result.failures[0].tenant if result.failures else None
-        )
+        # matter/tenant come from the caller when given — so a folder of zero readable files
+        # still creates a durable matter and its audit entry (Story 2.1 AC5) — and are derived
+        # from the result otherwise (the pre-2.1 behaviour, unchanged for existing callers).
+        if matter is None:
+            matter = result.pieces[0].matter if result.pieces else (
+                result.failures[0].matter if result.failures else None
+            )
+        if tenant is None:
+            tenant = result.pieces[0].tenant if result.pieces else (
+                result.failures[0].tenant if result.failures else None
+            )
         with self._sf() as session, session.begin():
             if matter is not None and tenant is not None:
                 # A matter's wall may only move via the audited admin re-scope path — never
@@ -458,11 +478,16 @@ class SqlStore:
                 # refuse an ingest that would change an existing matter's scope.
                 existing = session.get(MatterScope, {"tenant": tenant, "matter": matter})
                 if existing is None:
-                    session.add(MatterScope(matter=matter, tenant=tenant, scope=scope))
+                    session.add(MatterScope(
+                        matter=matter, tenant=tenant, scope=scope, case_theory=case_theory))
                 elif existing.scope != scope:
                     raise ScopeConflict(
                         f"matter {matter!r} already exists under a different scope; "
                         "re-scope via the admin path")
+                elif case_theory is not None:
+                    # A restated case theory updates in place; a skipped one (None) never wipes
+                    # an existing one (FR-37: statable at import or later). Versioning is Epic 4.
+                    existing.case_theory = case_theory
                 inv = result.inventory
                 detail = (
                     f"submitted={inv.submitted} corpus={inv.in_corpus} "
