@@ -4,7 +4,7 @@ baseline_commit: ca7385a
 
 # Story 1.11: Backup, restore and disaster recovery
 
-Status: review
+Status: done
 
 ## Story
 
@@ -77,13 +77,42 @@ Architecture: AD-35 (chain head outside the restorable store), AD-32 (backup/res
 - **Capacity is stated and enforced.** `capacity.footprint`/`fits` state the design-target footprint and refuse (HTTP 507) an ingest projected not to fit, with a safety margin — tested at the unit and endpoint level (a mocked tiny free disk). `backup_interval_hours` (config-as-data) + `record_backup`/`backup_status` make "overdue" answerable; `GET /api/admin/dr` surfaces backup-overdue + truncation + footprint (admin-only).
 - **Test isolation:** the head journal is deliberately outside the DB, so a session-shared journal would leak heads across tests and false-positive a truncation on a later fresh-DB tenant — the conftest now gives each test its own `APX_HEAD_JOURNAL`.
 - **Deferred (documented):** the physical `pg_dump`/`pg_restore`/`upgrade.sh` wrappers + cron (deploy, AD-46); the worklist/home-screen UI (front-end, AD-29); originals + vector-index backup (not stored / story 2.8); the AD-49 monotonic counter (joins the head entry when it exists). AD-32's ranked-orders/confidence-bounds restore assertions cover what exists (epics 4–5 artefacts do not yet).
-- **Gate:** ruff · `python -m apx.checks` **22/22** · `pytest` **434 passed, 8 skipped** (+24) · fitness · alembic single head (0015).
+- **Gate (post-review):** ruff · `python -m apx.checks` **22/22** · `pytest` **443 passed, 8 skipped** (+33) · fitness · alembic single head (0015).
 
 ### File List
 
-- **New:** `apx/core/domain/head_journal.py`, `apx/core/domain/capacity.py`, `apx/adapters/store_postgres/migrations/versions/0015_backup_and_truncation.py`, `tests/core/test_head_journal.py`, `tests/core/test_capacity.py`, `tests/adapters/test_backup_restore.py`, `tests/adapters/test_backup_status.py`, `tests/api/test_dr_api.py`.
+- **New:** `apx/core/domain/head_journal.py`, `apx/core/domain/capacity.py`, `apx/adapters/store_postgres/migrations/versions/0015_backup_and_truncation.py`, `tests/core/test_head_journal.py`, `tests/core/test_capacity.py`, `tests/adapters/test_backup_restore.py`, `tests/adapters/test_backup_status.py`, `tests/adapters/test_backup_cli.py` (review), `tests/api/test_dr_api.py`.
 - **Modified:** `apx/adapters/store_postgres/models.py` (`BackupRecord`, `TruncationMarker`), `store.py` (head hook + heads/reconcile/truncation + backup/restore + backup status), `apx/api/startup.py` (journal fail-closed), `apx/api/app.py` (journal-wired store + boot reconcile + DR endpoints + capacity pre-flight), `apx/manage.py` (backup/restore), `apx/core/domain/config.py` (`backup_interval_hours`), `apx/checks/encryption.py` (`outcome` allowlist + gate behavioural leg), `apx/checks/tenant_isolation.py` (owned tables), `tests/conftest.py` (per-test journal), `tests/api/test_startup_gate.py`, `README.md`.
 
 ### Change Log
 
 - 2026-07-27 — Story 1.11 implemented: the head journal outside the restorable store + truncation detection (AD-35), logical tenant backup/restore exercised in CI (AD-32), storage footprint + pre-flight capacity refusal, backup-overdue status. 22 checks, 434 tests green.
+- 2026-07-27 — Review fixes (fix 1.11): capacity measures the data volume not the API temp dir; the manage-CLI codec carries a determined `piece_date` (a pure `date`); a failed head-journal write is surfaced (`journal_degraded` on `/api/admin/dr` + a WARNING log); a second truncation after an override is detected (post-override baseline); restore re-verifies the chain and seeds the journal from the backup head tail; `record_backup` validates `outcome`. 22 checks, 443 tests green (+9).
+
+## Senior Developer Review (AI)
+
+**Reviewer:** Julian (AI-assisted, 3 parallel adversarial reviewers — A: head journal / AC1+AC5, B: backup correctness / AC2, C: scope + capacity / AC3+AC4). **Date:** 2026-07-27. **Baseline:** `ca7385a`; diff reviewed `ca7385a..d6e5d38`. **Outcome:** **Approve with fixes** — the head journal (the AD-35 centrepiece) is sound, the backup engine round-trips ciphertext and re-verifies the chain, the tenant boundary holds, and migration 0015 is valid; every reviewer executed code to confirm findings. **4 High + 6 Medium + 5 Low** were confirmed and resolved (or deferred with a reason). Re-gate after fixes: ruff · 22/22 checks · 443 tests · fitness green.
+
+### High
+
+1. **[Fixed] Capacity pre-flight measured the wrong disk (AC3).** `_capacity_preflight` called `shutil.disk_usage(tempfile.gettempdir())` — the API host's temp dir, which on a container is a small tmpfs unrelated to the data volume — so the refusal reflected the wrong disk and could pass an import that will not fit (or refuse one that would). **Fix:** `app._data_volume_path()` resolves `APX_DATA_PATH` (deployed image), else the SQLite DB file's directory, else `/`; the pre-flight measures that. Unit-tested (`test_data_volume_path_prefers_env_then_sqlite_dir_then_root`).
+2. **[Fixed] `manage backup` crashed on a determined `piece_date` (AC2).** `_json_default` handled only `datetime`; `piece.piece_date` is a pure `date` (AD-40), and on Postgres a raw `SELECT *` returns a `datetime.date` → `TypeError`, so a backup would fail the moment any piece carries a determined date (epics 2/4). Latent because `save()` writes `piece_date=None` today and SQLite returns a string. **Fix:** the codec now emits `{"$d"}` for `date` (checking `datetime` first, since it subclasses `date`), `{"$dt"}` for `datetime`, `{"$b64"}` for `bytes`, `str` for `Decimal`; `_revive` routes each back. Tested by a direct codec round-trip and a CLI backup→restore of a determined `piece_date` (`test_backup_cli.py`).
+3. **[Fixed] A failed head-journal write was set but never read (AC5).** `journal_degraded` was raised in `_write_heads` but nothing surfaced it, so the "surfaced, never silent" guarantee was unmet. **Fix:** a WARNING log at the failure site + `journal_degraded` on `DrStatusOut` (`GET /api/admin/dr`). Tested at the store level (forced `OSError` → flag) and over HTTP (`test_dr_status_surfaces_a_degraded_head_journal`).
+4. **[Fixed] A second truncation after an override was silently swallowed (AC1).** The `_record_truncation` skip clause kept a *cleared* marker cleared whenever a new detection fell within its acknowledged band (`journal_seq ≤ existing ∧ live_seq ≥ existing`). Because the append-only journal's max stays at the stale pre-truncation head, a genuine *second* restore into that band went undetected — a real data loss shown as "already acknowledged". **Fix:** `reconcile_heads` now parses the journal once and, for a cleared marker, resets the baseline to the heads recorded *after* the override (`post_clear_max`); a live head below that is a fresh truncation. `_record_truncation` always upserts an active marker; the keep-cleared decision lives entirely in `reconcile_heads`. Regression-tested (`test_a_second_truncation_after_an_override_is_not_swallowed`), with the original acknowledgement test still green.
+
+### Medium
+
+5. **[Fixed] `head_tail` was carried on the backup but never consumed on restore (AC1/AC2).** In a true disaster the journal volume dies *with* the primary; without seeding the journal from the backup's copied head tail, a restore looks clean and later truncations become undetectable. **Fix:** `restore_tenant` seeds the live journal from `backup.head_tail` (append-only, best-effort) before reconciling. Tested (`test_restore_seeds_a_fresh_journal_from_the_backup_head_tail`).
+6. **[Fixed] Restore did not re-verify the chain in code (AC2).** Chain re-verification lived only in the round-trip *test*, so a corrupt/tampered backup would restore silently and only fail on a later read. **Fix:** `_chain_verifies` (the same recomputation as `read_audit`) runs *inside* the restore transaction; a failure raises → rollback. Tested (`test_restore_rejects_a_corrupt_audit_chain`, asserting nothing commits).
+7. **[Fixed] `record_backup` accepted any `outcome` string (AC4).** A typo (`"ok"`) would be stored as neither success nor failure, quietly leaving the tenant overdue forever. **Fix:** `record_backup` rejects an outcome outside `{success, failure}`. Tested.
+8. **[Fixed] Parse-the-journal-once (efficiency/correctness).** `reconcile_heads` had read the journal file multiple times (per-scope `latest` + `all_latest`); the rework parses it once via the new `HeadJournal.entries()` into both views.
+9. **[Deferred → honest wording] Container-expansion capacity floor (AC3).** The pre-flight counts folder files, which under-counts `.pst`/`.zip` expansion (epic 2.4). Documented as a pre-expansion *floor*, refined mid-run in epic 2 — not silently presented as exact.
+10. **[Deferred → honest wording] "Named on every export" (AC1).** No export surface exists yet (stories 6.1/6.2); a truncation is surfaced as a *status* today. Docstrings/AC wording say "surfaced as a status; export-facing rendering deferred to 6.1/6.2" rather than claiming an export that does not exist.
+
+### Low
+
+11. **[Fixed] Event-listener double-registration guard (B-L4)** — a sentinel on the session factory makes head-listener registration idempotent if one factory is re-wrapped (a cleared `_store()` cache).
+12. **[Fixed] `record_current_heads` docstring** said "after a backup" (it is not called there); corrected to "at start-up, after the boot reconcile", with an unbounded-journal/compaction note.
+13. **[Noted] Unbounded journal growth** — one line per advance; compaction (retain the latest head per scope) is immaterial at the single-firm design target (AD-32), documented as deferred.
+14. **[Noted] Restore emptiness guard omits `user_scope`** — informational only; the atomic transaction rolls the whole restore back, and `user_scope` is keyed by user id inside the tenant boundary.
+15. **[Addressed] Empty-but-present journal resets the baseline** — partly mitigated by the head-tail seed (finding 5); the remaining operational caution (never point a live install at an empty journal) is documented in the head-journal module.

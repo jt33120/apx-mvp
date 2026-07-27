@@ -774,13 +774,16 @@ class DrStatusOut(BaseModel):
     backup: BackupStatusOut
     truncation: TruncationStatusOut
     design_target_footprint: FootprintOut
+    journal_degraded: bool  # the head journal (AD-35) could not be written — a monitored alarm
 
 
 @app.get("/api/admin/dr", response_model=DrStatusOut)
 def admin_dr_status(ident: Identity = Depends(require_admin)) -> DrStatusOut:
     """The tenant's disaster-recovery status (admin only): whether a backup is overdue (AD-32),
-    whether a restore-truncation is active and un-acknowledged (AD-35), and the stated storage
-    footprint at the design target (AD-32). The worklist/home-screen rendering is the front-end."""
+    whether a restore-truncation is active and un-acknowledged (AD-35), the stated storage
+    footprint at the design target (AD-32), and whether the head journal is degraded (a head write
+    failed — a later truncation to that point could go undetected). The worklist/home-screen
+    rendering is the front-end."""
     store = _require_store()
     interval = int(store.get_config(ident.tenant, "backup_interval_hours"))
     bs = store.backup_status(ident.tenant, interval)
@@ -794,7 +797,8 @@ def admin_dr_status(ident: Identity = Depends(require_admin)) -> DrStatusOut:
             active=ts.active, journal_seq=ts.journal_seq, live_seq=ts.live_seq,
             detected_at=ts.detected_at, cleared_at=ts.cleared_at),
         design_target_footprint=FootprintOut(
-            piece_count=fp.piece_count, total_bytes=fp.total_bytes, human=fp.human))
+            piece_count=fp.piece_count, total_bytes=fp.total_bytes, human=fp.human),
+        journal_degraded=store.journal_degraded)
 
 
 class TruncationOverrideIn(BaseModel):
@@ -816,9 +820,32 @@ def admin_clear_truncation(
     return {"status": "cleared"}
 
 
+def _data_volume_path() -> str:
+    """The path whose free space the capacity pre-flight measures: the DATA volume, NOT the API
+    host's temp dir (which may be a small tmpfs unrelated to where pieces land). ``APX_DATA_PATH``
+    names it explicitly (the deployed image points it at the mounted data volume); else, for a
+    SQLite ``DATABASE_URL``, the directory holding the DB file; else ``/`` — a conservative
+    whole-root fallback. A remote Postgres exposes no local path to stat, so the operator sets
+    ``APX_DATA_PATH`` to the volume the database actually lives on."""
+    explicit = os.environ.get("APX_DATA_PATH", "").strip()
+    if explicit:
+        return explicit
+    url = os.environ.get("DATABASE_URL", "").strip()
+    prefix = "sqlite:///"
+    if url.startswith(prefix):
+        db_path = url[len(prefix):]
+        if db_path and db_path != ":memory:":
+            parent = Path(db_path).resolve().parent
+            if parent.is_dir():
+                return str(parent)
+    return "/"
+
+
 def _capacity_preflight(projected_pieces: int) -> None:
-    """Refuse an import projected not to fit the free space, at submission, not at 70 % (AD-32)."""
-    free = shutil.disk_usage(tempfile.gettempdir()).free
+    """Refuse an import projected not to fit the free space on the DATA volume, at submission, not
+    at 70 % (AD-32). Measures ``_data_volume_path`` — where pieces actually land — never the API
+    host's temp dir, so the refusal reflects the disk that will fill."""
+    free = shutil.disk_usage(_data_volume_path()).free
     verdict = capacity.fits(free, projected_pieces)
     if not verdict.fits:
         raise HTTPException(status_code=507, detail=verdict.reason)  # 507 Insufficient Storage

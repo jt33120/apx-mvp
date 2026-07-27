@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import random
 import secrets
 from collections.abc import Callable
@@ -59,6 +60,8 @@ from apx.core.domain.inventory import Inventory
 from apx.core.domain.search import snippet
 from apx.core.domain.triage import TriageOutcome
 from apx.core.projection import Snapshot
+
+_log = logging.getLogger("apx.store")
 
 # A valid hash to verify against when the user is unknown, so authentication takes the
 # same time whether or not the email exists (no user-enumeration by timing).
@@ -377,12 +380,15 @@ class SqlStore:
         self._sf = session_factory
         self._journal = head_journal
         self.journal_degraded = False  # set if a post-commit head write failed (surfaced, AC5)
-        if head_journal is not None:
+        if head_journal is not None and not getattr(session_factory, "_apx_head_listener", False):
             # Record each new chain head to the journal AS IT ADVANCES (AD-35 "on every append").
             # Capture the pending heads during flush; write them AFTER commit — a file append is
             # not transactional, so journaling after commit avoids a journal entry ahead of a
             # rolled-back write (which would false-positive a truncation). A post-commit write
-            # failure is surfaced as degraded, never silent (AC5).
+            # failure is surfaced as degraded, never silent (AC5). The sentinel makes registration
+            # idempotent: re-wrapping ONE session factory (a cleared _store() cache) never
+            # double-writes each head.
+            session_factory._apx_head_listener = True
             event.listen(session_factory, "before_flush", self._capture_heads)
             event.listen(session_factory, "after_commit", self._write_heads)
 
@@ -408,8 +414,13 @@ class SqlStore:
             try:
                 self._journal.record(HeadEntry(
                     tenant, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
-            except OSError:
-                self.journal_degraded = True  # surfaced (a monitored condition), never silent
+            except OSError as exc:
+                # Surfaced two ways, never silent (AC5): a WARNING log now, and the sticky
+                # `journal_degraded` flag the DR status reads. A head we could not record means a
+                # later restore-truncation to this point could go undetected — an operator alarm.
+                self.journal_degraded = True
+                _log.warning(
+                    "head journal write failed for tenant %s at seq %s: %s", tenant, seq, exc)
 
     def _append_audit(self, session: Session, tenant: str, matter: str | None,
                       actor: str, action: str, detail: str, ts: datetime) -> None:
@@ -964,8 +975,10 @@ class SqlStore:
             return self._audit_heads(session)
 
     def record_current_heads(self, journal: HeadJournal | None = None) -> int:
-        """Record every tenant's current live head to the journal (called at start-up and after a
-        backup). Returns how many heads were recorded."""
+        """Record every tenant's current live head to the journal (called at start-up, after the
+        boot reconcile). Returns how many heads were recorded. The journal is append-only and grows
+        one line per advance; a long-lived run would want periodic compaction (retain the latest
+        head per scope) — deferred, immaterial at the single-firm design target (AD-32)."""
         j = journal or self._journal
         if j is None:
             return 0
@@ -978,28 +991,60 @@ class SqlStore:
 
     def reconcile_heads(self, journal: HeadJournal | None = None) -> list[Reconciliation]:
         """Reconcile every scope's live head against the journal (AD-35). A live head BEHIND the
-        journal is a truncation — recorded as a persistent marker (named on exports, cleared only by
-        an audited override). Called on start-up and after a restore."""
+        expected head is a truncation — the record now ends earlier than it did — recorded as a
+        persistent marker (named on exports, cleared only by an audited override). Called on
+        start-up and after a restore.
+
+        An already-acknowledged truncation is not re-flagged, but a NEW truncation after an override
+        IS. Once a truncation is cleared, the baseline resets to the heads recorded AFTER the
+        override (``post_clear_max``) — NOT the stale pre-truncation head the append-only journal
+        still carries — so a second restore that falls below that reset baseline is a fresh
+        truncation, not silently swallowed as 'the same acknowledged one'. The journal is parsed
+        ONCE into both views (all-latest, and the per-scope post-clear maxima)."""
         j = journal or self._journal
         if j is None:
             return []
+        entries = j.entries()
+        journal_max: dict[str, int] = {}
+        for e in entries:
+            if e.scope not in journal_max or e.seq > journal_max[e.scope]:
+                journal_max[e.scope] = e.seq
         heads = self.audit_heads()
-        scopes = set(heads) | set(j.all_latest())
         out: list[Reconciliation] = []
-        for scope in sorted(scopes):
-            rec = j.reconcile(scope, heads.get(scope, (0, ""))[0])
+        for scope in sorted(set(heads) | set(journal_max)):
+            live_seq = heads.get(scope, (0, ""))[0]
+            cleared_at = self._marker_cleared_at(scope)
+            if cleared_at is not None:
+                # A cleared marker: the baseline is the heads recorded AFTER the override, so a live
+                # head below THAT is a new truncation — not below the stale pre-truncation head the
+                # append-only journal still carries (which the override already accounted for).
+                floor = _audit_ts(_as_utc(cleared_at))
+                reference = max(
+                    (e.seq for e in entries if e.scope == scope and e.recorded_at > floor),
+                    default=0)
+            else:  # no marker, or one still active — the plain 'live behind the journal' test
+                reference = journal_max.get(scope, 0)
+            rec = Reconciliation(scope, live_seq, reference, truncated=live_seq < reference)
             out.append(rec)
             if rec.truncated:
                 self._record_truncation(scope, rec)
         return out
 
+    def _marker_cleared_at(self, tenant: str) -> datetime | None:
+        """When the tenant's truncation marker was CLEARED by an audited override, or None when
+        there is no cleared marker — none at all, or one still active. ``reconcile_heads`` uses it
+        to reset the baseline past an acknowledged truncation, so a LATER one is still caught."""
+        with self._sf() as session:
+            m = session.get(TruncationMarker, tenant)
+            return m.cleared_at if m is not None else None
+
     def _record_truncation(self, tenant: str, rec: Reconciliation) -> None:
+        """Upsert an ACTIVE truncation marker for the latest detection. The keep-cleared decision
+        lives in ``reconcile_heads`` (via the post-override baseline), so this ALWAYS records an
+        active marker — a re-detection after an override correctly reactivates it, never a silent
+        no-op that would leave a fresh data loss un-flagged."""
         now = datetime.now(UTC)
         with self._sf() as session, session.begin():
-            existing = session.get(TruncationMarker, tenant)
-            if existing is not None and existing.cleared_at is not None and (
-                    rec.journal_seq <= existing.journal_seq and rec.live_seq >= existing.live_seq):
-                return  # an acknowledged truncation of the same or lesser depth stays cleared
             session.merge(TruncationMarker(
                 tenant=tenant, detected_at=now, journal_seq=rec.journal_seq,
                 live_seq=rec.live_seq, cleared_by=None, reason=None, cleared_at=None))
@@ -1061,12 +1106,39 @@ class SqlStore:
                 head_tail = [asdict(latest)]
         return TenantBackup(tenant, _HEAD_SCHEMA_VERSION, tables, scopes, head_tail)
 
+    def _chain_verifies(self, session: Session, tenant: str) -> bool:
+        """Recompute a tenant's audit chain end to end from the rows in ``session`` — the same
+        recomputation ``read_audit`` does — returning False on any gap, reorder, tamper, or
+        undecryptable field (fail closed). Used INSIDE ``restore_tenant`` so a corrupt or tampered
+        backup is rejected at restore time, not silently accepted and caught later on a read."""
+        rows = session.execute(
+            select(
+                AuditRecord.seq, AuditRecord.tenant, AuditRecord.matter,
+                cast(AuditRecord.actor, Text), AuditRecord.action,
+                cast(AuditRecord.detail, Text), AuditRecord.chain, AuditRecord.timestamp,
+            ).where(AuditRecord.tenant == tenant).order_by(AuditRecord.seq)
+        ).all()
+        prev_chain = ""
+        for i, (seq, r_tenant, matter, actor_ct, action, detail_ct, chain, ts) in enumerate(rows):
+            actor = _safe_decrypt(actor_ct, "audit_record.actor")
+            detail = _safe_decrypt(detail_ct, "audit_record.detail")
+            if actor is None or detail is None:
+                return False  # an unreadable field cannot be authenticated
+            content = _audit_content(seq, r_tenant, matter, actor, action, detail, _audit_ts(ts))
+            if seq != i + 1 or _audit_chain(prev_chain, content) != chain:
+                return False
+            prev_chain = chain
+        return True
+
     def restore_tenant(
         self, backup: TenantBackup, journal: HeadJournal | None = None
     ) -> list[Reconciliation]:
         """Restore a tenant into an EMPTY store (AD-32) — refuses to overwrite an existing tenant.
-        Rows go back RAW (ciphertext preserved byte-for-byte). After the restore the head is
-        reconciled against the journal: a restore that moved the head backwards is a truncation."""
+        Rows go back RAW (ciphertext preserved byte-for-byte). The restored audit chain is
+        re-verified INSIDE the transaction, so a corrupt or tampered backup rolls back (rejected at
+        restore, not caught later on a read). After commit the backup's copied head tail is seeded
+        into the journal (true DR: the journal volume may have died with the primary), then the head
+        is reconciled — a restore that moved the head backwards is a truncation."""
         with self._sf() as session, session.begin():
             conn = session.connection()
             for tbl in _BACKUP_TABLES:
@@ -1087,7 +1159,33 @@ class SqlStore:
             for sc in backup.user_scopes:
                 conn.execute(
                     text("INSERT INTO user_scope (user_id, scope) VALUES (:user_id, :scope)"), sc)
+            if not self._chain_verifies(session, backup.tenant):
+                raise ValueError(
+                    f"restored audit chain for tenant {backup.tenant!r} does not verify — the "
+                    "backup is corrupt or was tampered with (AD-35); restore refused")
+        self._seed_journal_from_backup(backup, journal)
         return self.reconcile_heads(journal)
+
+    def _seed_journal_from_backup(
+        self, backup: TenantBackup, journal: HeadJournal | None
+    ) -> None:
+        """Seed the live journal with the head tail copied onto the backup (AD-35: a copy on every
+        backup target). In a true disaster the journal volume is lost WITH the primary; the backup's
+        own head tail is then the only surviving outside record, and reconcile needs it to detect a
+        truncation at all. Append-only and best-effort: a malformed tail is skipped, a write failure
+        is surfaced as degraded — neither fails the restore itself."""
+        j = journal or self._journal
+        if j is None:
+            return
+        for h in backup.head_tail:
+            try:
+                j.record(HeadEntry(**h))
+            except TypeError:
+                continue  # a malformed head-tail entry is skipped, never fatal to the restore
+            except OSError as exc:
+                self.journal_degraded = True
+                _log.warning(
+                    "could not seed head tail on restore of %s: %s", backup.tenant, exc)
 
     # ── backup status: overdue is answerable (AD-32) ──
 
@@ -1095,7 +1193,10 @@ class SqlStore:
         self, tenant: str, outcome: str, *, byte_size: int = 0, detail: str | None = None
     ) -> None:
         """Record a backup run's outcome (success|failure) — so "no backup within the interval" is
-        answerable and the worklist can render it (AD-32)."""
+        answerable and the worklist can render it (AD-32). ``outcome`` is a closed categorical: a
+        typo must fail loudly, not poison ``backup_status`` (which counts only 'success')."""
+        if outcome not in ("success", "failure"):
+            raise ValueError(f"outcome must be 'success' or 'failure', not {outcome!r}")
         with self._sf() as session, session.begin():
             session.add(BackupRecord(
                 id=uuid4().hex, tenant=tenant, outcome=outcome, detail=detail,

@@ -96,3 +96,28 @@ def test_ingest_is_refused_when_it_cannot_fit(tmp_path: Path, monkeypatch) -> No
         _login(c, "boss@t.fr")
         r = c.post("/api/ingest", json={"folder": str(folder), "matter": "m", "scope": "w"})
     assert r.status_code == 507 and "refused" in r.json()["detail"]
+
+
+def test_dr_status_surfaces_a_degraded_head_journal(tmp_path: Path, monkeypatch) -> None:
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "boss@t.fr", "pw12345678", "Boss", {"w"}, is_admin=True)
+    with TestClient(app) as c:
+        _login(c, "boss@t.fr")
+        assert c.get("/api/admin/dr").json()["journal_degraded"] is False
+        # a post-commit head write failed (AC5) → the app store's sticky flag is raised; the DR
+        # status must SURFACE it (an alarm — a later truncation to that head could go undetected).
+        app_module._store().journal_degraded = True
+        assert c.get("/api/admin/dr").json()["journal_degraded"] is True
+
+
+def test_data_volume_path_prefers_env_then_sqlite_dir_then_root(
+    tmp_path: Path, monkeypatch
+) -> None:
+    # HIGH-1: the capacity pre-flight measures the DATA volume, not the API host's temp dir.
+    monkeypatch.setenv("APX_DATA_PATH", "/data/apx")
+    assert app_module._data_volume_path() == "/data/apx"                 # explicit env wins
+    monkeypatch.delenv("APX_DATA_PATH", raising=False)
+    monkeypatch.setenv("DATABASE_URL", f"sqlite:///{tmp_path / 'apx.db'}")
+    assert app_module._data_volume_path() == str(Path(tmp_path).resolve())  # else the DB dir
+    monkeypatch.setenv("DATABASE_URL", "postgresql://host/db")
+    assert app_module._data_volume_path() == "/"                         # remote PG → conservative

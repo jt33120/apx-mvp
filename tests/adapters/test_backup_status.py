@@ -45,3 +45,10 @@ def test_an_old_success_is_overdue(store: SqlStore) -> None:
 def test_a_failure_does_not_count_as_a_successful_backup(store: SqlStore) -> None:
     store.record_backup(TENANT, "failure", detail="disk full")
     assert store.backup_status(TENANT, interval_hours=24).overdue  # only a success clears overdue
+
+
+def test_record_backup_rejects_an_out_of_vocabulary_outcome(store: SqlStore) -> None:
+    # outcome is a closed categorical — a typo like "ok" must fail loudly, never silently be stored
+    # as neither success nor failure (which would make backup_status quietly stay overdue forever).
+    with pytest.raises(ValueError, match="success"):
+        store.record_backup(TENANT, "ok")

@@ -16,11 +16,13 @@ manages configuration, users and scopes.
 from __future__ import annotations
 
 import argparse
+import base64
 import getpass
 import json
 import os
 from collections.abc import Sequence
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy.exc import IntegrityError
@@ -80,14 +82,31 @@ def rekey(store: SqlStore) -> str:
 
 
 def _json_default(o: object) -> object:
+    """Serialise the column types a raw ``SELECT *`` yields that JSON cannot carry natively. A
+    Postgres date/timestamp column comes back as a ``date``/``datetime`` object (SQLite hands back a
+    string, which needs no help) — so a DETERMINED ``piece_date`` (a pure ``date``, AD-40) MUST be
+    handled or the backup crashes. ``datetime`` is tested FIRST because it is a subclass of ``date``
+    (else a timestamp would be narrowed to a bare date). ``bytes`` (a future binary column, e.g. an
+    embedding) is base64'd; ``Decimal`` is stringified losslessly (a float would round)."""
     if isinstance(o, datetime):
         return {"$dt": o.isoformat()}
+    if isinstance(o, date):
+        return {"$d": o.isoformat()}
+    if isinstance(o, bytes):
+        return {"$b64": base64.b64encode(o).decode("ascii")}
+    if isinstance(o, Decimal):
+        return str(o)
     raise TypeError(f"not serialisable: {type(o).__name__}")
 
 
 def _revive(d: dict) -> object:
-    if len(d) == 1 and "$dt" in d:
-        return datetime.fromisoformat(d["$dt"])
+    if len(d) == 1:
+        if "$dt" in d:
+            return datetime.fromisoformat(d["$dt"])
+        if "$d" in d:
+            return date.fromisoformat(d["$d"])
+        if "$b64" in d:
+            return base64.b64decode(d["$b64"])
     return d
 
 

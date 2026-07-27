@@ -76,12 +76,14 @@ class HeadJournal:
         with self._path.open("a", encoding="utf-8") as fh:
             fh.write(line + "\n")
 
-    def _entries(self) -> list[HeadEntry]:
+    def entries(self) -> list[HeadEntry]:
+        """Every recorded head, in append order (one file read). Callers that need several views
+        (all_latest + post-clear maxima) parse ONCE via this rather than re-reading per scope."""
         if not self._path.exists():
             return []
         out: list[HeadEntry] = []
-        for line in self._path.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
+        for raw in self._path.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
             if not line:
                 continue
             try:
@@ -89,6 +91,8 @@ class HeadJournal:
             except (ValueError, TypeError):
                 continue  # a malformed line is skipped; a truncation shows in the valid heads
         return out
+
+    _entries = entries  # internal alias (kept for the methods below)
 
     def latest(self, scope: str) -> HeadEntry | None:
         """The most recently recorded head for a scope (the highest seq), or None if never seen."""
