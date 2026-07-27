@@ -44,7 +44,7 @@ def _checks_pass() -> None:
     """Every registered structural-property check holds — the 'checks-green' stage. Runs
     the same registry as ``python -m apx.checks`` so a new guard (story 1.3's payload-schema
     checks included) is part of the fitness frame, not only the standalone runner."""
-    from apx.checks.__main__ import CHECKS
+    from apx.checks.registry import CHECKS
 
     failed = [r for r in (check() for check in CHECKS) if not r.ok]
     assert not failed, "structural checks failed: " + "; ".join(

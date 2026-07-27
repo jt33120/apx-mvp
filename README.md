@@ -354,6 +354,73 @@ not at 70 %. A tenant with **no successful backup within `backup_interval_hours`
 cron schedule are deploy artifacts (AD-46); the *worklist*/home-screen rendering is the front-end
 (AD-29); 1.11 builds and **tests** the mechanism they wrap.
 
+## Structural properties (AD-33/FR-56)
+
+Where the design says *no code path does X*, a **static check decides it and a violation fails the
+build** — never a runtime test (a test cannot decide a universal negative), never a human
+remembering to look. The checks live in `apx/checks/` (`python -m apx.checks`); the **registry**
+(`registry.py`) is the one list the runner executes, and the **manifest** (`manifest.py`) names
+every property — its FR, its AD, the check callable, and the file or pattern it inspects.
+
+The manifest is *itself* checked: **a property with no registered check fails the build**, an
+orphan check absent from the manifest fails the build, and this reference block is kept in lock-step
+with the manifest both ways (a drifted or deleted block turns the build red). Several checks are
+**forward-looking** — they scan the surface their subject will occupy (the embedder, retrieval, the
+i18n string sets, the confidence sentence), pass *vacuously* today, and fire the day that code
+lands; each carries a failure-path fixture proving it fires, so "green" is never mistaken for
+"nothing to guard". The three verbs are never conflated — *asserted by test*, **enforced as a
+structural property**, *asserted by review* — and a `review`/`deferred`/`not-enforceable` row is
+tracked here but **never counted as a passing check** (the most dangerous inaccuracy this programme
+could contain is an inflated claim about what the suite proves).
+
+<!-- structural-properties:start -->
+
+| Property | FR | AD | Verb | Inspects |
+|---|---|---|---|---|
+| `layering-egress-imports` | FR-56 | AD-4/45/27 | structural | the import graph (pyproject [tool.importlinter]) |
+| `one-chunk-writer` | FR-8 | AD-9 | structural | Chunk(...) / insert(Chunk) sites in apx/** |
+| `chunk-scope-arg-required` | FR-8 | AD-9 | structural | the chunk writer's signature (no default) |
+| `chunk-columns-enumerated` | FR-8 | AD-9 | structural | the chunk model column set |
+| `no-cascade-delete` | FR-4 | AD-7 | structural | ON DELETE clauses on chunk/piece FKs |
+| `tenant-not-null` | FR-30 | AD-12 | structural | tenant columns in the models |
+| `scoped-access-carries-tenant` | FR-30 | AD-12 | structural | scope predicates in apx/** |
+| `identity-tenant-qualified` | FR-30 | AD-12 | structural | identity keys in the models |
+| `no-reversible-credential` | FR-48 | AD-15 | structural | credential columns in the models |
+| `jwt-pins-algorithms` | FR-48 | AD-15 | structural | jwt.decode call sites in apx/** |
+| `scope-mutations-audited` | FR-49 | AD-33 | structural | the scope-mutating store methods |
+| `sensitive-columns-encrypted` | FR-47 | AD-31 | structural | content columns in the models |
+| `startup-gate-fail-closed` | FR-47 | AD-31 | structural | apx/api/startup.py |
+| `no-secret-in-source` | FR-51 | AD-47 | structural | apx/, docker/, deploy/, .github/, root config |
+| `no-secret-column` | FR-51 | AD-47 | structural | the model columns |
+| `no-tenant-branch-core` | FR-30 | AD-24 | structural | conditionals under apx/core/** |
+| `config-defaults-preserve` | FR-30 | AD-24 | structural | apx/core/domain/config.py |
+| `documented-config-keys-exist` | FR-30 | AD-24 | structural | the README config-keys block |
+| `config-reference-complete` | FR-30 | AD-24 | structural | the README config-keys block |
+| `projection-registry-only` | FR-31 | AD-26 | structural | Projection(...) sites in apx/** |
+| `snapshot-content-free` | FR-31 | AD-26 | structural | the Snapshot type fields |
+| `projectors-declare-attestation` | FR-31 | AD-26 | structural | the projection registry |
+| `no-runtime-import-from-tests` | FR-33 | AD-16 | structural | imports in the runtime tree |
+| `no-egress-call-site` | FR-32 | AD-45 | structural | network call sites in apx/** (excl. the egress adapters) |
+| `no-tenant-identifier-source` | FR-30 | AD-24 | structural | conditionals in the runtime tree |
+| `no-fallback-embedder` | FR-9 | AD-11 | structural | Embedder impls / except-handlers in apx/adapters/** (vacuous until 2.8) |
+| `destructive-index-one-entry` | FR-10 | AD-7 | structural | index drop/truncate call sites (vacuous until 2.8) |
+| `no-post-filter-retrieval` | FR-14 | AD-14 | structural | functions taking a result set + a scope (vacuous until 3.x) |
+| `no-nl-translation-key` | FR-34 | conventions | structural | t()/gettext() call args (vacuous until 6.3) |
+| `no-hardcoded-locale` | FR-35 | AD-24 | structural | locale= / setlocale / Locale literals (vacuous until 6.4) |
+| `no-model-reported-confidence` | FR-42 | AD-19 | structural | confidence fields read off a model response (vacuous until 4.x) |
+| `no-banned-confidence-phrasing` | FR-23 | FR-23 | structural | banned phrases in string literals / locale resources (vacuous until 5.4/6.x) |
+| `meta-property-has-check` | FR-56 | AD-33 | structural | this manifest vs CHECKS |
+| `meta-check-in-manifest` | FR-56 | AD-33 | structural | CHECKS vs this manifest |
+| `meta-verbs-not-conflated` | FR-56 | AD-33 | structural | this manifest's verbs |
+| `meta-manifest-matches-readme` | FR-56 | AD-33 | structural | the README structural-properties block |
+| `meta-readme-lists-every` | FR-56 | AD-33 | structural | the README structural-properties block |
+| `deferred-action-registry` | FR-21 | AD-33 | deferred | deferred to the usability-probe story (FR-21) — the action registry is itself a structural property, but the actions it enumerates do not exist yet |
+| `not-enforceable-plausible` | FR-19 | AD-19 | not-enforceable | no check can decide plausibility (AD-33) — asserted by review; the derived-confidence and gold-set calibration checks stand in where they exist |
+| `not-enforceable-commercial` | FR-27 | AD-27 | not-enforceable | a commercial statement is not a code property (AD-33) — the pre-flight screen stands in |
+| `review-refusal-phrasing` | FR-27 | AD-33 | review | phrasing quality is asserted by review against a checklist — never counted as a test |
+
+<!-- structural-properties:end -->
+
 ## What does NOT belong in this repo yet
 
 Scaffolding only. Each item below has an owning story; building it here is a
@@ -363,11 +430,10 @@ scope violation.
 |---|---|
 | Internal service tokens (PyJWT), WebAuthn as a 2nd factor; MFA enrolment UX | later |
 | Transient user-supplied credential channel (document passwords, AD-47 rule 2) | epic 2 |
-| Single read entry point (`core/app/read/`) + outside-read grep (AD-14) | later (1.12 / epic 3) |
+| Single read entry point (`core/app/read/`) + outside-read grep (AD-14) | epic 3 (3.3) |
 | Visual settings / provisioning SPA (the mechanism exists; the UI is deferred) | front-end (AD-29) |
 | Diagnostic export packaging + the push act (the projection primitive exists; 1.10) | 6.2 |
 | Style extractor (the projection primitive's next consumer) | next increment |
 | Physical `pg_dump`/`pg_restore`/`upgrade.sh` wrappers + cron (the 1.11 mechanism exists) | deploy (AD-46) |
 | Embedder, extraction, OCR, LLM client, ML weights | Epic 2 |
-| Structural checks beyond the layering rule | 1.12 |
 | Offline-fitness CI job (network-isolated, end-to-end) | 1.2 |

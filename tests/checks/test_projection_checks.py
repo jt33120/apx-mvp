@@ -9,12 +9,12 @@ import dataclasses
 from pathlib import Path
 
 from apx.checks import import_contracts
-from apx.checks.__main__ import CHECKS
 from apx.checks.projection import (
     projection_emitted_only_by_registry,
     projectors_declare_attestation,
     snapshot_fields_are_content_free,
 )
+from apx.checks.registry import CHECKS
 from apx.core.projection import Attestation, RegisteredProjector, Snapshot, ValueKind
 
 _FIXTURES = Path(__file__).resolve().parents[1] / "_fixtures" / "projection_violations"
