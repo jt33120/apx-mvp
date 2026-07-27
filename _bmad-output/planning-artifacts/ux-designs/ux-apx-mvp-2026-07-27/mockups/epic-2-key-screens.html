@@ -1,0 +1,505 @@
+<title>APX — Maquette Epic 2 (triage documentaire)</title>
+<style>
+  /* ============================================================================
+     APX design tokens — lifted verbatim from apx/web/src/tokens.css (AD-29).
+     This mock is a faithful, offline, self-contained reference for the Epic-2
+     surfaces. The product is deliberately a single warm-paper world, so the mock
+     forces a light color-scheme even in a dark viewer.
+     ============================================================================ */
+  :root {
+    color-scheme: light;
+    --apx-ink: #0b1f3a; --apx-ink-2: #33425a; --apx-ink-3: #5b6678;
+    --apx-paper: #f7f4ee; --apx-surface: #ffffff; --apx-surface-2: #fbf9f5;
+    --apx-line: #e6e0d5; --apx-line-2: #efeae0;
+    --apx-gold: #9a7a34; --apx-gold-2: #b8944a; --apx-muted: #6b7280;
+    --apx-kept: #2f6f4f; --apx-kept-bg: #e8f1eb;
+    --apx-review: #9a5a12; --apx-review-bg: #f6ecdd;
+    --apx-discard: #6f6858; --apx-discard-bg: #eeece5;
+    --apx-danger: #a3161c; --apx-danger-bg: #fbeceb;
+    --apx-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --apx-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --apx-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --apx-radius: 12px; --apx-radius-sm: 8px;
+    --apx-ring: 0 0 0 3px rgba(154,122,52,.28);
+    --apx-shadow: 0 1px 2px rgba(11,31,58,.05), 0 12px 30px rgba(11,31,58,.08);
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: radial-gradient(1200px 480px at 50% -8%, rgba(154,122,52,.06), transparent 60%), var(--apx-paper);
+    color: var(--apx-ink); font-family: var(--apx-sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+  }
+  h1,h2,h3 { font-family: var(--apx-serif); color: var(--apx-ink); font-weight: 600; letter-spacing: .01em; text-wrap: balance; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.2rem; margin: 1.25rem 0 .5rem; }
+  a { color: var(--apx-gold); text-underline-offset: 2px; }
+  button { font: inherit; cursor: pointer; }
+
+  /* ---- meta chrome for the mock itself (not part of the product) ---- */
+  .mock-bar { position: sticky; top: 0; z-index: 20; display: flex; gap: .5rem; align-items: center;
+    flex-wrap: wrap; padding: .6rem 1rem; background: #101f37; color: #e9e3d5;
+    border-bottom: 3px solid var(--apx-gold); }
+  .mock-bar b { font-family: var(--apx-serif); letter-spacing: .04em; }
+  .mock-bar b i { color: var(--apx-gold-2); font-style: normal; }
+  .mock-tabs { display: flex; gap: .25rem; margin-left: auto; flex-wrap: wrap; }
+  .mock-tabs button { background: transparent; color: #cfc8b8; border: 1px solid #2a3a54;
+    border-radius: 999px; padding: .25rem .8rem; font-size: .85rem; }
+  .mock-tabs button[aria-selected="true"] { background: var(--apx-gold); color: #10203a; border-color: var(--apx-gold); font-weight: 600; }
+  .mock-note { max-width: 60rem; margin: .9rem auto -0.4rem; padding: 0 1.25rem; color: var(--apx-ink-3); font-size: .82rem; }
+  .mock-note code { font-family: var(--apx-mono); font-size: .92em; }
+
+  /* ---- product shell ---- */
+  .apx-shell { max-width: 60rem; margin: 0 auto; padding: 1.5rem 1.25rem 4rem; }
+  .apx-appbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    flex-wrap: wrap; padding-bottom: .9rem; border-bottom: 1px solid var(--apx-line); }
+  .apx-wordmark { font-family: var(--apx-serif); font-weight: 600; letter-spacing: .06em; color: var(--apx-ink); font-size: 1.3rem; }
+  .apx-wordmark b { color: var(--apx-gold); font-weight: 600; }
+  .apx-wordmark .tag { font-family: var(--apx-sans); font-size: .68rem; letter-spacing: .14em;
+    text-transform: uppercase; color: var(--apx-ink-3); margin-left: .35rem; }
+  .apx-who { font-size: .85rem; color: var(--apx-ink-2); display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .apx-badge { background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: 999px; padding: .1rem .6rem; color: var(--apx-ink-3); }
+  .apx-ghost { color: var(--apx-ink); background: transparent; border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .3rem .7rem; font-size: .85rem; }
+  .apx-ghost:hover { background: #efeadf; }
+  .btn { color: #fff; background: var(--apx-ink); border: 1px solid var(--apx-ink); border-radius: var(--apx-radius-sm); padding: .55rem 1rem; font-weight: 560; }
+  .btn:hover { background: #12294a; }
+  .apx-card { background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: var(--apx-radius); box-shadow: var(--apx-shadow); }
+  .apx-num { font-variant-numeric: tabular-nums; }
+  .apx-mono { font-family: var(--apx-mono); font-size: .85em; word-break: break-all; color: var(--apx-ink-3); }
+  .apx-hint { color: var(--apx-muted); font-size: .88rem; }
+  .eyebrow { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); }
+
+  /* ---- progress indicator (docked, non-blocking) ---- */
+  .apx-progress { display: flex; align-items: center; gap: .6rem; font-size: .82rem; color: var(--apx-ink-2);
+    background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: 999px; padding: .25rem .5rem .25rem .8rem; }
+  .apx-progress .track { width: 120px; height: 3px; background: var(--apx-line-2); border-radius: 999px; overflow: hidden; }
+  .apx-progress .fill { display: block; height: 100%; width: 17%; background: linear-gradient(90deg, var(--apx-gold), var(--apx-gold-2)); }
+  .apx-progress .x { border: 0; background: none; color: var(--apx-ink-3); font-size: 1rem; line-height: 1; padding: 0 .2rem; }
+
+  /* ---- worklist (top zone) ---- */
+  .zone-label { display: flex; align-items: baseline; gap: .6rem; margin: 1.6rem 0 .6rem; }
+  .zone-label h2 { margin: 0; }
+  .zone-label .count { color: var(--apx-muted); font-size: .85rem; }
+  .apx-list { border: 1px solid var(--apx-line); border-radius: var(--apx-radius); overflow: hidden; background: var(--apx-surface); }
+  .wl { display: grid; grid-template-columns: auto 1fr auto auto; gap: .85rem; align-items: center;
+    padding: .7rem .95rem .7rem .8rem; border-top: 1px solid var(--apx-line-2); border-left: 3px solid transparent; cursor: pointer; }
+  .wl:first-child { border-top: 0; }
+  .wl:hover { background: var(--apx-surface-2); }
+  .wl.rev { border-left-color: var(--apx-review); }
+  .wl.dgr { border-left-color: var(--apx-danger); }
+  .wl .ic { width: 1.6rem; height: 1.6rem; display: grid; place-items: center; border-radius: 999px; font-size: .9rem;
+    background: var(--apx-review-bg); color: var(--apx-review); }
+  .wl.dgr .ic { background: var(--apx-danger-bg); color: var(--apx-danger); }
+  .wl .lab { color: var(--apx-ink); }
+  .wl .lab small { display: block; color: var(--apx-muted); font-size: .8rem; margin-top: .1rem; }
+  .wl .n { font-family: var(--apx-serif); font-size: 1.35rem; color: var(--apx-ink-2); font-variant-numeric: tabular-nums; }
+  .wl .caret { color: var(--apx-ink-3); }
+  .wl-more { padding: .55rem .95rem; font-size: .84rem; color: var(--apx-gold); background: var(--apx-surface-2); border-top: 1px solid var(--apx-line-2); }
+
+  /* ---- the permanent denominator (equation) ---- */
+  .apx-equation { display: grid; grid-template-columns: auto 1fr; gap: 1.5rem; align-items: center; padding: 1.35rem 1.6rem; }
+  .apx-eq-total { text-align: center; padding-right: 1.5rem; border-right: 1px solid var(--apx-line); }
+  .apx-eq-total .n { font-family: var(--apx-serif); font-size: 3rem; line-height: 1; font-variant-numeric: tabular-nums; }
+  .apx-eq-total .l { font-size: .74rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-muted); }
+  .apx-eq-rows { display: flex; flex-direction: column; gap: .55rem; }
+  .apx-eq-row { display: grid; grid-template-columns: 3.4rem 1fr; gap: .85rem; align-items: baseline; }
+  .apx-eq-row .n { font-family: var(--apx-serif); font-size: 1.4rem; text-align: right; font-variant-numeric: tabular-nums; }
+  .apx-eq-row .c { color: var(--apx-ink-2); }
+  .apx-eq-row .c small { color: var(--apx-muted); }
+  .apx-verdict { margin: 1rem 1.6rem 0; display: inline-flex; align-items: center; gap: .4rem; font-size: .9rem;
+    color: var(--apx-kept); background: var(--apx-kept-bg); border-radius: 999px; padding: .32rem .85rem; }
+  .prov-flag { margin: .3rem 1.6rem 0; font-size: .8rem; color: var(--apx-review); }
+
+  /* ---- matters zone ---- */
+  .mt { display: grid; grid-template-columns: 1fr auto; gap: 1rem; align-items: center; padding: .75rem .95rem;
+    border-top: 1px solid var(--apx-line-2); cursor: pointer; }
+  .mt:first-child { border-top: 0; }
+  .mt:hover { background: var(--apx-surface-2); }
+  .mt .name { font-weight: 560; }
+  .mt .name .caret { color: var(--apx-ink-3); margin-right: .4rem; }
+  .mt .meta { font-size: .82rem; color: var(--apx-muted); margin-top: .15rem; display: flex; gap: .5rem; flex-wrap: wrap; }
+  .mt .eq-inline { font-variant-numeric: tabular-nums; color: var(--apx-ink-2); }
+  .tick { display: inline-flex; align-items: center; gap: .25rem; }
+  .dot { width: .5rem; height: .5rem; border-radius: 999px; display: inline-block; }
+  .dot.run { background: var(--apx-gold); } .dot.stale { background: var(--apx-review); } .dot.samp { background: var(--apx-kept); }
+  .mt .when { font-size: .82rem; color: var(--apx-ink-3); white-space: nowrap; }
+  .mt-more { padding: .6rem .95rem; font-size: .84rem; color: var(--apx-gold); background: var(--apx-surface-2); border-top: 1px solid var(--apx-line-2); }
+
+  /* ---- chips ---- */
+  .chip { display: inline-block; border-radius: 999px; padding: .07rem .55rem; font-size: .76rem; white-space: nowrap; }
+  .chip--review { color: var(--apx-review); background: var(--apx-review-bg); }
+  .chip--kept { color: var(--apx-kept); background: var(--apx-kept-bg); }
+  .chip--discard { color: var(--apx-discard); background: var(--apx-discard-bg); }
+  .chip--scope { color: var(--apx-ink-2); background: var(--apx-line-2); }
+  .chip--unknown { color: var(--apx-ink-3); background: var(--apx-line-2); border: 1px dashed var(--apx-line); }
+
+  /* ---- onboarding ---- */
+  .ob-card { max-width: 34rem; margin: 1.5rem auto 0; padding: 2rem 1.9rem 1.6rem; position: relative; overflow: hidden; }
+  .ob-card::before { content:""; position:absolute; inset:0 0 auto 0; height:3px; background: linear-gradient(90deg, var(--apx-gold), var(--apx-gold-2)); }
+  .field { display: flex; flex-direction: column; gap: .3rem; margin-top: 1.05rem; }
+  .field > .lab { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); }
+  .field > .lab .req { color: var(--apx-gold); }
+  .field > .lab .opt { color: var(--apx-muted); text-transform: none; letter-spacing: 0; font-size: .8rem; }
+  .control { color: var(--apx-ink); background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .55rem .7rem; }
+  .control.file { background: var(--apx-surface-2); border-style: dashed; display: flex; align-items: center; gap: .6rem; color: var(--apx-ink-2); }
+  .control.file .pick { font-size: .82rem; }
+  select.control { appearance: none; background-image: linear-gradient(45deg, transparent 50%, var(--apx-ink-3) 50%), linear-gradient(135deg, var(--apx-ink-3) 50%, transparent 50%); background-position: calc(100% - 18px) 1.05rem, calc(100% - 13px) 1.05rem; background-size: 5px 5px; background-repeat: no-repeat; }
+  .field .help { font-size: .8rem; color: var(--apx-muted); }
+  .ob-actions { display: flex; align-items: center; gap: .8rem; margin-top: 1.5rem; }
+  .ob-actions .skip { color: var(--apx-ink-3); font-size: .85rem; }
+
+  /* ---- register ---- */
+  .filters { display: flex; gap: .4rem; flex-wrap: wrap; margin: 1rem 0 .8rem; }
+  .filters .f { border: 1px solid var(--apx-line); background: var(--apx-surface); border-radius: 999px; padding: .2rem .7rem; font-size: .82rem; color: var(--apx-ink-2); }
+  .filters .f[aria-pressed="true"] { background: var(--apx-ink); color: #fff; border-color: var(--apx-ink); }
+  .rg { display: grid; grid-template-columns: auto 1fr auto auto; gap: .85rem; align-items: center; padding: .7rem .95rem; border-top: 1px solid var(--apx-line-2); }
+  .rg:first-child { border-top: 0; }
+  .rg input[type=checkbox] { accent-color: var(--apx-gold); }
+  .rg .file { min-width: 0; }
+  .rg .file .fn { font-weight: 520; }
+  .rg .meta { font-size: .78rem; color: var(--apx-muted); display: flex; gap: .5rem; flex-wrap: wrap; margin-top: .1rem; }
+  .rg .act { font-size: .82rem; }
+  .rg.resolved { opacity: .55; }
+  .rg.resolved .act { color: var(--apx-kept); }
+  .bulk { display: flex; align-items: center; gap: .8rem; padding: .6rem .95rem; background: var(--apx-surface-2); border-top: 1px solid var(--apx-line-2); font-size: .85rem; }
+
+  /* ---- completion summary ---- */
+  .summary-head { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: .5rem; }
+  .breakdown { display: grid; grid-template-columns: repeat(auto-fit, minmax(9rem, 1fr)); gap: .6rem; margin-top: 1rem; }
+  .bk { border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .6rem .8rem; background: var(--apx-surface); }
+  .bk .n { font-family: var(--apx-serif); font-size: 1.5rem; font-variant-numeric: tabular-nums; }
+  .bk .l { font-size: .8rem; color: var(--apx-muted); }
+  .view { display: none; }
+  .view[data-active="true"] { display: block; }
+  .foot { text-align: center; color: var(--apx-muted); font-size: .76rem; margin-top: 2.5rem; padding-top: 1rem; border-top: 1px solid var(--apx-line-2); }
+</style>
+
+<div class="mock-bar">
+  <b>A&nbsp;P<i>X</i></b>
+  <span style="font-size:.8rem;color:#b9b1a1">Maquette · Epic 2 — triage documentaire</span>
+  <div class="mock-tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-view="home">Accueil</button>
+    <button role="tab" aria-selected="false" data-view="onboard">Importer un dossier</button>
+    <button role="tab" aria-selected="false" data-view="summary">Résumé d'import</button>
+    <button role="tab" aria-selected="false" data-view="register">Registre des échecs</button>
+  </div>
+</div>
+<p class="mock-note">
+  Maquette de référence, fidèle aux tokens <code>apx/web/src/tokens.css</code> (AD-29). Données fictives ·
+  aucun corpus client n'est mobilisé. Protagoniste : Me Claire Fontaine, 4 ans d'un dossier sur clé USB.
+</p>
+
+<!-- ===================== VIEW: HOME (Story 2.11 + 2.7) ===================== -->
+<main class="apx-shell view" data-view="home" data-active="true">
+  <header class="apx-appbar">
+    <div class="apx-wordmark">A&nbsp;P<b>X</b><span class="tag">Triage</span></div>
+    <div class="apx-who">
+      <span class="apx-progress" title="Import non-bloquant — survit au rafraîchissement">
+        Import — <span class="apx-num">812&nbsp;/&nbsp;4&nbsp;812</span>
+        <span class="track"><span class="fill"></span></span>
+        <button class="x" aria-label="Réduire">×</button>
+      </span>
+      <span class="apx-badge">Me C. Fontaine</span>
+      <span>Contentieux · Social</span>
+      <button class="apx-ghost">Déconnexion</button>
+    </div>
+  </header>
+
+  <!-- WORKLIST — top zone, actionable lines only -->
+  <div class="zone-label">
+    <h2>À traiter</h2>
+    <span class="count">4 tâches · votre périmètre</span>
+  </div>
+  <div class="apx-list">
+    <div class="wl dgr">
+      <span class="ic" aria-hidden="true">!</span>
+      <span class="lab">Import interrompu — aucun périmètre défini sur « Dupont 2022 »
+        <small>Rien n'a été écrit. Reprendre en choisissant un périmètre.</small></span>
+      <span class="n">1</span><span class="caret">›</span>
+    </div>
+    <div class="wl rev">
+      <span class="ic" aria-hidden="true">🔒</span>
+      <span class="lab">Fournir le mot de passe de pièces protégées
+        <small>Elles ne sont pas dans le corpus tant qu'elles ne sont pas lues.</small></span>
+      <span class="n">6</span><span class="caret">›</span>
+    </div>
+    <div class="wl rev">
+      <span class="ic" aria-hidden="true">🗜</span>
+      <span class="lab">Archives non ouvertes — contenu inconnu
+        <small>Comptées à part : « 2 archives, contenu inconnu ».</small></span>
+      <span class="n">2</span><span class="caret">›</span>
+    </div>
+    <div class="wl rev">
+      <span class="ic" aria-hidden="true">▦</span>
+      <span class="lab">Pièces illisibles à revoir (format non pris en charge)
+        <small>Énumérées et attribuées — jamais disparues en silence.</small></span>
+      <span class="n">37</span><span class="caret">›</span>
+    </div>
+    <div class="wl-more">voir les tâches non urgentes (0) — la file est agrégée et plafonnée</div>
+  </div>
+
+  <!-- PERMANENT DENOMINATOR (Story 2.7) -->
+  <div class="zone-label">
+    <h2>Inventaire</h2>
+    <span class="count">votre périmètre · permanent</span>
+  </div>
+  <div class="apx-card">
+    <div class="apx-equation">
+      <div class="apx-eq-total">
+        <div class="n apx-num">4&nbsp;812</div>
+        <div class="l">pièces soumises</div>
+      </div>
+      <div class="apx-eq-rows">
+        <div class="apx-eq-row"><div class="n" style="color:var(--apx-kept)">4&nbsp;590</div>
+          <div class="c">dans le corpus <small>— indexées, recherchables</small></div></div>
+        <div class="apx-eq-row"><div class="n" style="color:var(--apx-review)">180</div>
+          <div class="c">à revoir <small>— registre des échecs (ouvertes)</small></div></div>
+        <div class="apx-eq-row"><div class="n" style="color:var(--apx-discard)">42</div>
+          <div class="c">écartées <small>— bruit système déclaré</small></div></div>
+      </div>
+    </div>
+    <div class="apx-verdict">✓ Inventaire cohérent : 4 812 = 4 590 + 180 + 42</div>
+    <p class="prov-flag">＋ 2 archives non ouvertes, contenu inconnu — comptées à part, jamais fondues dans un total.</p>
+    <div style="height:1rem"></div>
+  </div>
+
+  <!-- MATTERS zone — navigation, never a task -->
+  <div class="zone-label">
+    <h2>Mes dossiers</h2>
+    <span class="count">12 · triés par activité récente</span>
+  </div>
+  <div class="apx-list">
+    <div class="mt">
+      <div>
+        <div class="name"><span class="caret">▸</span>Martin c/ Alpha Conseil</div>
+        <div class="meta">
+          <span class="eq-inline">4 812 = 4 590 + 180 + 42</span>
+          <span class="tick"><span class="dot run"></span>import en cours</span>
+        </div>
+      </div>
+      <div class="when">il y a 2 min</div>
+    </div>
+    <div class="mt">
+      <div>
+        <div class="name"><span class="caret">▸</span>Dupuis c/ TechnoSys SAS</div>
+        <div class="meta">
+          <span class="eq-inline">1 204 = 1 204 + 0 + 0</span>
+          <span class="tick"><span class="dot stale"></span>classement obsolète</span>
+        </div>
+      </div>
+      <div class="when">hier</div>
+    </div>
+    <div class="mt">
+      <div>
+        <div class="name"><span class="caret">▸</span>Succession Lévy</div>
+        <div class="meta">
+          <span class="eq-inline">862 = 858 + 4 + 0</span>
+          <span class="tick"><span class="dot samp"></span>échantillonnage ouvert</span>
+        </div>
+      </div>
+      <div class="when">3 j</div>
+    </div>
+    <div class="mt-more">voir les 9 autres dossiers de votre périmètre ›</div>
+  </div>
+  <p class="apx-hint" style="margin-top:1rem">
+    La file « À traiter » reste toujours en haut : 300 dossiers ne la poussent jamais hors de l'écran.
+    Aucun type de ligne n'apparaît à la fois ici et dans la file — un dossier est une navigation, pas une tâche.
+  </p>
+  <div class="foot">Hébergé en Europe · zéro rétention · accès cloisonné par affaire</div>
+</main>
+
+<!-- ===================== VIEW: ONBOARDING (Story 2.1) ===================== -->
+<main class="apx-shell view" data-view="onboard">
+  <header class="apx-appbar">
+    <div class="apx-wordmark">A&nbsp;P<b>X</b><span class="tag">Triage</span></div>
+    <div class="apx-who"><a href="#" onclick="return false">← Accueil</a></div>
+  </header>
+
+  <div class="apx-card ob-card">
+    <p class="eyebrow" style="margin:0">Nouvel import</p>
+    <h1 style="margin:.2rem 0 .1rem">Déposez un dossier. C'est tout.</h1>
+    <p class="apx-hint" style="margin:.2rem 0 0; max-width:40ch">
+      L'onboarding est un geste, pas un projet informatique. Trois choix obligatoires,
+      un seul facultatif. Aucun autre écran de configuration.
+    </p>
+
+    <div class="field">
+      <span class="lab">Dossier <span class="req">•</span></span>
+      <div class="control file"><span aria-hidden="true">📁</span>
+        <span>USB — <b>Dossier Martin (2018–2022)</b></span>
+        <span class="pick apx-hint" style="margin-left:auto"><u>Choisir…</u></span></div>
+      <span class="help">Sous-dossiers parcourus à toute profondeur ; la structure déposée reste reconstructible.</span>
+    </div>
+
+    <div class="field">
+      <span class="lab">Affaire <span class="req">•</span></span>
+      <input class="control" value="Martin c/ Alpha Conseil" />
+    </div>
+
+    <div class="field">
+      <span class="lab">Périmètre (accès) <span class="req">•</span></span>
+      <select class="control">
+        <option>Contentieux · Social</option>
+        <option>Contentieux · Commercial</option>
+      </select>
+      <span class="help">Limité aux périmètres que vous détenez ou pouvez accorder — dans les deux sens :
+        ni soustraire à votre hiérarchie, ni élargir à un groupe qui n'est pas le vôtre.</span>
+    </div>
+
+    <div class="field">
+      <span class="lab">Détenteur (custodian) <span class="req">•</span></span>
+      <input class="control" value="M. Martin" placeholder="Nom du détenteur…" />
+      <span class="help">Obligatoire. Si réellement inconnu : <em>détenteur-non-déclaré</em> — jamais vide.</span>
+    </div>
+
+    <div class="field">
+      <span class="lab">Thèse du dossier <span class="opt">— facultatif, peut être ignoré</span></span>
+      <textarea class="control" rows="2" placeholder="Ex : contestation d'un licenciement pour insuffisance professionnelle…"></textarea>
+      <span class="help">L'ignorer ne bloque rien.</span>
+    </div>
+
+    <div class="ob-actions">
+      <button class="btn">Lancer l'import</button>
+      <span class="skip">L'import tourne en arrière-plan — vous pourrez continuer à travailler.</span>
+    </div>
+  </div>
+  <p class="apx-hint" style="max-width:34rem; margin:1rem auto 0; text-align:center">
+    Cas limites gérés sans dialogue d'erreur : un dossier sans fichier lisible → job terminé, inventaire 0/0
+    + une ligne explicative ; un périmètre vide → job interrompu bruyamment, <b>rien n'est écrit</b>.
+  </p>
+</main>
+
+<!-- ===================== VIEW: COMPLETION SUMMARY (Story 2.10) ===================== -->
+<main class="apx-shell view" data-view="summary">
+  <header class="apx-appbar">
+    <div class="apx-wordmark">A&nbsp;P<b>X</b><span class="tag">Triage</span></div>
+    <div class="apx-who"><a href="#" onclick="return false">← Accueil</a></div>
+  </header>
+
+  <div class="summary-head">
+    <div>
+      <p class="eyebrow" style="margin:0">Import terminé · Martin c/ Alpha Conseil</p>
+      <h1 style="margin:.15rem 0 0">Ce qui est entré, ce qui vous attend.</h1>
+    </div>
+    <span class="apx-hint">Toujours accessible depuis le dossier et le journal d'audit.</span>
+  </div>
+
+  <!-- 1st element: the denominator -->
+  <div class="apx-card" style="margin-top:1rem">
+    <div class="apx-equation">
+      <div class="apx-eq-total"><div class="n apx-num">4&nbsp;812</div><div class="l">pièces soumises</div></div>
+      <div class="apx-eq-rows">
+        <div class="apx-eq-row"><div class="n" style="color:var(--apx-kept)">4&nbsp;590</div><div class="c">dans le corpus</div></div>
+        <div class="apx-eq-row"><div class="n" style="color:var(--apx-review)">180</div><div class="c">à revoir</div></div>
+        <div class="apx-eq-row"><div class="n" style="color:var(--apx-discard)">42</div><div class="c">écartées — bruit système</div></div>
+      </div>
+    </div>
+    <div class="apx-verdict">✓ Inventaire cohérent : 4 812 = 4 590 + 180 + 42</div>
+    <div style="height:1rem"></div>
+  </div>
+
+  <!-- 2nd element: the tasks this job created -->
+  <div class="zone-label"><h2>Ce qui a besoin de vous</h2><span class="count">3 tâches créées par cet import</span></div>
+  <div class="apx-list">
+    <div class="wl rev"><span class="ic" aria-hidden="true">🔒</span>
+      <span class="lab">Fournir le mot de passe de pièces protégées</span><span class="n">6</span><span class="caret">›</span></div>
+    <div class="wl rev"><span class="ic" aria-hidden="true">🗜</span>
+      <span class="lab">Archives non ouvertes — contenu inconnu</span><span class="n">2</span><span class="caret">›</span></div>
+    <div class="wl rev"><span class="ic" aria-hidden="true">▦</span>
+      <span class="lab">Pièces illisibles à revoir (format non pris en charge)</span><span class="n">37</span><span class="caret">›</span></div>
+  </div>
+
+  <!-- distinguishing counts -->
+  <div class="zone-label"><h2>Le détail, en chiffres</h2></div>
+  <div class="breakdown">
+    <div class="bk"><div class="n" style="color:var(--apx-kept)">4 590</div><div class="l">nouvellement indexées</div></div>
+    <div class="bk"><div class="n">311</div><div class="l">déjà présentes (reconnues)</div></div>
+    <div class="bk"><div class="n">1 240</div><div class="l">exclues — bruit système</div></div>
+    <div class="bk"><div class="n">168</div><div class="l">issues d'archives (dépliées)</div></div>
+    <div class="bk"><div class="n" style="color:var(--apx-review)">180</div><div class="l">au registre <small>(6 protégées · 37 formats · …)</small></div></div>
+  </div>
+  <div class="foot">Un résumé de tâches, pas un journal d'événements techniques.</div>
+</main>
+
+<!-- ===================== VIEW: FAILURE REGISTER (Story 2.6) ===================== -->
+<main class="apx-shell view" data-view="register">
+  <header class="apx-appbar">
+    <div class="apx-wordmark">A&nbsp;P<b>X</b><span class="tag">Registre</span></div>
+    <div class="apx-who"><a href="#" onclick="return false">← Accueil</a></div>
+  </header>
+
+  <div class="summary-head" style="margin-top:.4rem">
+    <div><p class="eyebrow" style="margin:0">Registre des échecs · Martin c/ Alpha Conseil</p>
+      <h1 style="margin:.15rem 0 0">180 pièces à revoir — chacune nommée et actionnable.</h1></div>
+    <a href="#" onclick="return false" class="apx-hint">Exporter (une pièce par ligne) ›</a>
+  </div>
+
+  <div class="filters">
+    <button class="f" aria-pressed="true">Toutes · 180</button>
+    <button class="f">🔒 protégées · 6</button>
+    <button class="f">▦ format · 37</button>
+    <button class="f">⌦ vides · 12</button>
+    <button class="f">🗜 archives · 2</button>
+    <button class="f">⚠ inconnu · 3</button>
+    <button class="f">✓ résolues · 22</button>
+  </div>
+
+  <div class="apx-list">
+    <div class="rg">
+      <input type="checkbox" aria-label="Sélectionner" />
+      <div class="file"><div class="fn">Pièce 214 — attestation.pdf</div>
+        <div class="meta"><span class="apx-mono">/Martin/2021/pièces/214.pdf</span> · M. Martin</div></div>
+      <span class="chip chip--review">protégée</span>
+      <button class="apx-ghost act">Fournir le mot de passe</button>
+    </div>
+    <div class="rg">
+      <input type="checkbox" aria-label="Sélectionner" />
+      <div class="file"><div class="fn">archive_2019.7z</div>
+        <div class="meta"><span class="apx-mono">/Martin/2019/archive_2019.7z</span> · M. Martin</div></div>
+      <span class="chip chip--unknown">archive · contenu inconnu</span>
+      <button class="apx-ghost act">Réessayer</button>
+    </div>
+    <div class="rg">
+      <input type="checkbox" aria-label="Sélectionner" />
+      <div class="file"><div class="fn">plan_cadastral.dwg</div>
+        <div class="meta"><span class="apx-mono">/Martin/annexes/plan_cadastral.dwg</span> · M. Martin</div></div>
+      <span class="chip chip--review">format non pris en charge</span>
+      <button class="apx-ghost act">Réessayer</button>
+    </div>
+    <div class="rg">
+      <input type="checkbox" aria-label="Sélectionner" />
+      <div class="file"><div class="fn">scan_vierge_006.pdf</div>
+        <div class="meta"><span class="apx-mono">/Martin/2020/scans/006.pdf</span> · M. Martin</div></div>
+      <span class="chip chip--review">extraction vide</span>
+      <button class="apx-ghost act">Réessayer</button>
+    </div>
+    <div class="rg resolved">
+      <input type="checkbox" aria-label="Sélectionner" disabled />
+      <div class="file"><div class="fn">contrat_bail.docx</div>
+        <div class="meta"><span class="apx-mono">/Martin/2018/contrat_bail.docx</span> · M. Martin · résolue hier</div></div>
+      <span class="chip chip--kept">résolue</span>
+      <span class="act">✓ dans le corpus · historique conservé</span>
+    </div>
+    <div class="bulk">
+      <label><input type="checkbox" /> tout sélectionner (filtre courant)</label>
+      <button class="apx-ghost" style="margin-left:auto">Réessayer la sélection</button>
+      <span class="apx-hint">Un relancement groupé = une seule entrée d'audit nommant l'ensemble.</span>
+    </div>
+  </div>
+  <p class="apx-hint" style="margin-top:1rem">
+    Résolu par changement d'état, jamais par suppression. Une pièce protégée propose une saisie de mot de passe,
+    jamais une simple « exclusion » comme seule issue. L'inventaire ne compte que les entrées <b>ouvertes</b>.
+  </p>
+  <div class="foot">Données fictives · aucun corpus client n'est mobilisé.</div>
+</main>
+
+<script>
+  const tabs = document.querySelectorAll('.mock-tabs button');
+  const views = document.querySelectorAll('main.view');
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.setAttribute('aria-selected', String(x === t)));
+    const v = t.dataset.view;
+    views.forEach(m => m.setAttribute('data-active', String(m.dataset.view === v)));
+    window.scrollTo({ top: 0 });
+  }));
+</script>
