@@ -45,6 +45,7 @@ from apx.core.app.triage import triage_pieces
 from apx.core.domain.config import ConfigError, default_of
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
+from apx.core.projection import project_all
 
 
 @asynccontextmanager
@@ -711,6 +712,28 @@ def admin_config_provenance(
     return [
         ConfigProvenanceOut(key=p.key, value=p.value, audited=p.audited)
         for p in store.config_provenance(ident.tenant)
+    ]
+
+
+# ── the content-free projection (AD-26): information ABOUT a tenant's data, never the data ──
+class ProjectionOut(BaseModel):
+    projector: str
+    kinds: list[str]
+    values: dict[str, Any]
+
+
+@app.get("/api/admin/diagnostics", response_model=list[ProjectionOut])
+def admin_diagnostics(ident: Identity = Depends(require_admin)) -> list[ProjectionOut]:
+    """The content-free projection of the caller's tenant (admin only, tenant from the session):
+    counts, an error-class histogram and version identifiers — provably no tenant content
+    (AD-26/FR-31). This is the projection registry's first consumer; the full client-pushed
+    diagnostic export (packaging, the push act as a named egress) is story 6.2. Every value here
+    comes from `project_all` — the endpoint never fabricates a projection (sealed-type check)."""
+    store = _require_store()
+    snapshot = store.projection_snapshot(ident.tenant)
+    return [
+        ProjectionOut(projector=p.projector, kinds=list(p.kinds), values=dict(p.values))
+        for p in project_all(snapshot)
     ]
 
 

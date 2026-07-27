@@ -22,6 +22,7 @@ from apx.checks import (
     encryption,
     import_contracts,
     payload_schema,
+    projection,
     scope_admin,
     secrets,
     tenant_isolation,
@@ -57,6 +58,9 @@ CHECKS: list[Callable[[], CheckResult]] = [
     configuration.config_defaults_preserve_guarantees,
     configuration.documented_config_keys_exist,
     configuration.config_reference_is_complete,
+    # story 1.10 — the content-free projection primitive (AD-26/FR-31).
+    projection.projection_emitted_only_by_registry,
+    projection.projectors_declare_attestation,
 ]
 
 

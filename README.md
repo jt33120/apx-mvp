@@ -4,15 +4,16 @@ Mass-document triage for law firms. Hexagonal core, adapters at the edges, **one
 stateful service** (PostgreSQL). Runs the same one artefact hosted, in CI, and
 air-gapped inside a firm (AD-3).
 
-> **Status: story 1.9 — configuration-as-data & the provisioning surface.** The frozen payload
-> schema (1.3), the *tenant* wall (1.4), owned auth — Argon2id + opaque server-side sessions,
-> lockout-in-audit, MFA (1.5) — privileged, audited, reversible scope administration (1.6),
-> application-layer encryption at rest with a fail-closed start-up gate (1.7), secrets held only in
-> the environment — rotatable in place, scrubbed from logs (1.8), and now **per-*tenant* behaviour
-> as data rows** edited through **one audited surface**, a *tenant* **provisioned** through it, and
-> a build that goes red if a firm's identity leaks into a code branch or a guarantee ships switched
-> off (1.9) — exist; ingestion, retrieval and the model tiers do not yet. What is deliberately
-> absent, and which story owns it, is listed at the bottom.
+> **Status: story 1.10 — the content-free projection primitive.** The frozen payload schema (1.3),
+> the *tenant* wall (1.4), owned auth — Argon2id + opaque server-side sessions, lockout-in-audit,
+> MFA (1.5) — privileged, audited, reversible scope administration (1.6), application-layer
+> encryption at rest with a fail-closed start-up gate (1.7), secrets held only in the environment —
+> rotatable in place, scrubbed from logs (1.8), per-*tenant* behaviour as data rows edited through
+> one audited surface with a *tenant* provisioned through it (1.9), and now **one mechanism for
+> emitting information *about* a *tenant*'s data without emitting the data** — a registry of named
+> projectors whose content-freedom is a build-checked structural property (1.10) — exist; ingestion,
+> retrieval and the model tiers do not yet. What is deliberately absent, and which story owns it, is
+> listed at the bottom.
 
 Planning artefacts (PRD, architecture spine, epics, stories) live under
 `_bmad-output/planning-artifacts/`. The previous implementation at
@@ -291,6 +292,36 @@ Wiring each value into its consumer (the cascade share into stage-3 gating, sour
 ingestion, chunking into the chunker) lands in the consuming story (epics 2/4/5); 1.9 delivers the
 surface, the defaults and the guarantees.
 
+## The content-free projection (AD-26/FR-31)
+
+"Only code travels" is one **enforceable mechanism**, not a promise repeated in three places. All
+emission of information *about* a *tenant*'s data goes through **one registry of named projectors**
+(`apx/core/projection.py`); each declares the **shape** it emits (a value kind from a content-free
+set — count, version, error-class, timing, redacted-diagnostic, opaque-id, attested-aggregate). The
+registry is **open by construction** (FR-31): the next increment's on-premises style extractor
+registers a projector, it does not fork the primitive.
+
+Content-freedom is a **structural property**, in three parts (`python -m apx.checks` + a seeded-token
+test):
+
+- **The seeded-token test** seeds a *corpus* with a unique content token AND a secret value, runs
+  **every** registered projector, and asserts neither appears in any projector's output — **and** in
+  the *union* of all projectors' output for one *tenant* (the attestation floor is not composable).
+- **Emission outside the registry fails the build.** The `Projection` result type is **sealed** — a
+  static check asserts it is constructed only inside the registry — so a projector cannot be added by
+  writing an emission path; a consumer *receives* a projection from `project_all`, it never
+  fabricates one.
+- **A text-deriving projector must declare its attestation floor** (min *pièces* AND *matters*),
+  machine-readably — one that does not turns the build red (the property is otherwise undecidable).
+
+Today three projectors serve the client-pushed diagnostic export's needs — **corpus counts**,
+an **error-class histogram**, and **version identifiers** — behind `GET /api/admin/diagnostics`
+(admin, tenant-from-session). The **egress check** (AD-45, *no fourth outbound path*) deliberately
+lives in the checks harness, **not** in this unit: an adversarial review predicted the projection
+unit would be dropped under pressure, so dropping it must not drop the egress guarantee. The full
+diagnostic **export** (packaging, the push act as a named egress) is story 6.2; the style extractor
+is the next increment; the cockpit is the front-end (AD-29).
+
 ## What does NOT belong in this repo yet
 
 Scaffolding only. Each item below has an owning story; building it here is a
@@ -302,7 +333,8 @@ scope violation.
 | Transient user-supplied credential channel (document passwords, AD-47 rule 2) | epic 2 |
 | Single read entry point (`core/app/read/`) + outside-read grep (AD-14) | later (1.12 / epic 3) |
 | Visual settings / provisioning SPA (the mechanism exists; the UI is deferred) | front-end (AD-29) |
-| Content-free projection, egress check | 1.10 / 1.12 |
+| Diagnostic export packaging + the push act (the projection primitive exists; 1.10) | 6.2 |
+| Style extractor (the projection primitive's next consumer) | next increment |
 | Backup, restore, `upgrade.sh`, cosign packaging | 1.11 / deploy |
 | Embedder, extraction, OCR, LLM client, ML weights | Epic 2 |
 | Structural checks beyond the layering rule | 1.12 |

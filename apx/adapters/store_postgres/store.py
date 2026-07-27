@@ -55,6 +55,7 @@ from apx.core.domain.dedup import cluster
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.search import snippet
 from apx.core.domain.triage import TriageOutcome
+from apx.core.projection import Snapshot
 
 # A valid hash to verify against when the user is unknown, so authentication takes the
 # same time whether or not the email exists (no user-enumeration by timing).
@@ -823,6 +824,38 @@ class SqlStore:
         """Every data-bearing tenant (see :meth:`_tenants`)."""
         with self._sf() as session:
             return self._tenants(session)
+
+    def projection_snapshot(self, tenant: str) -> Snapshot:
+        """The content-free facts the projection primitive (AD-26) emits: counts, an error-class
+        histogram (enumerated classes → counts) and distinct version identifiers — NO names, paths,
+        content or query text. The seeded-token test seeds content into this tenant's data and
+        asserts none of it survives this gather-plus-project path (FR-31)."""
+        with self._sf() as session:
+            piece_count = session.scalar(
+                select(func.count()).select_from(Piece).where(Piece.tenant == tenant)) or 0
+            failure_count = session.scalar(
+                select(func.count()).select_from(Failure).where(Failure.tenant == tenant)) or 0
+            matter_count = session.scalar(
+                select(func.count()).select_from(MatterScope).where(
+                    MatterScope.tenant == tenant)) or 0
+            histogram = {
+                cls: n for cls, n in session.execute(
+                    select(Failure.error_class, func.count())
+                    .where(Failure.tenant == tenant)
+                    .group_by(Failure.error_class)
+                ).all()
+            }
+            schema_versions = tuple(sorted(
+                v for (v,) in session.execute(
+                    select(Piece.schema_version).where(Piece.tenant == tenant).distinct()).all()))
+            extractor_versions = tuple(sorted(
+                v for (v,) in session.execute(
+                    select(Piece.extractor_version).where(Piece.tenant == tenant).distinct()).all()
+            ))
+        return Snapshot(
+            piece_count=piece_count, failure_count=failure_count, matter_count=matter_count,
+            error_class_histogram=histogram, schema_versions=schema_versions,
+            extractor_versions=extractor_versions)
 
     def rekey_and_record(self, fingerprint: str, actor: str = "system:maintenance") -> int:
         """Rotate the key in place (AD-47): re-encrypt every application-encrypted value under
