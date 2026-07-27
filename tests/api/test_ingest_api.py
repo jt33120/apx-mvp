@@ -451,6 +451,22 @@ def test_upload_rejects_a_path_traversal_filename(tmp_path: Path, monkeypatch) -
         assert r.status_code == 400
 
 
+def test_upload_returns_before_the_worker_does_the_work(tmp_path: Path, monkeypatch) -> None:
+    # AD-6 (AC1): the request enqueues and returns — it does NOT do the ingest work. The corpus is
+    # still empty at the 202; it fills only after the worker runs.
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        r = c.post("/api/ingest-upload",
+                   data={"matter": "m", "scope": "wall-A", "custodian": "M. Martin"},
+                   files=[("files", ("a.txt", b"lettre", "text/plain"))])
+        assert r.status_code == 202
+        assert c.get("/api/matters/m/inventory").json()["in_corpus"] == 0   # empty at return
+        _run_upload(store, r)                                                # the worker fills it
+        assert c.get("/api/matters/m/inventory").json()["in_corpus"] == 1
+
+
 def test_upload_threads_the_custodian_and_the_explicit_unknown(tmp_path: Path, monkeypatch) -> None:
     # AC3: a real custodian, and the explicit "custodian-undeclared" choice, both reach the piece.
     from sqlalchemy import select

@@ -168,6 +168,8 @@ def build_parser() -> argparse.ArgumentParser:
     bk.add_argument("--out", required=True, help="destination file (encrypted content at rest)")
     rs = sub.add_parser("restore", help="restore a tenant from a backup file into an empty store")
     rs.add_argument("--from", dest="src", required=True, help="the backup file")
+    sub.add_parser(
+        "worker", help="run the resumable import worker (applies the queue schema first)")
     return parser
 
 
@@ -176,6 +178,15 @@ def main(argv: Sequence[str] | None = None) -> None:
 
     install_secret_redaction()  # scrub secrets from any log this CLI emits (AD-47), like the app
     args = build_parser().parse_args(argv)
+    if args.cmd == "worker":
+        # The resumable import worker (Story 2.2, AD-6). Applies Procrastinate's queue schema
+        # (idempotent, kept OUT of the Alembic chain — Procrastinate owns it, AD-17) then consumes
+        # the queue, committing one pièce per unit against the application-owned ledger.
+        from apx.worker.app import app as worker_app
+        with worker_app.open():
+            worker_app.schema_manager.apply_schema()
+            worker_app.run_worker(install_signal_handlers=True)
+        return
     if args.cmd == "provision":
         password = os.environ.get("APX_NEW_PASSWORD") or getpass.getpass("Mot de passe admin : ")
         if not password:

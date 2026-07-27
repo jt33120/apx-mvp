@@ -119,9 +119,13 @@ def _run_import(
     (idempotent) and processes only the still-pending units — resume."""
     stamp = now or datetime.now(UTC)
     job = store.read_import_job(job_id)
-    if job is None:
-        return
+    if job is None or job.state == "done":
+        return  # a re-dispatch of a completed job is a no-op — never re-enumerate a consumed spool
     folder = Path(job.spool_path)
+    if job.owns_spool and not folder.is_dir():
+        # A missing OWNED spool for a not-yet-done job is a fault, not an empty import: fail closed
+        # so the queue retries, rather than freezing the job at a false, silent 0/0 (AD-17).
+        raise RuntimeError(f"import {job_id}: the owned spool {folder} is missing")
     provenances = enumerate_units(folder) if folder.is_dir() else []
     store.record_enumeration(job_id, provenances, stamp)
     max_bytes = int(store.get_config(job.tenant, "import_unit_max_bytes"))

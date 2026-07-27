@@ -39,11 +39,39 @@ services:
       LLM_BASE_URL: ${LLM_BASE_URL:-}
       LLM_MODEL: ${LLM_MODEL:-}
       JUDGE_WORKERS: ${JUDGE_WORKERS:-8}
+      # The upload spool is a durable dir SHARED with the worker (Story 2.2): the API writes the
+      # uploaded bytes here and the worker reads them after the request returns. APX_DATA_PATH names it.
+      APX_DATA_PATH: /apx-spool
     ports:
       - "8000:8000"
+    volumes:
+      - apx-spool:/apx-spool
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # The resumable import worker (Story 2.2, AD-6): it consumes the Procrastinate queue and commits
+  # one pièce per unit against the application-owned ledger. It applies Procrastinate's queue schema
+  # on start (kept out of the Alembic chain — AD-17) and shares the DB + the upload spool with the app.
+  worker:
+    build: .
+    command: ["python", "-m", "apx.manage", "worker"]
+    environment:
+      DATABASE_URL: postgresql+psycopg://apx:${POSTGRES_PASSWORD:-apx}@db:5432/apx
+      APX_SECRET_KEY: ${APX_SECRET_KEY:?set APX_SECRET_KEY}
+      APX_ENCRYPTION_KEY: ${APX_ENCRYPTION_KEY:?set APX_ENCRYPTION_KEY}
+      APX_VOLUME_ENCRYPTED: ${APX_VOLUME_ENCRYPTED:?set 1 only after encrypting the data volume}
+      APX_DB_SSLMODE: ${APX_DB_SSLMODE:-disable}
+      APX_DATA_PATH: /apx-spool
+      MISTRAL_API_KEY: ${MISTRAL_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-}
+      LLM_MODEL: ${LLM_MODEL:-}
+    volumes:
+      - apx-spool:/apx-spool
     depends_on:
       db:
         condition: service_healthy
 
 volumes:
   apx-data:
+  apx-spool:

@@ -81,8 +81,20 @@ def test_resume_processes_only_pending_units_and_never_duplicates(tmp_path, stor
 
     with pytest.raises(RuntimeError):
         _run_import(store, job_id, work=flaky, now=_NOW)     # dies after 2 units
+    committed_first = set(seen)
     assert store.inventory("m", "t", {"w"}).in_corpus == 2
-    _run_import(store, job_id, now=_NOW)                     # resume with the real work
+
+    # Resume: a spy asserts the work runs ONLY for the still-pending units — never the two already
+    # committed (guards the resume filter itself, not merely the merge-idempotency end-state).
+    resumed: list[str] = []
+
+    def spy(st, job, uid, prov, *, max_bytes, now):  # noqa: ANN001, ANN202
+        resumed.append(prov)
+        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now)
+
+    _run_import(store, job_id, work=spy, now=_NOW)
+    assert set(resumed).isdisjoint(committed_first)         # committed units are NOT re-processed
+    assert len(resumed) == 4                                # exactly the four still-pending units
     assert store.inventory("m", "t", {"w"}).in_corpus == 6  # all 6, none re-indexed as new
     assert store.import_progress(job_id).state == "done"
 
@@ -146,6 +158,31 @@ def test_one_open_import_job_per_matter(tmp_path, store) -> None:
     assert store.open_import_job("t", "m") == job_id         # open while running (FR-7)
     _run_import(store, job_id, now=_NOW)
     assert store.open_import_job("t", "m") is None            # closed once done
+
+
+def test_re_dispatching_a_done_job_is_a_no_op(tmp_path, store) -> None:
+    # AD-17: a re-dispatch of a completed job (its owned spool already consumed) must NOT re-derive
+    # submitted to 0 nor append a second job-level audit entry — the sole authority stays correct.
+    job_id = _job(store, tmp_path, {"a.txt": b"1", "b.txt": b"2"})
+    _run_import(store, job_id, now=_NOW)                      # done; the owned spool is now gone
+    before = store.import_progress(job_id)
+    n_audit = len(store.read_audit("m", "t", {"w"}).entries)
+    _run_import(store, job_id, now=_NOW)                      # a redelivery of the same job
+    after = store.import_progress(job_id)
+    assert after.submitted == before.submitted == 2 and after.processed == 2   # not reset to 0
+    assert len(store.read_audit("m", "t", {"w"}).entries) == n_audit == 1       # no 2nd entry
+
+
+def test_a_missing_owned_spool_fails_closed(tmp_path, store) -> None:
+    # A spool absent at run time (a mount race) is a fault, not a legit empty 0/0 import: fail
+    # closed so the queue retries, never a silent empty completion (AD-17).
+    import shutil
+
+    job_id = _job(store, tmp_path, {"a.txt": b"1"})
+    shutil.rmtree(tmp_path / "spool-m")                       # the owned spool vanishes
+    with pytest.raises(RuntimeError):
+        _run_import(store, job_id, now=_NOW)
+    assert store.import_progress(job_id).state != "done"     # never falsely completed
 
 
 def test_worker_runs_the_job_via_the_inmemory_connector(tmp_path, monkeypatch) -> None:

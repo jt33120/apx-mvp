@@ -603,6 +603,15 @@ class SqlStore:
                     owns_spool=owns_spool, state="enumerating", submitted=None, provisional=True,
                     created_at=now, updated_at=now))
 
+    def delete_import_job(self, job_id: str) -> None:
+        """Remove a job and its units (no audit) — rolls back a job whose enqueue failed, so the
+        matter's upload path is not wedged by a stuck `enumerating` row (review Med-6)."""
+        with self._sf() as session, session.begin():
+            session.execute(delete(ImportUnit).where(ImportUnit.job_id == job_id))
+            j = session.get(ImportJob, job_id)
+            if j is not None:
+                session.delete(j)
+
     def read_import_job(self, job_id: str) -> ImportJobView | None:
         with self._sf() as session:
             j = session.get(ImportJob, job_id)
@@ -626,9 +635,11 @@ class SqlStore:
                 if uid not in existing:
                     session.add(ImportUnit(
                         id=uid, job_id=job_id, provenance_path=prov, state="pending", attempts=0))
-            j.submitted = len(provenances)
-            j.provisional = False
-            j.state = "running"
+            if j.submitted is None:   # freeze write-once (AD-17) — never re-derive on a resume
+                j.submitted = len(provenances)
+                j.provisional = False
+            if j.state == "enumerating":
+                j.state = "running"
             j.updated_at = now
 
     def pending_units(self, job_id: str) -> list[tuple[str, str]]:

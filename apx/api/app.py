@@ -962,9 +962,13 @@ async def ingest_upload(
     store = _require_store()
 
     # FR-7: one open import job per matter — a re-submit while one is open returns the existing
-    # job, never a second (idempotent submission, AD-6).
+    # job, never a second (idempotent submission, AD-6). Only when the caller can SEE the matter
+    # (holds its wall); otherwise fall through so `save` fails closed via ScopeConflict (1.6) —
+    # never leak an open job's handle across a Chinese wall.
     existing = store.open_import_job(ident.tenant, matter)
-    if existing is not None:
+    if existing is not None and matter in {
+        m.matter for m in store.matters(ident.tenant, ident.scopes)
+    }:
         job = store.read_import_job(existing)
         return ImportStartedOut(
             job_id=existing, matter=matter, state=job.state if job else "running")
@@ -997,7 +1001,12 @@ async def ingest_upload(
     store.create_import_job(
         job_id=job_id, tenant=ident.tenant, matter=matter, scope=wall, actor=ident.actor,
         custodian=custodian, case_theory=theory, spool_path=str(spool), owns_spool=True, now=now)
-    await enqueue_import(job_id)
+    try:
+        await enqueue_import(job_id)
+    except Exception as exc:  # noqa: BLE001 — a failed enqueue must not wedge the matter's upload path
+        store.delete_import_job(job_id)  # roll back the ledger row so a re-submit is not blocked
+        shutil.rmtree(spool, ignore_errors=True)
+        raise HTTPException(status_code=503, detail="file d'import indisponible") from exc
     return ImportStartedOut(job_id=job_id, matter=matter, state="enumerating")
 
 
