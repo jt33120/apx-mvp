@@ -67,6 +67,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     isolation_harness.no_fixture_path_in_runtime,
     isolation_harness.no_egress_call_site_outside_adapters,
     isolation_harness.no_tenant_identifier_in_source,
+    # story 2.2 — the resumable import job: the queue is sealed behind one submodule (AD-17).
+    isolation_harness.no_queue_import_outside_submodule,
     # story 1.12 — forward-looking checks: live, vacuous now, fixture-proven (FR-9/10/14/…/23).
     forward_looking.embedder_has_one_implementation,
     forward_looking.destructive_index_ops_single_entry,

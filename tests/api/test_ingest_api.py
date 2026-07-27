@@ -16,10 +16,19 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from apx.adapters.store_postgres.models import Base
+from apx.adapters.store_postgres.queue import _run_import
 from apx.adapters.store_postgres.store import SqlStore
 from apx.api import app as app_module
 from apx.api.app import app
 from apx.core.app.ingest import IngestedPiece, IngestionResult
+
+
+def _run_upload(store: SqlStore, resp) -> None:
+    """Drive the enqueued import to completion (the worker's resumable orchestration, run
+    directly). Story 2.2 made /api/ingest-upload non-blocking: the POST returns a job handle
+    (202); the worker fills the corpus."""
+    assert resp.status_code == 202, resp.text
+    _run_import(store, resp.json()["job_id"])
 
 SECRET = "test-secret"
 
@@ -201,10 +210,9 @@ def test_ingest_upload_reconstructs_the_tree_and_counts(tmp_path: Path, monkeypa
                 ("files", ("pieces/photo.jpg", b"not an image", "image/jpeg")),
             ],
         )
-    assert r.status_code == 200
-    inv = r.json()["inventory"]
-    assert inv["consistent"] and inv["submitted"] == 3
-    assert inv["in_corpus"] == 1 and inv["failures"] == 2
+        _run_upload(store, r)                         # async now: the worker fills the corpus
+        inv = c.get("/api/matters/m/inventory").json()
+    assert inv["consistent"] and inv["in_corpus"] == 1 and inv["failures"] == 2
 
 
 def test_chinese_wall_over_http(tmp_path: Path, monkeypatch) -> None:
@@ -452,13 +460,15 @@ def test_upload_threads_the_custodian_and_the_explicit_unknown(tmp_path: Path, m
     store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
     with TestClient(app) as c:
         _login(c, "me@cab.fr")
-        c.post("/api/ingest-upload",
-               data={"matter": "m", "scope": "wall-A", "custodian": "M. Martin"},
-               files=[("files", ("dir/a.txt", b"lettre", "text/plain")),
-                      ("files", ("dir/b.txt", b"autre piece", "text/plain"))])  # multi-file
-        c.post("/api/ingest-upload",
-               data={"matter": "m2", "scope": "wall-A", "custodian": "custodian-undeclared"},
-               files=[("files", ("b.txt", b"note", "text/plain"))])
+        _run_upload(store, c.post(
+            "/api/ingest-upload",
+            data={"matter": "m", "scope": "wall-A", "custodian": "M. Martin"},
+            files=[("files", ("dir/a.txt", b"lettre", "text/plain")),
+                   ("files", ("dir/b.txt", b"autre piece", "text/plain"))]))  # multi-file
+        _run_upload(store, c.post(
+            "/api/ingest-upload",
+            data={"matter": "m2", "scope": "wall-A", "custodian": "custodian-undeclared"},
+            files=[("files", ("b.txt", b"note", "text/plain"))]))
     with store._sf() as s:
         rows = s.scalars(select(Piece)).all()
     m_pieces = [p for p in rows if p.matter == "m"]
@@ -493,13 +503,11 @@ def test_a_folder_of_zero_readable_files_is_a_completed_0_0_matter(
         _login(c, "me@cab.fr")
         r = c.post("/api/ingest-upload",
                    data={"matter": "vide", "scope": "wall-A", "custodian": "M. Martin"})
-        assert r.status_code == 200, r.text
-        inv = r.json()["inventory"]
-        assert inv["submitted"] == 0 and inv["in_corpus"] == 0
-        assert inv["failures"] == 0 and inv["exclusions"] == 0 and inv["consistent"] is True
-        back = c.get("/api/matters/vide/inventory")           # durable, reads back
+        _run_upload(store, r)
+        back = c.get("/api/matters/vide/inventory")           # durable 0/0, reads back
         assert back.status_code == 200 and back.json()["submitted"] == 0
-        audit = c.get("/api/matters/vide/audit").json()       # the ingest audit entry exists at 0/0
+        assert back.json()["in_corpus"] == 0 and back.json()["consistent"] is True
+        audit = c.get("/api/matters/vide/audit").json()       # one job-level ingest audit entry
         assert [e["action"] for e in audit["entries"]] == ["ingest"] and audit["verified"] is True
 
 
@@ -520,7 +528,7 @@ def test_upload_reconstructs_a_deep_tree_from_provenance(tmp_path: Path, monkeyp
                 ("files", ("pieces/annexes/plan.txt", b"deux", "text/plain")),
             ],
         )
-        assert r.status_code == 200
+        _run_upload(store, r)
     with store._sf() as s:
         provs = {p.provenance_path for p in s.scalars(select(Piece)).all()}
     assert "emails/2021/mars/letter.txt" in provs   # full folder-relative path (≥3 levels)
@@ -536,13 +544,15 @@ def test_upload_persists_the_optional_case_theory(tmp_path: Path, monkeypatch) -
     store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
     with TestClient(app) as c:
         _login(c, "me@cab.fr")
-        c.post("/api/ingest-upload",
-               data={"matter": "avec", "scope": "wall-A", "custodian": "M. Martin",
-                     "case_theory": "contestation d'un licenciement pour insuffisance"},
-               files=[("files", ("a.txt", b"x", "text/plain"))])
-        c.post("/api/ingest-upload",
-               data={"matter": "sans", "scope": "wall-A", "custodian": "M. Martin"},
-               files=[("files", ("b.txt", b"y", "text/plain"))])
+        _run_upload(store, c.post(
+            "/api/ingest-upload",
+            data={"matter": "avec", "scope": "wall-A", "custodian": "M. Martin",
+                  "case_theory": "contestation d'un licenciement pour insuffisance"},
+            files=[("files", ("a.txt", b"x", "text/plain"))]))
+        _run_upload(store, c.post(
+            "/api/ingest-upload",
+            data={"matter": "sans", "scope": "wall-A", "custodian": "M. Martin"},
+            files=[("files", ("b.txt", b"y", "text/plain"))]))
     with store._sf() as s:
         theories = {ms.matter: ms.case_theory for ms in s.scalars(select(MatterScope)).all()}
     assert theories["avec"] == "contestation d'un licenciement pour insuffisance"

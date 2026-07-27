@@ -164,6 +164,21 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         "taxonomy", "str_list", [],
         governs="the tenant's classification taxonomy (seeded at provisioning)",
     ),
+    # ── import-job capacity bounds (AD-17): configuration-as-data, never hard-coded, each a
+    # failure-register class rather than an outage ──
+    ConfigKey(
+        "import_unit_max_bytes", "int", 209_715_200,  # 200 MiB — a single pièce over this is
+        governs="the per-unit size ceiling above which an import unit becomes a "
+                "`resource-exhausted` register entry rather than being read whole into memory "
+                "(AD-17)",
+        valid=lambda v: 1 <= v <= 8_589_934_592,  # 1 byte … 8 GiB — a real ceiling, never nonsense
+    ),
+    ConfigKey(
+        "import_max_attempts", "int", 3,
+        governs="the number of attempts after which a unit that keeps killing the worker is "
+                "quarantined as its own register entry and the job proceeds (AD-17)",
+        valid=lambda v: 1 <= v <= 100,  # at least one attempt; a sane upper bound
+    ),
     # ── the two switchable guarantees — the v1 defects, encoded as build-checked predicates ──
     ConfigKey(
         "off_corpus_refusal_enabled", "bool", True,

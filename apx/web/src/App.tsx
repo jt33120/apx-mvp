@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  changePassword, createUser, grantScope, ingestUpload, judgeMatter, listMatters, listUsers,
-  login, logout, me, readAudit, readLabels, readTriage, recallReview, recallSample, revokeScope,
-  searchCorpus,
-  type AdminUser, type AuditTrail, type Identity, type IngestResponse, type Labels,
-  type MatterSummary, type RecallBound, type RecallSample, type SearchResults, type Triage,
+  changePassword, createUser, grantScope, importStatus, ingestUpload, judgeMatter, listMatters,
+  listUsers, login, logout, me, readAudit, readLabels, readTriage, recallReview, recallSample,
+  revokeScope, searchCorpus,
+  type AdminUser, type AuditTrail, type Identity, type ImportProgress, type ImportStarted,
+  type Labels, type MatterSummary, type RecallBound, type RecallSample, type SearchResults,
+  type Triage,
 } from "./api";
 
 /** Owned auth gate (AD-15): the session — not the request — carries the tenant and
@@ -110,7 +111,8 @@ function Console({ identity, onLogout, onCockpit }: {
   const [custodianUnknown, setCustodianUnknown] = useState(false);
   const [caseTheory, setCaseTheory] = useState("");
   const [fileCount, setFileCount] = useState(0);
-  const [result, setResult] = useState<IngestResponse | null>(null);
+  const [job, setJob] = useState<ImportStarted | null>(null);
+  const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [matters, setMatters] = useState<MatterSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -127,6 +129,28 @@ function Console({ identity, onLogout, onCockpit }: {
     void refreshMatters();
   }, []);
 
+  // Poll the non-blocking import while it runs — a persistent, collapsed indicator (never a modal;
+  // the app stays fully usable). Read from the ledger (AD-17); stops once the job is done.
+  useEffect(() => {
+    if (!job) return;
+    let live = true;
+    const tick = async () => {
+      try {
+        const p = await importStatus(job.job_id);
+        if (!live) return;
+        setProgress(p);
+        if (p.state !== "done") window.setTimeout(tick, 1000);
+        else void refreshMatters();
+      } catch {
+        /* transient — a later poll or a manual refresh recovers */
+      }
+    };
+    void tick();
+    return () => {
+      live = false;
+    };
+  }, [job]);
+
   // The custodian is mandatory; "détenteur inconnu" is an explicit choice, never a blank.
   const effectiveCustodian = custodianUnknown ? "custodian-undeclared" : custodian.trim();
   const canSubmit = fileCount > 0 && !!matter.trim() && !!scope && !!effectiveCustodian;
@@ -137,9 +161,10 @@ function Console({ identity, onLogout, onCockpit }: {
     if (!files || files.length === 0 || !scope || !matter.trim() || !effectiveCustodian) return;
     setBusy(true);
     setError(null);
-    setResult(null);
+    setJob(null);
+    setProgress(null);
     try {
-      setResult(await ingestUpload(files, matter, scope, effectiveCustodian, caseTheory));
+      setJob(await ingestUpload(files, matter, scope, effectiveCustodian, caseTheory));
       await refreshMatters();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -222,7 +247,31 @@ function Console({ identity, onLogout, onCockpit }: {
         {error && <p className="apx-error" role="alert">{error}</p>}
       </div>
 
-      {result && <InventoryView title={`Résultat — ${result.matter}`} r={result} />}
+      {job && (
+        <div className="apx-card apx-pad" style={{ marginTop: "1rem" }} aria-live="polite">
+          <div style={{ display: "flex", alignItems: "center", gap: ".7rem", flexWrap: "wrap" }}>
+            <span className="apx-num" style={{ fontWeight: 560 }}>
+              Import — {progress?.processed ?? 0}
+              {progress?.submitted != null ? ` / ${progress.submitted}` : ""}
+              {progress?.provisional ? " · en cours d'inventaire" : ""}
+            </span>
+            <span style={{ flex: "1 1 8rem", height: 3, background: "var(--apx-line-2)",
+              borderRadius: 999, overflow: "hidden" }}>
+              <span style={{ display: "block", height: "100%", background:
+                "linear-gradient(90deg, var(--apx-gold), var(--apx-gold-2))",
+                width: progress?.submitted
+                  ? `${Math.round((100 * progress.processed) / Math.max(1, progress.submitted))}%`
+                  : "12%" }} />
+            </span>
+            <span className="apx-hint">
+              {progress?.state === "done"
+                ? `Terminé — ${progress.processed} pièce${progress.processed > 1 ? "s" : ""}` +
+                  (progress.quarantined ? ` · ${progress.quarantined} en quarantaine` : "")
+                : "vous pouvez continuer à travailler"}
+            </span>
+          </div>
+        </div>
+      )}
 
       <CorpusSearch />
 
@@ -726,55 +775,5 @@ function Journal({ trail }: { trail: AuditTrail }) {
         ))}
       </ol>
     </div>
-  );
-}
-
-function InventoryView({ title, r }: { title: string; r: IngestResponse }) {
-  const inv = r.inventory;
-  return (
-    <section className="apx-panel" aria-live="polite">
-      <h2>{title}</h2>
-      {inv.submitted === 0 && (
-        <p className="apx-hint" style={{ margin: "0 0 .6rem" }}>
-          Aucun fichier lisible dans ce dossier. Rien à indexer.
-        </p>
-      )}
-      <div className="apx-card apx-equation">
-        <div className="apx-eq-total">
-          <div className="n">{inv.submitted}</div>
-          <div className="l">pièces soumises</div>
-        </div>
-        <div className="apx-eq-rows">
-          <div className="apx-eq-row">
-            <div className="n" style={{ color: "var(--apx-kept)" }}>{inv.in_corpus}</div>
-            <div className="c">indexées — dans le corpus</div>
-          </div>
-          <div className="apx-eq-row">
-            <div className="n" style={{ color: "var(--apx-review)" }}>{inv.failures}</div>
-            <div className="c">non traitées — à revoir</div>
-          </div>
-          <div className="apx-eq-row">
-            <div className="n" style={{ color: "var(--apx-discard)" }}>{inv.exclusions}</div>
-            <div className="c">écartées — bruit système</div>
-          </div>
-        </div>
-      </div>
-      <div className={inv.consistent ? "apx-verdict" : "apx-verdict apx-verdict--bad"}>
-        {inv.consistent
-          ? `Inventaire cohérent : ${inv.submitted} = ${inv.in_corpus} + ${inv.failures} + ${inv.exclusions}`
-          : "⚠ Inventaire incohérent"}
-        {r.persisted ? " · enregistré" : ""}
-      </div>
-      {r.failure_list.length > 0 && (
-        <div className="apx-list" style={{ marginTop: "1rem" }}>
-          {r.failure_list.map((f) => (
-            <div key={f.path} className="apx-item">
-              <span className="apx-mono">{f.path}</span>
-              <span className="apx-chip apx-chip--review">{f.error_class}</span>
-            </div>
-          ))}
-        </div>
-      )}
-    </section>
   );
 }

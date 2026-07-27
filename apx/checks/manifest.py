@@ -341,6 +341,10 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("no-tenant-identifier-source", "FR-30", "AD-24",
        "no tenant identifier is a branch in source",
        isolation_harness.no_tenant_identifier_in_source, "conditionals in the runtime tree"),
+    # ── story 2.2: the queue is sealed behind one submodule (AD-17) ────────────────────────────
+    _p("queue-sealed", "FR-2", "AD-17", "the queue is sealed behind one submodule",
+       isolation_harness.no_queue_import_outside_submodule,
+       "procrastinate imports in the runtime tree (excl. the queue submodule)"),
     # ── story 1.12: the enumerated FR-56 floor — forward-looking checks ───────────────────────
     _p("no-fallback-embedder", "FR-9", "AD-11", "no fallback embedder",
        forward_looking.embedder_has_one_implementation,

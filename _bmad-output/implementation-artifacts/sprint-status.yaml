@@ -48,7 +48,7 @@ development_status:
   epic-1-retrospective: optional
   epic-2: in-progress
   2-1-folder-selection-as-the-whole-onboarding-gesture: done
-  2-2-the-non-blocking-resumable-import-job: backlog
+  2-2-the-non-blocking-resumable-import-job: review
   2-3-multi-format-extraction-the-largest-surface: backlog
   2-4-container-expansion-and-the-unit-of-the-denominator: backlog
   2-5-idempotent-ingestion-with-stable-identity: backlog

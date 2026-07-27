@@ -38,7 +38,7 @@ _FORBIDDEN_ENCRYPTED = {("Piece", "full_text")}
 # other string column must be EncryptedText. Keep this list conscious and small — adding to it
 # is the deliberate act of declaring a column non-content.
 _PLAINTEXT_ALLOWLIST = {
-    "id", "tenant", "matter", "scope", "user_id", "piece_id", "chunk_id",
+    "id", "tenant", "matter", "scope", "user_id", "piece_id", "chunk_id", "job_id",
     "content_hash", "text_key", "text_identity",
     "extraction_method", "extractor_version", "schema_version", "text_version",
     "full_text_version", "chunking_config_version", "piece_date_status", "external_ref",
@@ -60,6 +60,14 @@ _PLAINTEXT_ALLOWLIST = {
 _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     ("TenantSetting", "key"),
     ("TenantSetting", "value"),
+    # Story 2.2 import-job ledger: operational, non-content columns. ``state`` is a categorical
+    # lifecycle enum (like ``resolution_state``/``action``); ``spool_path`` is a server-internal
+    # staging path (the data volume + a uuid job id — no matter/custodian/filename content). The
+    # confidential columns on these tables (actor, custodian, case_theory, provenance_path) are
+    # EncryptedText; these are kept plaintext by conscious decision.
+    ("ImportJob", "state"),
+    ("ImportJob", "spool_path"),
+    ("ImportUnit", "state"),
 }
 
 

@@ -20,10 +20,10 @@ def test_api_app_imports_and_exposes_the_slice_routes() -> None:
     assert "/api/ingest" in paths
 
 
-def test_worker_app_imports_with_no_apx_tasks() -> None:
+def test_worker_app_exposes_the_ingestion_task() -> None:
     from apx.worker.app import app
 
-    # Procrastinate registers its own built-in maintenance tasks; 1.1 must add
-    # none of its own. A task we defined would live under the apx namespace.
+    # Story 2.2 wires the resumable ingestion task onto the worker boundary (Story 1.1 shipped
+    # zero). A task we define lives under the apx namespace; the queue submodule owns it.
     ours = [name for name in app.tasks if name.startswith("apx")]
-    assert ours == [], f"story 1.1 registers no worker tasks; found {ours}"
+    assert ours == ["apx.run_import"], f"expected exactly the ingestion task; found {ours}"

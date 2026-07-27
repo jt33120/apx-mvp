@@ -15,4 +15,9 @@ class ErrorClass(StrEnum):
     UNSUPPORTED_FORMAT = "unsupported-format"
     EXTRACTED_EMPTY = "extracted-empty"
     EXTRACTION_ERROR = "extraction-error"
+    # Story 2.2 (AD-17): a unit that exceeds its configured memory/size bound is a register
+    # entry, never an outage; a unit that repeatedly kills the worker is quarantined after a
+    # configured number of attempts so resume never loops onto it forever.
+    RESOURCE_EXHAUSTED = "resource-exhausted"
+    QUARANTINED = "quarantined"
     UNKNOWN = "unknown"

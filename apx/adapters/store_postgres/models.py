@@ -162,6 +162,54 @@ class MatterScope(Base):
     )
 
 
+class ImportJob(Base):
+    """The application-owned import-job ledger (AD-17): the SOLE authority for a job's state
+    and for the *processed-against-submitted* progress figure. Procrastinate's queue holds no
+    state any read path consults — a structural property (no module outside
+    ``adapters/store_postgres/queue`` may query a queue table). One open job per *matter* (FR-7).
+    `submitted` is NULL while enumeration is provisional and frozen at its completion (AD-17)."""
+
+    __tablename__ = "import_job"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    scope: Mapped[str] = mapped_column(String, nullable=False)  # the wall to persist under (AD-13)
+    # actor/custodian/case_theory are confidential (a person's display name, the custodian, the
+    # legal strategy) → encrypted at rest (AD-31), as on audit_record/piece/matter_scope.
+    actor: Mapped[str] = mapped_column(EncryptedText("import_job.actor"), nullable=False)
+    custodian: Mapped[str] = mapped_column(EncryptedText("import_job.custodian"), nullable=False)
+    case_theory: Mapped[str | None] = mapped_column(
+        EncryptedText("import_job.case_theory"), nullable=True
+    )
+    spool_path: Mapped[str] = mapped_column(String, nullable=False)  # durable staging dir (opaque)
+    owns_spool: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    state: Mapped[str] = mapped_column(String, nullable=False)  # enumerating|running|done
+    submitted: Mapped[int | None] = mapped_column(Integer, nullable=True)  # frozen unit count
+    provisional: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ImportUnit(Base):
+    """One unit of work — a submitted file — against the import-job ledger (AD-17). Keyed by
+    ``(job, provenance)`` so enumeration and resume are idempotent; ``attempts`` is the resume
+    authority, advanced in its own transaction committed BEFORE the unit's work begins so an
+    OS-level kill still advances it. No cascade FK (AD-7)."""
+
+    __tablename__ = "import_unit"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(job_id \0 provenance)
+    job_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("import_job.id"), nullable=False, index=True
+    )
+    provenance_path: Mapped[str] = mapped_column(
+        EncryptedText("import_unit.provenance_path"), nullable=False  # a path leaks folder/client
+    )
+    state: Mapped[str] = mapped_column(String, nullable=False)  # pending|committed|quarantined
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class AuditRecord(Base):
     """Append-only, tamper-evident trail (FR-24, FR-53). Each entry carries a
     monotonic per-tenant sequence and a chain value over the previous entry, so a

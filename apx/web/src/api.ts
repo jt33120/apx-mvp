@@ -95,16 +95,23 @@ export async function revokeScope(userId: string, scope: string): Promise<void> 
   if (!res.ok) throw new Error(await detail(res));
 }
 
-// The onboarding gesture (Story 2.1): a lawyer picks a folder, names the matter, its wall
-// and the custodian (mandatory); the case theory is the one optional field. The scope must
-// be one the caller holds; the server rejects anything else.
+// The onboarding gesture (Story 2.1/2.2): a lawyer picks a folder, names the matter, its wall
+// and the custodian (mandatory); the case theory is the one optional field. The scope must be
+// one the caller holds. Non-blocking (AD-6): the POST returns a job handle immediately; a worker
+// fills the corpus. Poll importStatus for the processed-against-submitted figure.
+export type ImportStarted = { job_id: string; matter: string; state: string };
+export type ImportProgress = {
+  job_id: string; matter: string; state: string; submitted: number | null;
+  processed: number; committed: number; quarantined: number; pending: number; provisional: boolean;
+};
+
 export async function ingestUpload(
   files: FileList,
   matter: string,
   scope: string,
   custodian: string,
   caseTheory?: string,
-): Promise<IngestResponse> {
+): Promise<ImportStarted> {
   const form = new FormData();
   form.append("matter", matter);
   form.append("scope", scope);
@@ -115,6 +122,13 @@ export async function ingestUpload(
     form.append("files", file, rel);
   }
   const res = await fetch("/api/ingest-upload", { method: "POST", body: form });
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+// Poll an import's progress — read from the application-owned ledger, never the queue (AD-17).
+export async function importStatus(jobId: string): Promise<ImportProgress> {
+  const res = await fetch(`/api/imports/${encodeURIComponent(jobId)}`);
   if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }

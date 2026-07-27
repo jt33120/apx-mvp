@@ -112,6 +112,39 @@ def no_runtime_import_from_tests(roots: Iterable[Path] | None = None) -> CheckRe
                        f"no runtime module imports the test tree ({len(trees)} file(s))")
 
 
+# ── FR-2 / AD-17: the queue is sealed behind one submodule ────────────────────────────────────
+_QUEUE_SUBMODULE = _APX_ROOT / "adapters" / "store_postgres" / "queue"
+
+
+def _in_queue_submodule(path: Path) -> bool:
+    return path.is_relative_to(_QUEUE_SUBMODULE)
+
+
+def no_queue_import_outside_submodule(roots: Iterable[Path] | None = None) -> CheckResult:
+    """No runtime module outside ``apx/adapters/store_postgres/queue`` imports Procrastinate
+    (AD-17). The queue is sealed there — the ONE place that touches the connector and the job
+    table — so no read/progress path can consult the queue and disagree with the application-owned
+    ledger on the processed-against-submitted figure (the ledger is the sole authority)."""
+    name, ad = "the queue is sealed behind one submodule", "AD-17"
+    trees, unparseable = _trees(roots)
+    if unparseable:
+        return _fail_closed(name, ad, unparseable)
+    for path, tree in trees:
+        if roots is None and _in_queue_submodule(path):
+            continue  # the sealed submodule is the one place allowed to import procrastinate
+        for node in ast.walk(tree):
+            for module in _import_modules(node):
+                if module == "procrastinate" or module.startswith("procrastinate."):
+                    return CheckResult(
+                        name, ad, False,
+                        f"{_where(path)}:{node.lineno} imports procrastinate outside the sealed "
+                        "queue submodule — the ledger, not the queue, is the progress authority "
+                        "(AD-17)")
+    return CheckResult(
+        name, ad, True,
+        f"procrastinate is imported only inside the queue submodule ({len(trees)} file(s))")
+
+
 # A ``_fixtures`` / ``fixtures`` path SEGMENT in a string literal (a dir, with or without a trailing
 # slash). Requires the segment boundary so an unrelated word like ``test_fixtures_helper`` is safe.
 _FIXTURE_PATH_RE = re.compile(r"(^|/)_?fixtures(/|$)")

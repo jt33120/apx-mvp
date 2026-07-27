@@ -285,6 +285,8 @@ The configuration keys (each editable as data, no redeploy):
 | `taxonomy` | list | `[]` | the tenant's classification taxonomy (seeded at provisioning) |
 | `off_corpus_refusal_enabled` | bool | `true` | the honest "not in the corpus" refusal (AD-20) — **on by default** |
 | `cascade_stage3_max_share` | float | `0.5` | the ceiling on the share of a matter reaching the LLM (AD-18) |
+| `import_unit_max_bytes` | int | `209715200` | the per-unit size ceiling above which an import unit is `resource-exhausted` rather than read whole into memory (AD-17) |
+| `import_max_attempts` | int | `3` | attempts after which a unit that keeps killing the worker is quarantined and the job proceeds (AD-17) |
 
 <!-- config-keys:end -->
 
@@ -403,6 +405,7 @@ could contain is an inflated claim about what the suite proves).
 | `no-fixture-path` | FR-33 | AD-16 | structural | no_fixture_path_in_runtime | _fixtures/fixtures path literals in runtime |
 | `no-egress-call-site` | FR-32 | AD-45 | structural | no_egress_call_site_outside_adapters | network imports + call sites in apx/** (excl. the egress adapters) |
 | `no-tenant-identifier-source` | FR-30 | AD-24 | structural | no_tenant_identifier_in_source | conditionals in the runtime tree |
+| `queue-sealed` | FR-2 | AD-17 | structural | no_queue_import_outside_submodule | procrastinate imports in the runtime tree (excl. the queue submodule) |
 | `no-fallback-embedder` | FR-9 | AD-11 | structural | embedder_has_one_implementation | embed/encode-method classes + except-handlers in the runtime tree (vacuous until 2.8) |
 | `destructive-index-one-entry` | FR-10 | AD-7 | structural | destructive_index_ops_single_entry | index drop/truncate call sites (vacuous until 2.8) |
 | `no-post-filter-retrieval` | FR-14 | AD-14 | structural | no_post_filter_in_retrieval | functions taking a result set + a scope (vacuous until 3.x) |

@@ -23,6 +23,7 @@ _CASES = [
     (ih.no_fixture_path_in_runtime, "fixture_path"),
     (ih.no_egress_call_site_outside_adapters, "egress_leak"),
     (ih.no_tenant_identifier_in_source, "tenant_branch"),
+    (ih.no_queue_import_outside_submodule, "queue_leak"),
     (fl.embedder_has_one_implementation, "two_embedders"),
     (fl.destructive_index_ops_single_entry, "two_index_deleters"),
     (fl.no_post_filter_in_retrieval, "post_filter"),
@@ -59,6 +60,7 @@ def test_checks_fail_closed_on_an_unparseable_file(tmp_path) -> None:  # noqa: A
                   ih.no_fixture_path_in_runtime,
                   ih.no_egress_call_site_outside_adapters,
                   ih.no_tenant_identifier_in_source,
+                  ih.no_queue_import_outside_submodule,
                   fl.no_post_filter_in_retrieval):
         r = check([tmp_path])
         assert not r.ok and "failing closed" in r.detail, f"{r.name} did not fail closed"

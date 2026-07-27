@@ -33,6 +33,8 @@ from apx.adapters.store_postgres.models import (
     AuditRecord,
     BackupRecord,
     Failure,
+    ImportJob,
+    ImportUnit,
     LabelRecord,
     MatterScope,
     Piece,
@@ -56,6 +58,7 @@ from apx.core.domain.config import (
 )
 from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.dedup import cluster
+from apx.core.domain.failures import ErrorClass
 from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.search import snippet
@@ -197,6 +200,42 @@ class SaveOutcome:
 
 
 @dataclass(frozen=True)
+class ImportJobView:
+    """A detached snapshot of an import_job row — the worker and the status endpoint read this,
+    never a live ORM object across sessions (Story 2.2)."""
+
+    id: str
+    tenant: str
+    matter: str
+    scope: str
+    actor: str
+    custodian: str
+    case_theory: str | None
+    spool_path: str
+    owns_spool: bool
+    state: str
+    submitted: int | None
+    provisional: bool
+
+
+@dataclass(frozen=True)
+class ImportProgress:
+    """The processed-against-submitted figure, read ONLY from the application-owned ledger
+    (AD-17) — never from Procrastinate's job table."""
+
+    job_id: str
+    tenant: str
+    matter: str
+    state: str
+    submitted: int | None
+    processed: int
+    committed: int
+    quarantined: int
+    pending: int
+    provisional: bool
+
+
+@dataclass(frozen=True)
 class MatterSummary:
     matter: str
     scope: str
@@ -299,6 +338,11 @@ def _excerpt(text: str, width: int = 240) -> str:
 
 def _failure_id(matter: str, submitted_path: str) -> str:
     return hashlib.sha256(f"{matter}\x00{submitted_path}".encode()).hexdigest()
+
+
+def _unit_id(job_id: str, provenance: str) -> str:
+    """A deterministic import-unit id, so enumeration and resume are idempotent (Story 2.2)."""
+    return hashlib.sha256(f"{job_id}\x00{provenance}".encode()).hexdigest()
 
 
 def _config_value(spec: ConfigKey, row: TenantSetting | None) -> object:
@@ -453,6 +497,7 @@ class SqlStore:
         matter: str | None = None,
         tenant: str | None = None,
         case_theory: str | None = None,
+        audit: bool = True,
     ) -> SaveOutcome:
         # Fail closed: a null/empty/whitespace scope is never permissive (AD-12). The guard
         # lives here at the persist boundary, so no caller — API, CLI or test — can write a
@@ -491,12 +536,16 @@ class SqlStore:
                     # A restated case theory updates in place; a skipped one (None) never wipes
                     # an existing one (FR-37: statable at import or later). Versioning is Epic 4.
                     existing.case_theory = case_theory
-                inv = result.inventory
-                detail = (
-                    f"submitted={inv.submitted} corpus={inv.in_corpus} "
-                    f"failures={inv.failures} exclusions={inv.exclusions}"
-                )
-                self._append_audit(session, tenant, matter, actor, "ingest", detail, now)
+                if audit:
+                    # One `ingest` audit entry per call. The resumable worker (Story 2.2)
+                    # commits units with audit=False and writes ONE job-level entry at
+                    # completion, so a 100 000-unit import is one audit row, not 100 000.
+                    inv = result.inventory
+                    detail = (
+                        f"submitted={inv.submitted} corpus={inv.in_corpus} "
+                        f"failures={inv.failures} exclusions={inv.exclusions}"
+                    )
+                    self._append_audit(session, tenant, matter, actor, "ingest", detail, now)
             for p in result.pieces:
                 session.merge(
                     Piece(
@@ -523,6 +572,142 @@ class SqlStore:
                     )
                 )
         return SaveOutcome(len(result.pieces), len(result.failures))
+
+    # ── Story 2.2: the application-owned import-job ledger (AD-17) ──────────────────────────
+    # The SOLE authority for a job's state and the processed-against-submitted figure. Every
+    # method opens its own transaction; the attempt counter and the quarantine transition are
+    # deliberately independent commits (the two load-bearing AD-17 mechanics).
+
+    def open_import_job(self, tenant: str, matter: str) -> str | None:
+        """The id of an open (not-done) import job for this matter, if any — FR-7's one-open-job
+        rule, so a re-submit returns the existing job rather than starting a second."""
+        with self._sf() as session:
+            return session.scalar(
+                select(ImportJob.id).where(
+                    ImportJob.tenant == tenant, ImportJob.matter == matter,
+                    ImportJob.state != "done"))
+
+    def create_import_job(
+        self, *, job_id: str, tenant: str, matter: str, scope: str, actor: str,
+        custodian: str, case_theory: str | None, spool_path: str, owns_spool: bool = True,
+        now: datetime,
+    ) -> None:
+        """Create the job ledger row (state=enumerating, submitted provisional). Idempotent by id.
+        ``owns_spool`` = the worker deletes ``spool_path`` on completion (an uploaded spool), vs.
+        a server-local source folder it must not touch."""
+        with self._sf() as session, session.begin():
+            if session.get(ImportJob, job_id) is None:
+                session.add(ImportJob(
+                    id=job_id, tenant=tenant, matter=matter, scope=scope, actor=actor,
+                    custodian=custodian, case_theory=case_theory, spool_path=spool_path,
+                    owns_spool=owns_spool, state="enumerating", submitted=None, provisional=True,
+                    created_at=now, updated_at=now))
+
+    def read_import_job(self, job_id: str) -> ImportJobView | None:
+        with self._sf() as session:
+            j = session.get(ImportJob, job_id)
+            if j is None:
+                return None
+            return ImportJobView(
+                j.id, j.tenant, j.matter, j.scope, j.actor, j.custodian, j.case_theory,
+                j.spool_path, j.owns_spool, j.state, j.submitted, j.provisional)
+
+    def record_enumeration(self, job_id: str, provenances: list[str], now: datetime) -> None:
+        """Freeze the submitted set and record every unit (idempotent — resume-safe): units go in
+        pending, the job goes running with submitted frozen and provisional cleared (AD-17)."""
+        with self._sf() as session, session.begin():
+            j = session.get(ImportJob, job_id)
+            if j is None:
+                return
+            existing = set(session.scalars(
+                select(ImportUnit.id).where(ImportUnit.job_id == job_id)))
+            for prov in provenances:
+                uid = _unit_id(job_id, prov)
+                if uid not in existing:
+                    session.add(ImportUnit(
+                        id=uid, job_id=job_id, provenance_path=prov, state="pending", attempts=0))
+            j.submitted = len(provenances)
+            j.provisional = False
+            j.state = "running"
+            j.updated_at = now
+
+    def pending_units(self, job_id: str) -> list[tuple[str, str]]:
+        """(unit_id, provenance) for units not yet processed — the resume work list."""
+        with self._sf() as session:
+            rows = session.execute(
+                select(ImportUnit.id, ImportUnit.provenance_path).where(
+                    ImportUnit.job_id == job_id, ImportUnit.state == "pending")).all()
+        return [(r[0], r[1]) for r in rows]
+
+    def bump_import_attempt(self, unit_id: str) -> int:
+        """Increment a unit's attempt counter in its OWN transaction, committed BEFORE the unit's
+        work begins, so an OS-level kill still advances it and resume never loops onto the poison
+        forever (AD-17). Returns the new count."""
+        with self._sf() as session, session.begin():
+            u = session.get(ImportUnit, unit_id)
+            if u is None:
+                return 0
+            u.attempts += 1
+            return u.attempts
+
+    def mark_unit_committed(self, unit_id: str) -> None:
+        with self._sf() as session, session.begin():
+            u = session.get(ImportUnit, unit_id)
+            if u is not None and u.state == "pending":
+                u.state = "committed"
+
+    def quarantine_unit(
+        self, *, unit_id: str, provenance: str, matter: str, tenant: str, now: datetime,
+    ) -> None:
+        """Quarantine a poison unit in a transaction INDEPENDENT of the failing unit's (AD-17):
+        flip the unit AND write its `quarantined` failure-register entry together here, so an
+        exception handler running inside the failing unit's transaction cannot roll it back and
+        retry the poison forever."""
+        with self._sf() as session, session.begin():
+            u = session.get(ImportUnit, unit_id)
+            if u is not None:
+                u.state = "quarantined"
+            session.merge(Failure(
+                id=_failure_id(matter, provenance), tenant=tenant, matter=matter,
+                filename=provenance.rsplit("/", 1)[-1], submitted_path=provenance,
+                error_class=str(ErrorClass.QUARANTINED), resolution_state="open",
+                detail="repeatedly killed the worker; quarantined after the configured attempts",
+                timestamp=now))
+
+    def finish_import(self, job_id: str, now: datetime) -> None:
+        """Mark the job done and write ONE job-level `ingest` audit entry (AD-6 — one entry per
+        job, not per unit). Idempotent (a re-run after completion writes nothing)."""
+        with self._sf() as session, session.begin():
+            j = session.get(ImportJob, job_id)
+            if j is None or j.state == "done":
+                return
+            committed = session.scalar(select(func.count()).select_from(ImportUnit).where(
+                ImportUnit.job_id == job_id, ImportUnit.state == "committed")) or 0
+            quarantined = session.scalar(select(func.count()).select_from(ImportUnit).where(
+                ImportUnit.job_id == job_id, ImportUnit.state == "quarantined")) or 0
+            detail = (f"submitted={j.submitted or 0} committed={committed} "
+                      f"quarantined={quarantined}")
+            self._append_audit(session, j.tenant, j.matter, j.actor, "ingest", detail, now)
+            j.state = "done"
+            j.updated_at = now
+
+    def import_progress(self, job_id: str) -> ImportProgress | None:
+        """The processed-against-submitted figure, read ONLY from the ledger (AD-17 — never from
+        Procrastinate's job table)."""
+        with self._sf() as session:
+            j = session.get(ImportJob, job_id)
+            if j is None:
+                return None
+
+            def _count(state: str) -> int:
+                return session.scalar(select(func.count()).select_from(ImportUnit).where(
+                    ImportUnit.job_id == job_id, ImportUnit.state == state)) or 0
+
+            committed, quarantined, pending = _count("committed"), _count("quarantined"), _count(
+                "pending")
+            return ImportProgress(
+                job_id, j.tenant, j.matter, j.state, j.submitted, committed + quarantined,
+                committed, quarantined, pending, j.provisional)
 
     def _counts(self, session: Session, matter: str, tenant: str) -> tuple[int, int]:
         in_corpus = session.scalar(

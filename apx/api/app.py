@@ -13,17 +13,17 @@ from __future__ import annotations
 
 import os
 import shutil
-import tempfile
 import threading
 import time
 import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pyotp
 from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Request, Response, UploadFile
@@ -39,6 +39,7 @@ from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.store_postgres.engine import make_session_factory
+from apx.adapters.store_postgres.queue import enqueue_import
 from apx.adapters.store_postgres.store import ScopeConflict, ScopeDenied, SqlStore
 from apx.api.logging import install_secret_redaction
 from apx.api.startup import startup_gate
@@ -282,6 +283,29 @@ class IngestResponse(BaseModel):
     failure_list: list[FailureOut]
     exclusion_list: list[str]
     persisted: bool  # transparent: whether the result was written to the durable store
+
+
+class ImportStartedOut(BaseModel):
+    """The handle returned the instant an import is enqueued (Story 2.2) — the request does no
+    work (AD-6). Poll ``/api/imports/{job_id}`` for progress."""
+
+    job_id: str
+    matter: str
+    state: str
+
+
+class ImportProgressOut(BaseModel):
+    """The processed-against-submitted figure, read from the application-owned ledger (AD-17)."""
+
+    job_id: str
+    matter: str
+    state: str
+    submitted: int | None
+    processed: int
+    committed: int
+    quarantined: int
+    pending: int
+    provisional: bool
 
 
 class AuditEntryOut(BaseModel):
@@ -904,7 +928,7 @@ def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> I
     )
 
 
-@app.post("/api/ingest-upload", response_model=IngestResponse)
+@app.post("/api/ingest-upload", response_model=ImportStartedOut, status_code=202)
 async def ingest_upload(
     request: Request,
     matter: str = Form(...),
@@ -913,14 +937,14 @@ async def ingest_upload(
     case_theory: str | None = Form(None),
     files: list[UploadFile] | None = Form(None),
     ident: Identity = Depends(current_identity),
-) -> IngestResponse:
-    """The browser path (the onboarding gesture, Story 2.1): a lawyer drops a folder and
-    names the matter, its wall and the custodian (mandatory) — the case theory is the one
-    optional field. Uploaded files are written to a per-request temp directory,
-    reconstructing the submitted folder tree from each file's relative path, then ingested
-    through the one path (FR-33). The temp dir is discarded; only the piece text (and
-    failures) persist. A folder of zero readable files is a completed 0/0 matter, not an
-    error (AC5); an empty custodian (AC3) or scope (AC6) fails the job loudly."""
+) -> ImportStartedOut:
+    """The onboarding gesture (Story 2.1/2.2): validate and authorise, create the matter
+    synchronously (so it is durable at once — a 0-file import is a 0/0 matter, AC5), spool the
+    uploaded bytes to a DURABLE staging dir, enqueue a background job, and RETURN IMMEDIATELY
+    (AD-6) — the request never does the ingest work. The lawyer keeps working while a worker
+    processes the units resumably (FR-2); poll ``/api/imports/{job_id}`` for progress. Preserves
+    the Story 2.1 guards: held-only scope (AC6 loud on empty), mandatory custodian (AC3), the
+    ``../`` traversal guard, and the 1.6 ScopeConflict wall-change refusal (409)."""
     content_length = request.headers.get("content-length")
     if content_length and int(content_length) > _MAX_UPLOAD_BYTES:
         raise HTTPException(status_code=413, detail="dépôt trop volumineux")
@@ -932,36 +956,66 @@ async def ingest_upload(
             detail="un détenteur est requis (« détenteur inconnu » si vraiment inconnu)",
         )
     theory = (case_theory or "").strip() or None
-    with tempfile.TemporaryDirectory(prefix="apx-upload-") as tmp:
-        root = Path(tmp)
-        root_resolved = root.resolve()
-        for f in files or []:
-            # The SPA sends the folder-relative path as the filename; rebuild the tree.
-            rel = Path(f.filename or "unnamed").as_posix().lstrip("/")
-            dest = root / rel
-            if not dest.resolve().is_relative_to(root_resolved):
-                # A crafted "../" filename must never write outside the upload sandbox.
-                raise HTTPException(status_code=400, detail="chemin de fichier invalide")
-            dest.parent.mkdir(parents=True, exist_ok=True)
-            dest.write_bytes(await f.read())
-        result = ingest_folder(
-            root, matter=matter, tenant=ident.tenant,
-            extractor=_extractor(), custodian=custodian, expander=_expander(),
-        )
-    persisted = _persist(
-        result, wall, ident.actor,
-        matter=matter, tenant=ident.tenant, case_theory=theory,
-    )
-    return IngestResponse(
-        matter=matter,
-        inventory=_inventory_out(result.inventory),
-        failure_list=[
-            FailureOut(filename=f.filename, path=f.submitted_path, error_class=str(f.error_class))
-            for f in result.failures
-        ],
-        exclusion_list=result.exclusions,
-        persisted=persisted,
-    )
+    # Reject a crafted "../" filename up front, before any side effect (matter, spool).
+    if any(".." in Path(f.filename or "").parts for f in files or []):
+        raise HTTPException(status_code=400, detail="chemin de fichier invalide")
+    store = _require_store()
+
+    # FR-7: one open import job per matter — a re-submit while one is open returns the existing
+    # job, never a second (idempotent submission, AD-6).
+    existing = store.open_import_job(ident.tenant, matter)
+    if existing is not None:
+        job = store.read_import_job(existing)
+        return ImportStartedOut(
+            job_id=existing, matter=matter, state=job.state if job else "running")
+
+    # Create the matter now (fail-closed on an empty scope, refuse a wall change — 1.6), before
+    # any bytes are spooled; no audit entry here (the worker writes ONE at completion).
+    now = datetime.now(UTC)
+    try:
+        store.save(
+            IngestionResult(), wall, ident.actor, matter=matter, tenant=ident.tenant,
+            case_theory=theory, audit=False)
+    except ScopeConflict as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+    # Spool the uploaded bytes to a durable staging dir keyed by the job id, so a restartable
+    # worker can read them after the request returns (the request's temp dir would not survive).
+    job_id = uuid4().hex
+    spool = Path(_data_volume_path()) / "spool" / job_id
+    spool.mkdir(parents=True, exist_ok=True)
+    spool_resolved = spool.resolve()
+    for f in files or []:
+        rel = Path(f.filename or "unnamed").as_posix().lstrip("/")
+        dest = spool / rel
+        if not dest.resolve().is_relative_to(spool_resolved):
+            shutil.rmtree(spool, ignore_errors=True)
+            raise HTTPException(status_code=400, detail="chemin de fichier invalide")
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(await f.read())
+
+    store.create_import_job(
+        job_id=job_id, tenant=ident.tenant, matter=matter, scope=wall, actor=ident.actor,
+        custodian=custodian, case_theory=theory, spool_path=str(spool), owns_spool=True, now=now)
+    await enqueue_import(job_id)
+    return ImportStartedOut(job_id=job_id, matter=matter, state="enumerating")
+
+
+@app.get("/api/imports/{job_id}", response_model=ImportProgressOut)
+def import_status(job_id: str, ident: Identity = Depends(current_identity)) -> ImportProgressOut:
+    """The processed-against-submitted figure the SPA polls (AD-17: read from the ledger, never
+    from the queue). Scope-checked: a caller sees only a job for a matter within their wall."""
+    store = _require_store()
+    progress = store.import_progress(job_id)
+    if progress is None or progress.tenant != ident.tenant or progress.matter not in {
+        m.matter for m in store.matters(ident.tenant, ident.scopes)
+    }:
+        raise HTTPException(status_code=404, detail="import introuvable")
+    return ImportProgressOut(
+        job_id=progress.job_id, matter=progress.matter, state=progress.state,
+        submitted=progress.submitted, processed=progress.processed, committed=progress.committed,
+        quarantined=progress.quarantined, pending=progress.pending,
+        provisional=progress.provisional)
 
 
 @app.get("/api/matters", response_model=list[MatterOut])
