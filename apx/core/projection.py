@@ -22,8 +22,9 @@ projectors are pure functions of that snapshot.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+import re
+from collections.abc import Callable, Iterable, Mapping
+from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
 
@@ -60,24 +61,44 @@ class Attestation:
 
     def is_valid(self) -> bool:
         """A well-formed attestation: at least one kind, and a text-derived projector declares a
-        real floor (≥ 1 *pièce* AND ≥ 1 *matter*). ``projectors_declare_attestation`` fails the
-        build on an invalid one — the property is otherwise undecidable (AD-26 iii)."""
+        real floor. AD-26(iii)/FR-31: a value must be attested across a minimum number of *pièces*
+        AND *matters* and be **never traceable to one** — so the floor must span **≥ 2 *matters***
+        (and ≥ 2 *pièces*); a floor of 1 would bless a value quotable from a single *matter*, the
+        exact leak the floor exists to prevent. ``projectors_declare_attestation`` fails the build
+        on an invalid one — the property is otherwise undecidable (AD-26 iii)."""
         if not self.kinds:
             return False
         if self.requires_floor():
-            return (self.min_pieces or 0) >= 1 and (self.min_matters or 0) >= 1
+            return (self.min_pieces or 0) >= 2 and (self.min_matters or 0) >= 2
         return True
+
+
+# A module-private seal only ``project_all`` holds. ``Projection.__post_init__`` refuses any
+# construction that does not present it — so alias / ``getattr`` / subclass / attribute-form
+# construction all fail at RUNTIME, making "built only by the registry" literally true, not just a
+# name-pattern the static check can be aliased around.
+_REGISTRY_SEAL = object()
 
 
 @dataclass(frozen=True)
 class Projection:
-    """A content-free emission about a *tenant*'s data. SEALED: constructed ONLY by ``project_all``
-    in this module — ``projection_emitted_only_by_registry`` (a static check) fails the build on a
-    construction anywhere else, so every emission is a registered, seeded-token-tested projector."""
+    """A content-free emission about a *tenant*'s data. SEALED two ways: (1) at RUNTIME —
+    ``__post_init__`` refuses construction without the registry's private seal, so ``project_all``
+    is the only route that can build one (alias/``getattr``/subclass/attribute-form all raise);
+    (2) at BUILD time — ``projection_emitted_only_by_registry`` fails the build on a bare- or
+    attribute-form ``Projection(...)`` anywhere outside this module, for a clear compile-time error.
+    A consumer RECEIVES a projection from ``project_all``; it never constructs one."""
 
     projector: str
     kinds: tuple[str, ...]       # the declared value kinds (transparency)
     values: Mapping[str, Any]    # the emitted content-free values
+    _seal: object = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        if self._seal is not _REGISTRY_SEAL:
+            raise RuntimeError(
+                "Projection is constructed only by the registry (project_all) — an emission path "
+                "outside the registry is a defect (AD-26/FR-31)")
 
 
 # A projector is a pure function from the content-free Snapshot to its emitted values.
@@ -120,12 +141,18 @@ def register(name: str, attestation: Attestation) -> Callable[[Projector], Proje
     return decorate
 
 
-def project_all(snapshot: Snapshot) -> list[Projection]:
+def project_all(
+    snapshot: Snapshot, registry: Mapping[str, RegisteredProjector] | None = None
+) -> list[Projection]:
     """Run every registered projector over the snapshot — THE emission path (AD-26). Deterministic
-    order (by name), reproducible output. This is the only place ``Projection`` is built."""
+    order (by name), reproducible output. This is the only place ``Projection`` is built (it holds
+    the registry seal). ``registry`` is injectable so a test can run an isolated set without
+    mutating the module global."""
+    reg = REGISTRY if registry is None else registry
     return [
-        Projection(p.name, tuple(k.value for k in p.attestation.kinds), dict(p.fn(snapshot)))
-        for p in sorted(REGISTRY.values(), key=lambda p: p.name)
+        Projection(p.name, tuple(k.value for k in p.attestation.kinds), dict(p.fn(snapshot)),
+                   _seal=_REGISTRY_SEAL)
+        for p in sorted(reg.values(), key=lambda p: p.name)
     ]
 
 
@@ -142,8 +169,10 @@ def projection_strings(projections: list[Projection]) -> list[str]:
             for k, v in value.items():
                 out.append(str(k))
                 walk(v)
-        elif isinstance(value, list | tuple | set):
-            for v in value:
+        elif isinstance(value, bytes | bytearray):
+            out.append(str(value))  # str(b"…") exposes the bytes' content to the scan
+        elif isinstance(value, Iterable):
+            for v in list(value):  # materialise a lazy iterator so its contents cannot hide
                 walk(v)
         else:
             out.append(str(value))
@@ -177,7 +206,25 @@ def _error_class_histogram(s: Snapshot) -> Mapping[str, Any]:
     return {"by_class": dict(s.error_class_histogram)}
 
 
+# A version identifier is CODE identity (schema/extractor/chunking version — AD-23), set by APX's
+# own code to a version constant, architecturally independent of *tenant* content. This bound is
+# defence-in-depth against an extractor that violates that contract and derives its version string
+# from file/tool metadata: an identifier is a short machine token (no whitespace, bounded), so a
+# path, a sentence or a client name embedded in a version is replaced by a non-content marker
+# rather than emitted verbatim.
+_SAFE_VERSION = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._+/-]{0,23}\Z")
+
+
+def _safe_version(value: str) -> str:
+    return value if _SAFE_VERSION.match(value) else "«non-conforming»"
+
+
 @register("versions", Attestation(kinds=(ValueKind.VERSION,)))
 def _versions(s: Snapshot) -> Mapping[str, Any]:
-    """The distinct schema/extractor version identifiers present — code identity, not data."""
-    return {"schema": list(s.schema_versions), "extractor": list(s.extractor_versions)}
+    """The distinct schema/extractor version identifiers present — code identity, not data. Each is
+    bounded to a machine-token shape (``_safe_version``) so a version that smuggled content is not
+    emitted verbatim."""
+    return {
+        "schema": [_safe_version(v) for v in s.schema_versions],
+        "extractor": [_safe_version(v) for v in s.extractor_versions],
+    }

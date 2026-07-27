@@ -60,6 +60,7 @@ CHECKS: list[Callable[[], CheckResult]] = [
     configuration.config_reference_is_complete,
     # story 1.10 — the content-free projection primitive (AD-26/FR-31).
     projection.projection_emitted_only_by_registry,
+    projection.snapshot_fields_are_content_free,
     projection.projectors_declare_attestation,
 ]
 

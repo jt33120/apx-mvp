@@ -8,6 +8,7 @@ from apx.core.projection import (
     Attestation,
     Snapshot,
     ValueKind,
+    _safe_version,
     project_all,
     projection_strings,
     redact,
@@ -46,6 +47,22 @@ def test_attestation_requires_a_floor_only_for_a_text_derived_value() -> None:
     assert not text_no_floor.is_valid()                       # text-derived value: floor required
     assert Attestation(
         kinds=(ValueKind.ATTESTED_AGGREGATE,), min_pieces=5, min_matters=2).is_valid()
+
+
+def test_a_floor_of_one_matter_is_rejected() -> None:
+    # AD-26(iii): a value must be "never traceable to one matter" — a floor of 1 would bless a
+    # value quotable from a single matter, so the floor must span ≥ 2 matters (and ≥ 2 pièces).
+    assert not Attestation(
+        kinds=(ValueKind.ATTESTED_AGGREGATE,), min_pieces=1, min_matters=1).is_valid()
+    assert not Attestation(
+        kinds=(ValueKind.ATTESTED_AGGREGATE,), min_pieces=5, min_matters=1).is_valid()
+
+
+def test_safe_version_bounds_a_content_bearing_identifier() -> None:
+    assert _safe_version("tesseract/1.2.3") == "tesseract/1.2.3"   # a real version id passes
+    assert _safe_version("slice-a") == "slice-a"
+    assert _safe_version("a version with spaces") == "«non-conforming»"   # a sentence is bounded
+    assert _safe_version("x" * 64) == "«non-conforming»"                  # oversized is bounded
 
 
 def test_redact_scrubs_secret_values_longest_first() -> None:

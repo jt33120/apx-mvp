@@ -42,7 +42,7 @@ development_status:
   1-7-encryption-at-rest-and-in-transit-with-a-fail-closed-start: done
   1-8-secret-and-key-management: done
   1-9-configuration-as-data-and-the-provisioning-surface: done
-  1-10-the-content-free-projection-primitive: review
+  1-10-the-content-free-projection-primitive: done
   1-11-backup-restore-and-disaster-recovery: backlog
   1-12-the-structural-properties-harness: backlog
   epic-1-retrospective: optional
