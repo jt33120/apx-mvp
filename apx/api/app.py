@@ -998,9 +998,21 @@ async def ingest_upload(
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(await f.read())
 
-    store.create_import_job(
-        job_id=job_id, tenant=ident.tenant, matter=matter, scope=wall, actor=ident.actor,
-        custodian=custodian, case_theory=theory, spool_path=str(spool), owns_spool=True, now=now)
+    try:
+        store.create_import_job(
+            job_id=job_id, tenant=ident.tenant, matter=matter, scope=wall, actor=ident.actor,
+            custodian=custodian, case_theory=theory, spool_path=str(spool), owns_spool=True,
+            now=now)
+    except IntegrityError as exc:
+        # A concurrent submit won the FR-7 race (the DB's one-open-job index) — return the existing
+        # job and drop our spool, never a second job (closes the read-then-create TOCTOU).
+        shutil.rmtree(spool, ignore_errors=True)
+        existing = store.open_import_job(ident.tenant, matter)
+        if existing is not None:
+            job = store.read_import_job(existing)
+            return ImportStartedOut(
+                job_id=existing, matter=matter, state=job.state if job else "running")
+        raise HTTPException(status_code=409, detail="un import est déjà en cours") from exc
     try:
         await enqueue_import(job_id)
     except Exception as exc:  # noqa: BLE001 — a failed enqueue must not wedge the matter's upload path

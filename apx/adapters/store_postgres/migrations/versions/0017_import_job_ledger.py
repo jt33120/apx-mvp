@@ -50,9 +50,14 @@ def upgrade() -> None:
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index("ix_import_unit_job_id", "import_unit", ["job_id"])
+    # FR-7: at most one OPEN (not-done) import job per matter — enforced atomically by the DB.
+    op.create_index(
+        "uq_import_job_open", "import_job", ["tenant", "matter"], unique=True,
+        sqlite_where=sa.text("state != 'done'"), postgresql_where=sa.text("state != 'done'"))
 
 
 def downgrade() -> None:
+    op.drop_index("uq_import_job_open", table_name="import_job")
     op.drop_index("ix_import_unit_job_id", table_name="import_unit")
     op.drop_table("import_unit")
     op.drop_table("import_job")

@@ -111,7 +111,11 @@ function Console({ identity, onLogout, onCockpit }: {
   const [custodianUnknown, setCustodianUnknown] = useState(false);
   const [caseTheory, setCaseTheory] = useState("");
   const [fileCount, setFileCount] = useState(0);
-  const [job, setJob] = useState<ImportStarted | null>(null);
+  const importKey = `apx_import_${identity.tenant}`;
+  const [job, setJob] = useState<ImportStarted | null>(() => {
+    const jid = localStorage.getItem(importKey);   // survive a reload: rehydrate a live import
+    return jid ? { job_id: jid, matter: "", state: "running" } : null;
+  });
   const [progress, setProgress] = useState<ImportProgress | null>(null);
   const [matters, setMatters] = useState<MatterSummary[]>([]);
   const [error, setError] = useState<string | null>(null);
@@ -132,7 +136,11 @@ function Console({ identity, onLogout, onCockpit }: {
   // Poll the non-blocking import while it runs — a persistent, collapsed indicator (never a modal;
   // the app stays fully usable). Read from the ledger (AD-17); stops once the job is done.
   useEffect(() => {
-    if (!job) return;
+    if (!job) {
+      localStorage.removeItem(importKey);
+      return;
+    }
+    localStorage.setItem(importKey, job.job_id);   // persist so the indicator survives a reload
     let live = true;
     const tick = async () => {
       try {
@@ -140,16 +148,23 @@ function Console({ identity, onLogout, onCockpit }: {
         if (!live) return;
         setProgress(p);
         if (p.state !== "done") window.setTimeout(tick, 1000);
-        else void refreshMatters();
+        else {
+          localStorage.removeItem(importKey);
+          void refreshMatters();
+        }
       } catch {
-        /* transient — a later poll or a manual refresh recovers */
+        // the job is gone (finished + swept, or not visible) — drop the stale rehydrated indicator
+        if (live) {
+          setJob(null);
+          localStorage.removeItem(importKey);
+        }
       }
     };
     void tick();
     return () => {
       live = false;
     };
-  }, [job]);
+  }, [job, importKey]);
 
   // The custodian is mandatory; "détenteur inconnu" is an explicit choice, never a blank.
   const effectiveCustodian = custodianUnknown ? "custodian-undeclared" : custodian.trim();

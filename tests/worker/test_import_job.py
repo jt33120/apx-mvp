@@ -185,6 +185,18 @@ def test_a_missing_owned_spool_fails_closed(tmp_path, store) -> None:
     assert store.import_progress(job_id).state != "done"     # never falsely completed
 
 
+def test_the_db_enforces_one_open_job_per_matter(tmp_path, store) -> None:
+    # FR-7 closed atomically (not just the API's read-then-create TOCTOU): a second OPEN job for
+    # the same matter is rejected by the partial unique index, even under concurrency.
+    from sqlalchemy.exc import IntegrityError
+
+    _job(store, tmp_path, {"a.txt": b"1"})                   # one open job for matter "m"
+    with pytest.raises(IntegrityError):
+        store.create_import_job(
+            job_id="job-dup", tenant="t", matter="m", scope="w", actor="Me A",
+            custodian="M. Martin", case_theory=None, spool_path=str(tmp_path / "s2"), now=_NOW)
+
+
 def test_worker_runs_the_job_via_the_inmemory_connector(tmp_path, monkeypatch) -> None:
     # The real enqueue→worker→ledger path over Procrastinate's in-memory connector: the task
     # builds its own store from DATABASE_URL and runs the resumable orchestration.

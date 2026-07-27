@@ -17,10 +17,12 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
     UniqueConstraint,
+    text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
@@ -170,6 +172,13 @@ class ImportJob(Base):
     `submitted` is NULL while enumeration is provisional and frozen at its completion (AD-17)."""
 
     __tablename__ = "import_job"
+    # FR-7: at most ONE open (not-done) import job per matter, enforced atomically by the DB so a
+    # concurrent double-submit cannot create two (the API's read-then-create is a TOCTOU alone).
+    __table_args__ = (
+        Index(
+            "uq_import_job_open", "tenant", "matter", unique=True,
+            sqlite_where=text("state != 'done'"), postgresql_where=text("state != 'done'")),
+    )
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     tenant: Mapped[str] = mapped_column(String, nullable=False)
