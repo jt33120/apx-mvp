@@ -195,6 +195,9 @@ def test_a_zero_piece_result_still_creates_a_durable_matter(store: SqlStore) -> 
     assert out.pieces_written == 0 and out.failures_written == 0
     inv = store.inventory("m", "t", {"wall-1"})   # does not raise -> the matter is durable
     assert inv.submitted == 0 and inv.in_corpus == 0 and inv.failures == 0 and inv.is_consistent()
+    # the ingest audit entry is written even at 0 pieces (the full-audit-trail non-negotiable)
+    trail = store.read_audit("m", "t", {"wall-1"})
+    assert [e.action for e in trail.entries] == ["ingest"] and trail.verified
 
 
 def test_case_theory_is_persisted_and_a_skip_never_wipes_it(
@@ -209,10 +212,14 @@ def test_case_theory_is_persisted_and_a_skip_never_wipes_it(
     with store._sf() as s:
         assert s.get(MatterScope, {"tenant": "t", "matter": "m"}).case_theory \
             == "contestation licenciement"
-    store.save(r, scope="wall-1", matter="m", tenant="t")   # re-ingest, theory omitted
+    store.save(r, scope="wall-1", matter="m", tenant="t")   # re-ingest, theory omitted (None)
     with store._sf() as s:
         assert s.get(MatterScope, {"tenant": "t", "matter": "m"}).case_theory \
             == "contestation licenciement"                  # not wiped by the skip
+    store.save(r, scope="wall-1", matter="m", tenant="t", case_theory="")  # empty == a skip too
+    with store._sf() as s:
+        assert s.get(MatterScope, {"tenant": "t", "matter": "m"}).case_theory \
+            == "contestation licenciement"                  # "" normalized at the boundary, no wipe
     store.save(r, scope="wall-1", matter="m2", tenant="t")  # a fresh matter, no theory
     with store._sf() as s:
         assert s.get(MatterScope, {"tenant": "t", "matter": "m2"}).case_theory is None

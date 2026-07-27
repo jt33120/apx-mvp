@@ -4,7 +4,7 @@ baseline_commit: 856945c0965c3af5abbeced25c0091754ae07971
 
 # Story 2.1: Folder selection as the whole onboarding gesture
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -147,3 +147,30 @@ Claude Opus 4.8 (1M context) — Claude Code dev-story workflow.
 | Date | Change |
 |---|---|
 | 2026-07-27 | Implemented story 2.1 — folder-selection onboarding gesture: the browser upload path now captures a mandatory custodian (with an explicit "détenteur inconnu" choice) and the one optional case theory; the scope selector is held-only both directions; a zero-readable folder is a completed 0/0 durable matter (not an error); a null/empty scope fails closed at the persist boundary (`UnauthorizedScope`); `matter_scope.case_theory` added (encrypted, nullable, unversioned — Epic 4 supersedes) via migration 0016. `save` made backward-compatible (optional matter/tenant/case_theory) so no existing caller changed. 510 passed / 8 skipped, 39 checks + ruff + typecheck + fitness green. Status → review. |
+| 2026-07-27 | Addressed the adversarial code review (3 reviewers, all Approve): normalized `case_theory` at the persist boundary (a skip/"" never wipes); hardened the custodian gate against zero-width/format chars and made it uniform across both ingest paths; translated ingest error details to lawyer-language French; added the zero-file explanatory microcopy and tied the custodian label (a11y); fixed a pre-existing path-traversal write on the upload path; migration 0016 `String`→`Text` (convention); closed the AC5-audit / AC6-API-edge / AC4-narrow / AC3-multi-file test-coverage gaps. 512 passed / 8 skipped; 39 checks + ruff + typecheck + fitness green. Status → done. |
+
+## Senior Developer Review (AI)
+
+**Date:** 2026-07-27 · **Reviewers:** three parallel, execution-verified adversarial `general-purpose` agents — *Faithfulness* (each AC + the UX contract), *Correctness/Security* (the RBAC wall, fail-closed scope, the 1.6 side-door, encryption — all actively attacked with probes), *Scope/Test-integrity* (over-build check + mutation testing of the new tests). · **Outcome: Approve (all three).** Every crown-jewel invariant survived active attack and was mutation-proven (removing a guard makes a test fail); no High/Blocker. The findings below — test-coverage gaps, a voice deviation, hardening nits, and one pre-existing security bug on the touched surface — were all resolved.
+
+### Findings and resolutions
+
+- [x] **[Med] AC5's "ingest audit entry created at 0 pieces" was asserted by no test** (R1 + R3 consensus; R3 mutation-proved: guarding out the 0/0 audit write left all tests green). **Fixed:** the store and API 0/0 tests now assert exactly one `ingest` audit entry (chain verified).
+- [x] **[Med] The front-end rendered raw (part-English, technical) server error strings** — the EXPERIENCE.md "never a raw error string" voice rule. **Fixed:** ingest error details are now lawyer-language French (`_held_wall`, `ScopeConflict`), and the zero-file state shows *"Aucun fichier lisible dans ce dossier. Rien à indexer."* (The full classified-error register is Story 2.6.)
+- [x] **[Low] `save(case_theory="")` could wipe an existing theory to `""`** — normalization lived only at the API edge (R2). **Fixed:** the `""`→`None` rule is now owned at the persist boundary, symmetric with the scope guard; tested (a `""` re-ingest never wipes).
+- [x] **[Low] A zero-width/format-char custodian slipped past the mandatory gate** (R2: `"​".isspace()` is False). **Fixed:** `_is_blank` rejects any custodian composed only of Unicode Z*/C* characters; tested with a zero-width space.
+- [x] **[Low] The custodian 400 was not uniform** — the JSON `/api/ingest` path stored a blank (R2). **Fixed:** the same non-blank custodian guard now applies on both ingest paths.
+- [x] **[Low] AC6's API-edge "empty scope → loud failure" clause was unasserted** (R1). **Fixed:** a test posts a blank scope and asserts a loud 4xx (a whitespace scope → 400 via `_held_wall`).
+- [x] **[Low] AC4's "both directions" shared one mechanism, tested once** (R1 + R3). **Fixed:** a test now posts an invented wall (the "cannot narrow via a new private wall" direction) and asserts 403.
+- [x] **[Low/Security, pre-existing] The upload loop wrote `root / rel` from the client filename with only `lstrip("/")`** — a crafted `../../` filename escaped the temp sandbox (R1 confirmed `escapes_root=True`). Inherited code that 2.1 touches. **Fixed:** the destination is verified `is_relative_to` the resolved sandbox root; a traversal filename is refused (400); tested.
+- [x] **[Info] Migration 0016 used `sa.String()` where the `EncryptedText` convention (0015) is `sa.Text()`** (R2; no functional impact). **Fixed:** `sa.Text()`.
+- [x] **[Nit] The custodian visible label was not programmatically tied to its input** (R1 a11y). **Fixed:** the field is a proper `<label>` (the "détenteur inconnu" toggle moved to a sibling label).
+- [x] **[Nit] AC3 "threaded onto every piece" was tested with one piece per matter** (R1). **Fixed:** the test now ingests a multi-file matter and asserts every piece carries the custodian.
+
+### Deferred (documented, correctly out of 2.1's scope)
+
+- [x] Durable exclusions read back as `0` — owned by Story 2.7 (the permanent home denominator); honestly asserted as `0`, not faked.
+- [x] `case_theory` is not exposed on the `MatterSummary` read-back — Task 3 permitted deferring it; Epic 4 / 4.1 supersedes with a versioned model that owns the read surface.
+- [x] The full classified-error register / worklist UI (2.6 / 2.11), and the non-blocking/resumable job (2.2) — the FE still renders errors as a single alert; the register is 2.6.
+
+**Post-fix verification:** `ruff` clean · `python -m apx.checks` **39/39** · `pytest` **512 passed, 8 skipped** · `apx/web` `tsc` clean · fitness frame green · migration single head `0016_case_theory`.

@@ -16,6 +16,7 @@ import shutil
 import tempfile
 import threading
 import time
+import unicodedata
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
@@ -433,13 +434,20 @@ def _expander() -> CompositeExpander:
 
 def _held_wall(req_scope: str, ident: Identity) -> str:
     """The wall to file a matter under: required, and only one the caller holds — you
-    cannot file into a scope you do not have."""
+    cannot file into a scope you do not have. Lawyer-language details (EXPERIENCE.md voice)."""
     wall = req_scope.strip()
     if not wall:
-        raise HTTPException(status_code=400, detail="a scope (wall) is required")
+        raise HTTPException(status_code=400, detail="un périmètre est requis")
     if wall not in ident.scopes:
-        raise HTTPException(status_code=403, detail="you do not hold that scope")
+        raise HTTPException(status_code=403, detail="vous ne détenez pas ce périmètre")
     return wall
+
+
+def _is_blank(s: str) -> bool:
+    """True if s carries no meaningful character — only whitespace and format/zero-width
+    (Unicode categories Z* / C*). So a custodian of "​" or a non-breaking space is
+    blank, never a silent pass of AC3's "never blank"."""
+    return not any(unicodedata.category(ch)[0] not in ("Z", "C") for ch in s)
 
 
 def _chat_url(base: str) -> str:
@@ -865,13 +873,19 @@ def _capacity_preflight(projected_pieces: int) -> None:
 @app.post("/api/ingest", response_model=IngestResponse)
 def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> IngestResponse:
     wall = _held_wall(req.scope, ident)
+    custodian = req.custodian.strip()
+    if _is_blank(custodian):  # the custodian is mandatory on every ingest path, not just upload
+        raise HTTPException(
+            status_code=400,
+            detail="un détenteur est requis (« détenteur inconnu » si vraiment inconnu)",
+        )
     folder = Path(req.folder)
     if not folder.is_dir():
         raise HTTPException(status_code=400, detail=f"not a folder: {req.folder}")
     _capacity_preflight(sum(1 for p in folder.rglob("*") if p.is_file()))  # refuse if it won't fit
     result = ingest_folder(
         folder, matter=req.matter, tenant=ident.tenant,
-        extractor=_extractor(), custodian=req.custodian, expander=_expander(),
+        extractor=_extractor(), custodian=custodian, expander=_expander(),
     )
     persisted = _persist(
         result, wall, ident.actor,
@@ -912,7 +926,7 @@ async def ingest_upload(
         raise HTTPException(status_code=413, detail="dépôt trop volumineux")
     wall = _held_wall(scope, ident)
     custodian = custodian.strip()
-    if not custodian:
+    if _is_blank(custodian):
         raise HTTPException(
             status_code=400,
             detail="un détenteur est requis (« détenteur inconnu » si vraiment inconnu)",
@@ -920,10 +934,14 @@ async def ingest_upload(
     theory = (case_theory or "").strip() or None
     with tempfile.TemporaryDirectory(prefix="apx-upload-") as tmp:
         root = Path(tmp)
+        root_resolved = root.resolve()
         for f in files or []:
             # The SPA sends the folder-relative path as the filename; rebuild the tree.
             rel = Path(f.filename or "unnamed").as_posix().lstrip("/")
             dest = root / rel
+            if not dest.resolve().is_relative_to(root_resolved):
+                # A crafted "../" filename must never write outside the upload sandbox.
+                raise HTTPException(status_code=400, detail="chemin de fichier invalide")
             dest.parent.mkdir(parents=True, exist_ok=True)
             dest.write_bytes(await f.read())
         result = ingest_folder(

@@ -23,7 +23,7 @@ depends_on = None
 def upgrade() -> None:
     op.add_column(
         "matter_scope",
-        sa.Column("case_theory", sa.String(), nullable=True),
+        sa.Column("case_theory", sa.Text(), nullable=True),
     )
 
 

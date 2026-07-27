@@ -407,6 +407,40 @@ def test_upload_requires_a_custodian(tmp_path: Path, monkeypatch) -> None:
             "/api/ingest-upload", data={"matter": "m", "scope": "wall-A", "custodian": "   "},
             files=[("files", ("a.txt", b"x", "text/plain"))])
         assert blank.status_code == 400
+        # a visually-blank custodian (a zero-width space) is not a value either — never blank
+        zw = c.post(
+            "/api/ingest-upload", data={"matter": "m", "scope": "wall-A", "custodian": "​"},
+            files=[("files", ("a.txt", b"x", "text/plain"))])
+        assert zw.status_code == 400
+
+
+def test_upload_fails_loudly_on_an_empty_scope(tmp_path: Path, monkeypatch) -> None:
+    # AC6 (API edge): a blank RBAC scope fails the job loudly, never defaults permissive.
+    # A whitespace scope reaches _held_wall → 400; a missing/empty field is a 422 — both loud 4xx.
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        blank = c.post("/api/ingest-upload",
+                       data={"matter": "m", "scope": "   ", "custodian": "M. Martin"},
+                       files=[("files", ("a.txt", b"x", "text/plain"))])
+        assert blank.status_code == 400                       # _held_wall strips → empty → loud
+        empty = c.post("/api/ingest-upload",
+                       data={"matter": "m", "scope": "", "custodian": "M. Martin"},
+                       files=[("files", ("a.txt", b"x", "text/plain"))])
+        assert empty.status_code in (400, 422)                # never a permissive default
+
+
+def test_upload_rejects_a_path_traversal_filename(tmp_path: Path, monkeypatch) -> None:
+    # Security: a crafted "../" filename must never write outside the upload sandbox → 400.
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        r = c.post("/api/ingest-upload",
+                   data={"matter": "m", "scope": "wall-A", "custodian": "M. Martin"},
+                   files=[("files", ("../../escape.txt", b"pwn", "text/plain"))])
+        assert r.status_code == 400
 
 
 def test_upload_threads_the_custodian_and_the_explicit_unknown(tmp_path: Path, monkeypatch) -> None:
@@ -420,14 +454,16 @@ def test_upload_threads_the_custodian_and_the_explicit_unknown(tmp_path: Path, m
         _login(c, "me@cab.fr")
         c.post("/api/ingest-upload",
                data={"matter": "m", "scope": "wall-A", "custodian": "M. Martin"},
-               files=[("files", ("a.txt", b"lettre", "text/plain"))])
+               files=[("files", ("dir/a.txt", b"lettre", "text/plain")),
+                      ("files", ("dir/b.txt", b"autre piece", "text/plain"))])  # multi-file
         c.post("/api/ingest-upload",
                data={"matter": "m2", "scope": "wall-A", "custodian": "custodian-undeclared"},
                files=[("files", ("b.txt", b"note", "text/plain"))])
     with store._sf() as s:
-        by_matter = {p.matter: p.custodian for p in s.scalars(select(Piece)).all()}
-    assert by_matter["m"] == "M. Martin"
-    assert by_matter["m2"] == "custodian-undeclared"  # explicit choice, never a blank
+        rows = s.scalars(select(Piece)).all()
+    m_pieces = [p for p in rows if p.matter == "m"]
+    assert len(m_pieces) == 2 and {p.custodian for p in m_pieces} == {"M. Martin"}  # EVERY piece
+    assert {p.custodian for p in rows if p.matter == "m2"} == {"custodian-undeclared"}  # not blank
 
 
 def test_upload_cannot_file_into_a_wall_you_do_not_hold(tmp_path: Path, monkeypatch) -> None:
@@ -440,6 +476,11 @@ def test_upload_cannot_file_into_a_wall_you_do_not_hold(tmp_path: Path, monkeypa
                    data={"matter": "m", "scope": "wall-B", "custodian": "M. Martin"},
                    files=[("files", ("a.txt", b"x", "text/plain"))])
         assert r.status_code == 403
+        # cannot narrow via a new private wall either: an invented wall is simply not held → 403
+        invented = c.post("/api/ingest-upload",
+                          data={"matter": "m2", "scope": "wall-SECRET", "custodian": "M. Martin"},
+                          files=[("files", ("a.txt", b"x", "text/plain"))])
+        assert invented.status_code == 403
 
 
 def test_a_folder_of_zero_readable_files_is_a_completed_0_0_matter(
@@ -458,6 +499,8 @@ def test_a_folder_of_zero_readable_files_is_a_completed_0_0_matter(
         assert inv["failures"] == 0 and inv["exclusions"] == 0 and inv["consistent"] is True
         back = c.get("/api/matters/vide/inventory")           # durable, reads back
         assert back.status_code == 200 and back.json()["submitted"] == 0
+        audit = c.get("/api/matters/vide/audit").json()       # the ingest audit entry exists at 0/0
+        assert [e["action"] for e in audit["entries"]] == ["ingest"] and audit["verified"] is True
 
 
 def test_upload_reconstructs_a_deep_tree_from_provenance(tmp_path: Path, monkeypatch) -> None:

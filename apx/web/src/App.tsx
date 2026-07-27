@@ -194,17 +194,18 @@ function Console({ identity, onLogout, onCockpit }: {
             <span className="apx-hint">Limité aux périmètres que vous détenez.</span>
           </label>
 
-          <div className="apx-field">
+          <label className="apx-field">
             <span>Détenteur *</span>
             <input aria-label="Détenteur" placeholder="nom du détenteur" value={custodian}
               disabled={custodianUnknown} onChange={(e) => setCustodian(e.target.value)} />
-            <label className="apx-hint"
-              style={{ display: "flex", flexDirection: "row", alignItems: "center", gap: ".35rem" }}>
-              <input type="checkbox" checked={custodianUnknown}
-                onChange={(e) => setCustodianUnknown(e.target.checked)} />
-              détenteur inconnu (jamais laissé vide)
-            </label>
-          </div>
+          </label>
+          <label className="apx-hint"
+            style={{ display: "flex", flexDirection: "row", alignItems: "center",
+              gap: ".35rem", marginTop: "-.5rem" }}>
+            <input type="checkbox" checked={custodianUnknown}
+              onChange={(e) => setCustodianUnknown(e.target.checked)} />
+            détenteur inconnu (jamais laissé vide)
+          </label>
 
           <label className="apx-field">
             <span>Thèse du dossier — facultatif</span>
@@ -733,6 +734,11 @@ function InventoryView({ title, r }: { title: string; r: IngestResponse }) {
   return (
     <section className="apx-panel" aria-live="polite">
       <h2>{title}</h2>
+      {inv.submitted === 0 && (
+        <p className="apx-hint" style={{ margin: "0 0 .6rem" }}>
+          Aucun fichier lisible dans ce dossier. Rien à indexer.
+        </p>
+      )}
       <div className="apx-card apx-equation">
         <div className="apx-eq-total">
           <div className="n">{inv.submitted}</div>

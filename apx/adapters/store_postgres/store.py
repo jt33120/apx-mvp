@@ -459,6 +459,9 @@ class SqlStore:
         # piece under no wall, even one that bypasses the API's _held_wall (Story 2.1 AC6).
         if not scope or not scope.strip():
             raise UnauthorizedScope("an empty RBAC scope is never authorised (fail closed)")
+        # A skipped case theory never persists as "" — the persist boundary owns this rule
+        # symmetrically with the scope guard, so no caller can wipe a theory to an empty string.
+        case_theory = (case_theory or "").strip() or None
         now = result.pieces[0].ingestion_timestamp if result.pieces else datetime.now(UTC)
         # matter/tenant come from the caller when given — so a folder of zero readable files
         # still creates a durable matter and its audit entry (Story 2.1 AC5) — and are derived
