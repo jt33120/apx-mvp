@@ -20,6 +20,7 @@ _FX = Path(__file__).resolve().parents[1] / "_fixtures" / "structural_violations
 # (check callable, fixture directory) — each fixture fires exactly its check.
 _CASES = [
     (ih.no_runtime_import_from_tests, "imports_tests"),
+    (ih.no_fixture_path_in_runtime, "fixture_path"),
     (ih.no_egress_call_site_outside_adapters, "egress_leak"),
     (ih.no_tenant_identifier_in_source, "tenant_branch"),
     (fl.embedder_has_one_implementation, "two_embedders"),
@@ -55,11 +56,21 @@ def test_forward_looking_checks_name_their_deferral() -> None:
 def test_checks_fail_closed_on_an_unparseable_file(tmp_path) -> None:  # noqa: ANN001
     (tmp_path / "broken.py").write_text("def (:\n", encoding="utf-8")   # a syntax error
     for check in (ih.no_runtime_import_from_tests,
+                  ih.no_fixture_path_in_runtime,
                   ih.no_egress_call_site_outside_adapters,
                   ih.no_tenant_identifier_in_source,
                   fl.no_post_filter_in_retrieval):
         r = check([tmp_path])
         assert not r.ok and "failing closed" in r.detail, f"{r.name} did not fail closed"
+
+
+def test_parse_fails_closed_on_an_unreadable_file() -> None:
+    # an OSError on read (here: reading a directory) lands the file in `unparseable` → graceful
+    # fail-closed, not a crash that aborts the runner mid-sweep (review LOW-10).
+    from pathlib import Path
+
+    from apx.checks.payload_schema import _parse
+    assert _parse(Path(__file__).resolve().parent) is None
 
 
 def test_egress_check_does_not_flag_orm_get_or_the_db_driver() -> None:

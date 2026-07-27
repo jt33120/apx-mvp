@@ -375,49 +375,54 @@ could contain is an inflated claim about what the suite proves).
 
 <!-- structural-properties:start -->
 
-| Property | FR | AD | Verb | Inspects |
-|---|---|---|---|---|
-| `layering-egress-imports` | FR-56 | AD-4/45/27 | structural | the import graph (pyproject [tool.importlinter]) |
-| `one-chunk-writer` | FR-8 | AD-9 | structural | Chunk(...) / insert(Chunk) sites in apx/** |
-| `chunk-scope-arg-required` | FR-8 | AD-9 | structural | the chunk writer's signature (no default) |
-| `chunk-columns-enumerated` | FR-8 | AD-9 | structural | the chunk model column set |
-| `no-cascade-delete` | FR-4 | AD-7 | structural | ON DELETE clauses on chunk/piece FKs |
-| `tenant-not-null` | FR-30 | AD-12 | structural | tenant columns in the models |
-| `scoped-access-carries-tenant` | FR-30 | AD-12 | structural | scope predicates in apx/** |
-| `identity-tenant-qualified` | FR-30 | AD-12 | structural | identity keys in the models |
-| `no-reversible-credential` | FR-48 | AD-15 | structural | credential columns in the models |
-| `jwt-pins-algorithms` | FR-48 | AD-15 | structural | jwt.decode call sites in apx/** |
-| `scope-mutations-audited` | FR-49 | AD-33 | structural | the scope-mutating store methods |
-| `sensitive-columns-encrypted` | FR-47 | AD-31 | structural | content columns in the models |
-| `startup-gate-fail-closed` | FR-47 | AD-31 | structural | apx/api/startup.py |
-| `no-secret-in-source` | FR-51 | AD-47 | structural | apx/, docker/, deploy/, .github/, root config |
-| `no-secret-column` | FR-51 | AD-47 | structural | the model columns |
-| `no-tenant-branch-core` | FR-30 | AD-24 | structural | conditionals under apx/core/** |
-| `config-defaults-preserve` | FR-30 | AD-24 | structural | apx/core/domain/config.py |
-| `documented-config-keys-exist` | FR-30 | AD-24 | structural | the README config-keys block |
-| `config-reference-complete` | FR-30 | AD-24 | structural | the README config-keys block |
-| `projection-registry-only` | FR-31 | AD-26 | structural | Projection(...) sites in apx/** |
-| `snapshot-content-free` | FR-31 | AD-26 | structural | the Snapshot type fields |
-| `projectors-declare-attestation` | FR-31 | AD-26 | structural | the projection registry |
-| `no-runtime-import-from-tests` | FR-33 | AD-16 | structural | imports in the runtime tree |
-| `no-egress-call-site` | FR-32 | AD-45 | structural | network call sites in apx/** (excl. the egress adapters) |
-| `no-tenant-identifier-source` | FR-30 | AD-24 | structural | conditionals in the runtime tree |
-| `no-fallback-embedder` | FR-9 | AD-11 | structural | Embedder impls / except-handlers in apx/adapters/** (vacuous until 2.8) |
-| `destructive-index-one-entry` | FR-10 | AD-7 | structural | index drop/truncate call sites (vacuous until 2.8) |
-| `no-post-filter-retrieval` | FR-14 | AD-14 | structural | functions taking a result set + a scope (vacuous until 3.x) |
-| `no-nl-translation-key` | FR-34 | conventions | structural | t()/gettext() call args (vacuous until 6.3) |
-| `no-hardcoded-locale` | FR-35 | AD-24 | structural | locale= / setlocale / Locale literals (vacuous until 6.4) |
-| `no-model-reported-confidence` | FR-42 | AD-19 | structural | confidence fields read off a model response (vacuous until 4.x) |
-| `no-banned-confidence-phrasing` | FR-23 | FR-23 | structural | banned phrases in string literals / locale resources (vacuous until 5.4/6.x) |
-| `meta-property-has-check` | FR-56 | AD-33 | structural | this manifest vs CHECKS |
-| `meta-check-in-manifest` | FR-56 | AD-33 | structural | CHECKS vs this manifest |
-| `meta-verbs-not-conflated` | FR-56 | AD-33 | structural | this manifest's verbs |
-| `meta-manifest-matches-readme` | FR-56 | AD-33 | structural | the README structural-properties block |
-| `meta-readme-lists-every` | FR-56 | AD-33 | structural | the README structural-properties block |
-| `deferred-action-registry` | FR-21 | AD-33 | deferred | deferred to the usability-probe story (FR-21) — the action registry is itself a structural property, but the actions it enumerates do not exist yet |
-| `not-enforceable-plausible` | FR-19 | AD-19 | not-enforceable | no check can decide plausibility (AD-33) — asserted by review; the derived-confidence and gold-set calibration checks stand in where they exist |
-| `not-enforceable-commercial` | FR-27 | AD-27 | not-enforceable | a commercial statement is not a code property (AD-33) — the pre-flight screen stands in |
-| `review-refusal-phrasing` | FR-27 | AD-33 | review | phrasing quality is asserted by review against a checklist — never counted as a test |
+| Key | FR | AD | Verb | Check | Inspects |
+|---|---|---|---|---|---|
+| `layering-egress-imports` | FR-56 | AD-4/45/27 | structural | run | the import graph (pyproject [tool.importlinter]) |
+| `one-chunk-writer` | FR-8 | AD-9 | structural | one_chunk_writer | Chunk(...) / insert(Chunk) sites in apx/** |
+| `chunk-scope-arg-required` | FR-8 | AD-9 | structural | scope_arg_required | the chunk writer's signature (no default) |
+| `chunk-columns-enumerated` | FR-8 | AD-9 | structural | chunk_columns_enumerated | the chunk model column set |
+| `no-cascade-delete` | FR-4 | AD-7 | structural | no_cascade_delete | ON DELETE clauses on chunk/piece FKs |
+| `tenant-not-null` | FR-30 | AD-12 | structural | tenant_not_null_on_owned_tables | tenant columns in the models |
+| `scoped-access-carries-tenant` | FR-30 | AD-12 | structural | scoped_access_carries_tenant | scope predicates in apx/** |
+| `identity-tenant-qualified` | FR-30 | AD-12 | structural | identity_is_tenant_qualified | identity keys in the models |
+| `no-reversible-credential` | FR-48 | AD-15 | structural | no_reversible_credential_storage | credential columns in the models |
+| `jwt-pins-algorithms` | FR-48 | AD-15 | structural | jwt_decode_pins_algorithms | jwt.decode call sites in apx/** |
+| `scope-mutations-audited` | FR-49 | AD-33 | structural | scope_mutations_are_audited | the scope-mutating store methods |
+| `sensitive-columns-encrypted` | FR-47 | AD-31 | structural | sensitive_columns_are_encrypted | content columns in the models |
+| `startup-gate-fail-closed` | FR-47 | AD-31 | structural | startup_gate_is_fail_closed | apx/api/startup.py |
+| `no-secret-in-source` | FR-51 | AD-47 | structural | no_secret_in_source | apx/, docker/, deploy/, .github/, root config |
+| `no-secret-column` | FR-51 | AD-47 | structural | no_secret_column_in_models | the model columns |
+| `no-tenant-branch-core` | FR-30 | AD-24 | structural | no_tenant_conditional_in_core | conditionals under apx/core/** |
+| `config-defaults-preserve` | FR-30 | AD-24 | structural | config_defaults_preserve_guarantees | apx/core/domain/config.py |
+| `documented-config-keys-exist` | FR-30 | AD-24 | structural | documented_config_keys_exist | the README config-keys block |
+| `config-reference-complete` | FR-30 | AD-24 | structural | config_reference_is_complete | the README config-keys block |
+| `projection-registry-only` | FR-31 | AD-26 | structural | projection_emitted_only_by_registry | Projection(...) sites in apx/** |
+| `snapshot-content-free` | FR-31 | AD-26 | structural | snapshot_fields_are_content_free | the Snapshot type fields |
+| `projectors-declare-attestation` | FR-31 | AD-26 | structural | projectors_declare_attestation | the projection registry |
+| `no-runtime-import-from-tests` | FR-33 | AD-16 | structural | no_runtime_import_from_tests | imports in the runtime tree |
+| `no-fixture-path` | FR-33 | AD-16 | structural | no_fixture_path_in_runtime | _fixtures/fixtures path literals in runtime |
+| `no-egress-call-site` | FR-32 | AD-45 | structural | no_egress_call_site_outside_adapters | network imports + call sites in apx/** (excl. the egress adapters) |
+| `no-tenant-identifier-source` | FR-30 | AD-24 | structural | no_tenant_identifier_in_source | conditionals in the runtime tree |
+| `no-fallback-embedder` | FR-9 | AD-11 | structural | embedder_has_one_implementation | embed/encode-method classes + except-handlers in the runtime tree (vacuous until 2.8) |
+| `destructive-index-one-entry` | FR-10 | AD-7 | structural | destructive_index_ops_single_entry | index drop/truncate call sites (vacuous until 2.8) |
+| `no-post-filter-retrieval` | FR-14 | AD-14 | structural | no_post_filter_in_retrieval | functions taking a result set + a scope (vacuous until 3.x) |
+| `no-nl-translation-key` | FR-34 | conventions | structural | no_natural_language_translation_key | t()/gettext() call args (vacuous until 6.3) |
+| `no-hardcoded-locale` | FR-35 | AD-24 | structural | no_hardcoded_locale | locale= / setlocale / Locale literals (vacuous until 6.4) |
+| `no-model-reported-confidence` | FR-42 | AD-19 | structural | no_model_reported_confidence | confidence fields read off a model response (vacuous until 4.x) |
+| `no-banned-confidence-phrasing` | FR-23 | FR-23 | structural | no_banned_confidence_phrasing | banned phrases in string literals / locale resources (vacuous until 5.4/6.x) |
+| `meta-property-has-check` | FR-56 | AD-33 | structural | every_structural_property_has_a_registered_check | this manifest vs CHECKS |
+| `meta-check-in-manifest` | FR-56 | AD-33 | structural | every_registered_check_is_in_the_manifest | CHECKS vs this manifest |
+| `meta-verbs-not-conflated` | FR-56 | AD-33 | structural | verbs_are_not_conflated | this manifest's verbs |
+| `meta-manifest-matches-readme` | FR-56 | AD-33 | structural | manifest_matches_readme | the README structural-properties block |
+| `meta-readme-lists-every` | FR-56 | AD-33 | structural | readme_lists_every_property | the README structural-properties block |
+| `meta-floor-of-13` | FR-56 | AD-33 | structural | floor_of_13_has_a_structural_check | the 13 enumerated FR-56 floor items vs the manifest |
+| `deferred-action-registry` | FR-21 | AD-33 | deferred | — | deferred to the usability-probe story (FR-21) — the action registry is itself a structural property, but the actions it enumerates do not exist yet |
+| `deferred-fixture-env-source` | FR-33 | AD-16 | deferred | — | the third FR-33 leg — an env-var conditional selecting a data source outside the configured-source list — deferred: a bare os.getenv branch is not precisely separable from legitimate config without false positives (the fixture-path leg catches a demo override that reads a fixture dir) |
+| `not-enforceable-denylist-depends` | FR-30 | AD-3 | not-enforceable | — | no check can decide whether the core 'depends on' a managed capability (AD-33/AD-3) — the package/extension deny-list (import_contracts) stands in as the enforceable half |
+| `not-enforceable-rejection-record` | FR-48 | AD-15 | not-enforceable | — | AD-15's rejection-record honesty is asserted by review, not a static check (AD-33) — the no-reversible-credential and jwt-pins-algorithms checks stand in where decidable |
+| `not-enforceable-plausible` | FR-19 | AD-19 | not-enforceable | — | no check can decide plausibility (AD-33) — asserted by review; the derived-confidence and gold-set calibration checks stand in where they exist |
+| `not-enforceable-commercial` | FR-27 | AD-27 | not-enforceable | — | a commercial statement is not a code property (AD-33) — the pre-flight screen stands in |
+| `review-refusal-phrasing` | FR-27 | AD-33 | review | — | phrasing quality is asserted by review against a checklist — never counted as a test |
 
 <!-- structural-properties:end -->
 

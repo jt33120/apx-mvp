@@ -51,26 +51,38 @@ def _is_tenant_expr(node: ast.expr) -> bool:
     return False
 
 
-def _module_string_consts(tree: ast.Module) -> dict[str, str]:
-    """Top-level ``NAME = "literal"`` string constants, so a branch that hides the literal behind
-    a module constant (``SPECIAL = "cabinet-x"`` … ``if tenant == SPECIAL``) is still caught."""
-    consts: dict[str, str] = {}
+def _module_literal_consts(tree: ast.Module) -> set[str]:
+    """Module-level names bound to a NON-EMPTY literal a tenant could be branched against — a
+    non-empty string, a non-empty list/tuple/set of constants, or a non-empty dict. Catches a branch
+    that hides the literal behind a module constant (``SPECIAL = "cabinet-x"`` … ``if tenant ==
+    SPECIAL``) AND an allow-table (``TENANTS = ["a", "b"]`` … ``if tenant in TENANTS``), which a
+    string-only resolver missed (the tree-wide FR-30 review finding)."""
+    names: set[str] = set()
     for node in tree.body:
+        if not isinstance(node, ast.Assign | ast.AnnAssign):
+            continue
+        value = node.value
         targets = node.targets if isinstance(node, ast.Assign) else (
-            [node.target] if isinstance(node, ast.AnnAssign) and node.value is not None else [])
-        if (isinstance(node, ast.Assign | ast.AnnAssign) and isinstance(node.value, ast.Constant)
-                and isinstance(node.value.value, str)):
-            for t in targets:
-                if isinstance(t, ast.Name):
-                    consts[t.id] = node.value.value
-    return consts
+            [node.target] if node.value is not None else [])
+        is_literal = (
+            (isinstance(value, ast.Constant) and value.value not in ("", None, b""))
+            or (isinstance(value, ast.List | ast.Tuple | ast.Set)
+                and bool(value.elts) and all(isinstance(e, ast.Constant) for e in value.elts))
+            or (isinstance(value, ast.Dict) and bool(value.keys)))
+        if is_literal:
+            names.update(t.id for t in targets if isinstance(t, ast.Name))
+    return names
 
 
-def _is_literal_operand(node: ast.expr, consts: dict[str, str]) -> bool:
+# Back-compat alias — the name callers historically imported (now returns the richer const set).
+_module_string_consts = _module_literal_consts
+
+
+def _is_literal_operand(node: ast.expr, consts: set[str]) -> bool:
     """A NON-EMPTY literal a tenant could be branched against — a non-empty constant, a non-empty
-    container/dict of constants, or a Name resolving to a non-empty module string constant. An
-    EMPTY string, ``None`` or an empty container is a sentinel/defensive guard and is NOT a branch
-    on a tenant identity (so ``if row.tenant == "":`` is allowed, the MED-5 false positive)."""
+    container/dict of constants, or a Name resolving to a non-empty module constant (string OR
+    collection). An EMPTY string, ``None`` or an empty container is a sentinel guard, NOT a tenant
+    branch (so ``if row.tenant == "":`` is allowed — the MED-5 false positive)."""
     if isinstance(node, ast.Constant):
         return node.value not in ("", None, b"")
     if isinstance(node, ast.List | ast.Tuple | ast.Set):
@@ -78,11 +90,11 @@ def _is_literal_operand(node: ast.expr, consts: dict[str, str]) -> bool:
     if isinstance(node, ast.Dict):  # `tenant in {"cabinet-x": handler}` — dispatch by literal key
         return bool(node.keys)
     if isinstance(node, ast.Name):
-        return bool(consts.get(node.id))
+        return node.id in consts
     return False
 
 
-def _tenant_vs_literal(compare: ast.Compare, consts: dict[str, str]) -> bool:
+def _tenant_vs_literal(compare: ast.Compare, consts: set[str]) -> bool:
     """A *tenant* expression tested (==/!=/in/not in) against a non-empty literal — a branch on a
     specific tenant identity. Tenant-vs-tenant (both operands tenant expressions) is the legitimate
     isolation comparison and is NOT flagged; nor is tenant-vs-empty/None (a sentinel guard)."""
@@ -98,7 +110,7 @@ def _tenant_vs_literal(compare: ast.Compare, consts: dict[str, str]) -> bool:
     return False
 
 
-def _tenant_prefix_call(node: ast.Call, consts: dict[str, str]) -> bool:
+def _tenant_prefix_call(node: ast.Call, consts: set[str]) -> bool:
     """A ``tenant.startswith("cabinet-")`` / ``.endswith`` / ``re.match``-style branch — the
     prefix-routing form that a plain equality check misses."""
     func = node.func

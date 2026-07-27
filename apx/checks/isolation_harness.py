@@ -22,6 +22,7 @@ a violating fixture; the default is the shipped runtime tree.
 from __future__ import annotations
 
 import ast
+import re
 from collections.abc import Iterable
 from pathlib import Path
 
@@ -70,11 +71,18 @@ def _where(path: Path) -> Path | str:
 
 # ── FR-33 / AD-16: no runtime import from the test tree ──────────────────────────────────────
 def _import_modules(node: ast.AST) -> list[str]:
-    """The dotted module name(s) an import node names (empty for a relative ``from . import x``)."""
+    """The module name(s) an import node names. For a RELATIVE ``from``-import the module fragment
+    is not the full path, so the imported NAMES are included too (``from ._fixtures import x``,
+    ``from . import conftest`` both reach the test tree). Dynamic ``importlib.import_module("…")`` /
+    ``__import__(...)`` is a documented static blind spot — a string target is not decidable by AST;
+    the network isolation of the AD-2 offline run is the second line there."""
     if isinstance(node, ast.Import):
         return [alias.name for alias in node.names]
     if isinstance(node, ast.ImportFrom):
-        return [node.module] if (node.module and node.level == 0) else []
+        mods = [node.module] if node.module else []
+        if node.level > 0:  # relative: the fragment AND each imported name can name the test tree
+            mods += [alias.name for alias in node.names]
+        return mods
     return []
 
 
@@ -85,9 +93,9 @@ def _is_test_tree_module(module: str) -> bool:
 
 def no_runtime_import_from_tests(roots: Iterable[Path] | None = None) -> CheckResult:
     """No runtime module imports the test tree (FR-33/AD-16): ``tests``, ``conftest`` or a
-    ``_fixtures`` package. Test fixtures exist only inside the test suite and are unreachable from
-    any runtime code path — the v1 demo layer that overrode the real product is deleted, not hidden.
-    """
+    ``_fixtures`` package, whether by absolute or relative import. Test fixtures exist only inside
+    the test suite and are unreachable from any runtime code path — the v1 demo layer that overrode
+    the real product is deleted, not hidden."""
     name, ad = "no runtime import from the test tree", "AD-16"
     trees, unparseable = _trees(roots)
     if unparseable:
@@ -104,12 +112,75 @@ def no_runtime_import_from_tests(roots: Iterable[Path] | None = None) -> CheckRe
                        f"no runtime module imports the test tree ({len(trees)} file(s))")
 
 
-# ── FR-32 / AD-45: no outbound call site outside the enumerated egress adapters ───────────────
+# A ``_fixtures`` / ``fixtures`` path SEGMENT in a string literal (a dir, with or without a trailing
+# slash). Requires the segment boundary so an unrelated word like ``test_fixtures_helper`` is safe.
+_FIXTURE_PATH_RE = re.compile(r"(^|/)_?fixtures(/|$)")
+
+
+def no_fixture_path_in_runtime(roots: Iterable[Path] | None = None) -> CheckResult:
+    """No runtime module references a fixture directory by a PATH LITERAL (FR-33/AD-16) — the v1
+    demo layer read hand-authored fixtures, not a live component (an ``apx/_fixtures/…`` path).
+    Scans string literals for a ``_fixtures``/``fixtures`` segment. The third FR-33 leg — an
+    env-var conditional selecting a data source outside the configured-source list — is a DEFERRED
+    manifest row: a bare ``os.getenv`` branch is not precisely separable from legitimate config
+    without false positives, and a demo override that reads a fixture dir must name that dir, so
+    this catches the concrete half."""
+    name, ad = "no fixture path in runtime", "AD-16"
+    trees, unparseable = _trees(roots)
+    if unparseable:
+        return _fail_closed(name, ad, unparseable)
+    for path, tree in trees:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Constant) and isinstance(node.value, str) and (
+                    _FIXTURE_PATH_RE.search(node.value)):
+                return CheckResult(
+                    name, ad, False,
+                    f"{_where(path)}:{node.lineno} a runtime module references a fixture path "
+                    f"({node.value!r}) — fixtures live only in the test tree (FR-33/AD-16)")
+    return CheckResult(name, ad, True, f"no fixture path in {len(trees)} runtime module(s)")
+
+
+# ── FR-32 / AD-45: no outbound network reach outside the enumerated egress adapters ───────────
 # The enumerated egress adapter families (AD-45): the model provider, the embedder, the OCR service.
-# A source-level network call site may appear ONLY inside one of these; anywhere else is a fourth
-# egress path. (The DB driver opens its socket inside psycopg, not at an apx source call site, so it
-# is not a source-level network call and is not — and must not be — flagged.)
+# A source-level network reach may appear ONLY inside one of these; anywhere else is a fourth egress
+# path. (The DB driver opens its socket inside psycopg, not at an apx source site, so it is not a
+# source-level network reach and is not — and must not be — flagged.)
 _EGRESS_ADAPTER_DIRS = frozenset({"llm_openai_compat", "embedder_bgem3", "ocr_tesseract"})
+
+# Network client MODULES — importing one is egress intent, in ANY form (aliased, from-imported). You
+# cannot open a connection without importing the module or its entry point, so the IMPORT leg
+# catches every spelling an aliased/from-import would otherwise hide. `socket` is deliberately NOT
+# here (many non-network uses — gethostname, inet_aton); it is handled at the narrowed call leg.
+_NETWORK_MODULES = frozenset({"requests", "httpx", "aiohttp", "urllib.request", "http.client"})
+# Connection-opening entry points — flagged wherever they are `from`-imported (`from socket import
+# create_connection`, `from urllib.request import urlopen`), regardless of the source module.
+_NETWORK_FUNCS = frozenset(
+    {"urlopen", "urlretrieve", "create_connection", "HTTPConnection", "HTTPSConnection"})
+# The socket calls that actually OPEN a connection (not gethostname/inet_aton/AF_INET constants).
+_SOCKET_OPENERS = frozenset({"socket", "create_connection", "connect"})
+
+
+def _network_import(node: ast.AST) -> str | None:
+    """A network import at ``node`` (or None): ``import requests [as r]``, ``import urllib.req``,
+    ``from urllib.request import urlopen``, ``from socket import create_connection``. Resolves the
+    import, so an alias or a from-import cannot hide the egress."""
+    if isinstance(node, ast.Import):
+        for alias in node.names:
+            n = alias.name
+            if any(n == m or n.startswith(m + ".") for m in _NETWORK_MODULES):
+                return n
+    elif isinstance(node, ast.ImportFrom) and node.module:
+        mod, imported = node.module, {a.name for a in node.names}
+        if mod in _NETWORK_MODULES:
+            return mod
+        if mod == "urllib" and "request" in imported:
+            return "urllib.request"
+        if mod == "http" and "client" in imported:
+            return "http.client"
+        hit = imported & _NETWORK_FUNCS
+        if hit:
+            return f"{mod}.{sorted(hit)[0]}"
+    return None
 
 
 def _call_dotted(node: ast.Call) -> str | None:
@@ -128,39 +199,51 @@ def _call_dotted(node: ast.Call) -> str | None:
 
 
 def _is_network_call(dotted: str) -> bool:
-    """A source-level socket-opening / HTTP call. Precise on purpose: ``urllib.request.*`` (not
-    ``urllib.parse.*``), ``http.client.*``, ``socket.*``, and the ``httpx``/``requests``/``aiohttp``
-    clients — never a bare ``.get``/``.post`` on a variable (which is dict/ORM, not egress)."""
+    """A source-level HTTP / socket-OPENING call target. Precise: ``urllib.request.*`` (not
+    ``urllib.parse.*``), ``http.client.*``, the ``httpx``/``requests``/``aiohttp`` clients, and the
+    connection-opening ``socket`` calls only (``socket.socket``/``create_connection``/``connect`` —
+    never ``socket.gethostname``). The import leg above is the primary guard; this catches
+    ``import urllib`` then ``urllib.request.urlopen(...)`` where no network module was imported."""
     root = dotted.split(".")[0]
-    return (
-        root in ("httpx", "requests", "aiohttp")
-        or dotted.startswith("urllib.request")
-        or dotted.startswith("http.client")
-        or root == "socket")
+    if root in ("httpx", "requests", "aiohttp"):
+        return True
+    if dotted.startswith("urllib.request") or dotted.startswith("http.client"):
+        return True
+    if root == "socket":
+        attr = dotted.split(".", 1)[1] if "." in dotted else ""
+        return attr in _SOCKET_OPENERS
+    return False
 
 
 def no_egress_call_site_outside_adapters(roots: Iterable[Path] | None = None) -> CheckResult:
-    """A source-level network call site appears only inside an enumerated egress adapter (FR-32/
-    AD-45) — the model provider, the embedder, the OCR service. Any outbound call site elsewhere is
-    a fourth egress path (telemetry, a crash reporter, an update check), the defect this forbids."""
+    """No outbound network reach appears outside an enumerated egress adapter (FR-32/AD-45) — the
+    model provider, the embedder, the OCR service. Two legs: an IMPORT of a network client (in any
+    aliased/from-imported form — you cannot egress without importing), and a direct network call
+    site. Anything elsewhere is a fourth egress path (telemetry, a crash reporter, an update check),
+    the defect this forbids in a product whose premise is that client data never leaves the firm."""
     name, ad = "no outbound call site outside the enumerated adapters", "AD-45"
     trees, unparseable = _trees(roots)
     if unparseable:
         return _fail_closed(name, ad, unparseable)
     for path, tree in trees:
-        in_egress_adapter = bool(set(path.parts) & _EGRESS_ADAPTER_DIRS)
-        if in_egress_adapter:
-            continue  # the enumerated set may open sockets; the point is that nothing else may
+        if set(path.parts) & _EGRESS_ADAPTER_DIRS:
+            continue  # the enumerated set may reach the network; the point is that nothing else may
         for node in ast.walk(tree):
+            imported = _network_import(node)
+            if imported is not None:
+                return CheckResult(
+                    name, ad, False,
+                    f"{_where(path)}:{node.lineno} imports a network client ({imported}) outside "
+                    "an egress adapter — a fourth egress path is a defect (FR-32/AD-45)")
             if isinstance(node, ast.Call):
                 dotted = _call_dotted(node)
                 if dotted is not None and _is_network_call(dotted):
                     return CheckResult(
                         name, ad, False,
                         f"{_where(path)}:{node.lineno} an outbound network call ({dotted}) outside "
-                        "the enumerated egress adapters — a fourth egress path is a defect (AD-45)")
+                        "the egress adapters — a fourth egress path is a defect (FR-32/AD-45)")
     return CheckResult(name, ad, True,
-                       f"no outbound call site outside the egress adapters ({len(trees)} file(s))")
+                       f"no outbound network reach outside the egress adapters ({len(trees)} file)")
 
 
 # ── FR-30 / AD-24: no tenant identifier is a branch, anywhere in the runtime ──────────────────
@@ -195,6 +278,7 @@ def no_tenant_identifier_in_source(roots: Iterable[Path] | None = None) -> Check
 def run() -> list[CheckResult]:
     return [
         no_runtime_import_from_tests(),
+        no_fixture_path_in_runtime(),
         no_egress_call_site_outside_adapters(),
         no_tenant_identifier_in_source(),
     ]

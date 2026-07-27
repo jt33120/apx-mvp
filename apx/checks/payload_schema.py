@@ -66,9 +66,11 @@ def _iter_py(roots: Iterable[Path]) -> Iterable[Path]:
 
 def _parse(path: Path) -> ast.Module | None:
     try:
-        # ValueError catches source containing a NUL byte (not a SyntaxError).
+        # ValueError catches source containing a NUL byte (not a SyntaxError); OSError catches an
+        # UNREADABLE file (a chmod-000 permission denial) — it lands in `unparseable` and fails
+        # closed gracefully, rather than raising and aborting the whole runner mid-sweep.
         return ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (SyntaxError, UnicodeDecodeError, ValueError):
+    except (SyntaxError, UnicodeDecodeError, ValueError, OSError):
         return None
 
 

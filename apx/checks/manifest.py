@@ -49,7 +49,7 @@ _REPO_ROOT = Path(__file__).resolve().parents[2]
 _README = _REPO_ROOT / "README.md"
 _DOC_START = "<!-- structural-properties:start -->"
 _DOC_END = "<!-- structural-properties:end -->"
-_BACKTICKED = re.compile(r"`([a-z0-9][a-z0-9-]+)`")
+_BACKTICKED = re.compile(r"`([a-z0-9][a-z0-9-]*)`")
 
 # The four verbs of AD-33. Only `structural` is machine-decided and counted; the rest are tracked
 # documentation — a `review` row is NEVER counted as a passing check (NFR-51).
@@ -162,6 +162,32 @@ def verbs_are_not_conflated(
     return CheckResult(name, ad, True, "verbs are partitioned: only structural rows name a check")
 
 
+# FR-56's enumerated floor of 13 — each MUST have a live structural check, else a floor item was
+# silently dropped (the FR-33-half-shipped review finding, made impossible). AD-33: the self-check
+# reconciles the manifest against the document's enumeration, not only against itself.
+FLOOR_FRS = frozenset({
+    "FR-9", "FR-10", "FR-14", "FR-8", "FR-30", "FR-33", "FR-34", "FR-35", "FR-32", "FR-48",
+    "FR-51", "FR-42", "FR-23"})
+
+
+def floor_of_13_has_a_structural_check(
+    manifest: list[StructuralProperty] | None = None,
+) -> CheckResult:
+    """Every FR in FR-56's enumerated floor of 13 has at least one ``structural`` manifest row
+    (AD-33/FR-56) — so a floor property omitted from the manifest fails the build, not only one
+    whose check was dropped. Without this the meta-checks guard only what is already enumerated, and
+    a silently-absent floor item is invisible (the FR-33 half-ship the review caught)."""
+    name, ad = "the FR-56 floor of 13 all have a check", "AD-33"
+    rows = PROPERTY_MANIFEST if manifest is None else manifest
+    covered = {r.fr for r in rows if r.verb == STRUCTURAL}
+    missing = sorted(FLOOR_FRS - covered)
+    if missing:
+        return CheckResult(name, ad, False,
+                           f"FR-56 floor item(s) with no structural check: {missing} — a property "
+                           "silently dropped from the manifest is a build failure (AD-33/FR-56)")
+    return CheckResult(name, ad, True, f"all {len(FLOOR_FRS)} FR-56 floor items have a check")
+
+
 def _read_block(path: Path) -> tuple[str | None, str | None]:
     """(block-text, error). Between the two markers; a missing marker → (None, None); an unreadable
     file → (None, error) (fail closed)."""
@@ -175,25 +201,42 @@ def _read_block(path: Path) -> tuple[str | None, str | None]:
     return text[start + len(_DOC_START):end], None
 
 
-def _readme_keys(block: str) -> list[str]:
-    """The backticked key in the FIRST cell of each table row of the block (config-keys idiom)."""
-    keys: list[str] = []
+def _readme_rows(block: str) -> list[dict[str, str]]:
+    """Parse each table row into ``{key, fr, ad, verb, check}`` from the first FIVE cells
+    (Key | FR | AD | Verb | Check); the 6th cell (Inspects) is human prose and is NOT machine-
+    compared. The key is the backticked token in cell 0; a header/separator row (no backtick) is
+    skipped. This is what makes the lock-step cover the factual columns, not only the key."""
+    out: list[dict[str, str]] = []
     for line in block.splitlines():
         stripped = line.strip()
         if not stripped.startswith("|"):
             continue
-        first_cell = stripped.strip("|").split("|", 1)[0]
-        m = _BACKTICKED.search(first_cell)
-        if m is not None:
-            keys.append(m.group(1))
-    return keys
+        cells = [c.strip() for c in stripped.strip("|").split("|")]
+        if len(cells) < 5:
+            continue
+        m = _BACKTICKED.search(cells[0])
+        if m is None:
+            continue  # the header ("Key") and separator ("---") rows carry no backtick
+        out.append({"key": m.group(1), "fr": cells[1], "ad": cells[2],
+                    "verb": cells[3], "check": cells[4]})
+    return out
+
+
+def _expected_row(p: StructuralProperty) -> dict[str, str]:
+    """The README cells a manifest row must show — the check is named by its function ``__name__``
+    (a ``—`` for a non-structural row)."""
+    return {"key": p.key, "fr": p.fr, "ad": p.ad, "verb": p.verb,
+            "check": p.check.__name__ if p.check is not None else "—"}
 
 
 def manifest_matches_readme(
     manifest: list[StructuralProperty] | None = None, readme: Path | None = None
 ) -> CheckResult:
-    """Every property token in the README reference block is a real manifest key (AD-33/FR-56) — no
-    phantom documentation row. Fails closed on a missing block or an unreadable README."""
+    """Every README reference row matches a manifest row on EVERY factual column — key, FR, AD, verb
+    and check (AD-33/FR-56) — so no phantom row and no mislabel (a ``structural`` row shown as
+    ``review``, a wrong FR/AD/check) can drift while the build stays green. The 6th column
+    (Inspects) is human prose, not machine-compared. Fails closed on a missing block/unreadable
+    README."""
     name, ad = "the README block matches the manifest", "AD-33"
     rows = PROPERTY_MANIFEST if manifest is None else manifest
     block, error = _read_block(readme if readme is not None else _README)
@@ -203,12 +246,18 @@ def manifest_matches_readme(
         return CheckResult(name, ad, False,
                            "README.md has no structural-properties block (the harness reference "
                            "would be silently neutered) — restore the markers (AD-33)")
-    known = {r.key for r in rows}
-    for key in _readme_keys(block):
-        if key not in known:
+    expected = {p.key: _expected_row(p) for p in rows}
+    for row in _readme_rows(block):
+        exp = expected.get(row["key"])
+        if exp is None:
             return CheckResult(name, ad, False,
-                               f"README documents property `{key}` with no manifest row (AD-33)")
-    return CheckResult(name, ad, True, "every README property maps to a manifest row")
+                               f"README documents `{row['key']}` with no manifest row (AD-33)")
+        diff = {k: (row[k], exp[k]) for k in exp if row[k] != exp[k]}
+        if diff:
+            return CheckResult(name, ad, False,
+                               f"README row `{row['key']}` mislabels {sorted(diff)}: {diff} — the "
+                               "reference must not drift from the check (AD-33)")
+    return CheckResult(name, ad, True, "every README row matches its manifest row (key/FR/AD/verb)")
 
 
 def readme_lists_every_property(
@@ -224,7 +273,7 @@ def readme_lists_every_property(
         return CheckResult(name, ad, False, error)
     if block is None:
         return CheckResult(name, ad, False, "README.md has no structural-properties block (AD-33)")
-    documented = set(_readme_keys(block))
+    documented = {r["key"] for r in _readme_rows(block)}
     missing = [r.key for r in rows if r.key not in documented]
     if missing:
         return CheckResult(name, ad, False,
@@ -284,16 +333,18 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     # ── story 1.12: the enumerated FR-56 floor — real-now checks ──────────────────────────────
     _p("no-runtime-import-from-tests", "FR-33", "AD-16", "no runtime import from the test tree",
        isolation_harness.no_runtime_import_from_tests, "imports in the runtime tree"),
+    _p("no-fixture-path", "FR-33", "AD-16", "no fixture path in runtime",
+       isolation_harness.no_fixture_path_in_runtime, "_fixtures/fixtures path literals in runtime"),
     _p("no-egress-call-site", "FR-32", "AD-45", "no outbound call site outside the adapters",
        isolation_harness.no_egress_call_site_outside_adapters,
-       "network call sites in apx/** (excl. the egress adapters)"),
+       "network imports + call sites in apx/** (excl. the egress adapters)"),
     _p("no-tenant-identifier-source", "FR-30", "AD-24",
        "no tenant identifier is a branch in source",
        isolation_harness.no_tenant_identifier_in_source, "conditionals in the runtime tree"),
     # ── story 1.12: the enumerated FR-56 floor — forward-looking checks ───────────────────────
     _p("no-fallback-embedder", "FR-9", "AD-11", "no fallback embedder",
        forward_looking.embedder_has_one_implementation,
-       "Embedder impls / except-handlers in apx/adapters/** (vacuous until 2.8)"),
+       "embed/encode-method classes + except-handlers in the runtime tree (vacuous until 2.8)"),
     _p("destructive-index-one-entry", "FR-10", "AD-7", "destructive index ops from one entry point",
        forward_looking.destructive_index_ops_single_entry,
        "index drop/truncate call sites (vacuous until 2.8)"),
@@ -323,12 +374,31 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        manifest_matches_readme, "the README structural-properties block"),
     _p("meta-readme-lists-every", "FR-56", "AD-33", "the README lists every property",
        readme_lists_every_property, "the README structural-properties block"),
+    _p("meta-floor-of-13", "FR-56", "AD-33", "the FR-56 floor of 13 all have a check",
+       floor_of_13_has_a_structural_check, "the 13 enumerated FR-56 floor items vs the manifest"),
     # ── non-structural rows: tracked, NEVER counted as a passing check (AD-33/NFR-51) ─────────
     StructuralProperty(
         "deferred-action-registry", "FR-21", "AD-33", "the user-reachable-actions registry",
         DEFERRED, None,
         "deferred to the usability-probe story (FR-21) — the action registry is itself a "
         "structural property, but the actions it enumerates do not exist yet"),
+    StructuralProperty(
+        "deferred-fixture-env-source", "FR-33", "AD-16", "env-var selects a data source (leg 3)",
+        DEFERRED, None,
+        "the third FR-33 leg — an env-var conditional selecting a data source outside the "
+        "configured-source list — deferred: a bare os.getenv branch is not precisely separable "
+        "from legitimate config without false positives (the fixture-path leg catches a demo "
+        "override that reads a fixture dir)"),
+    StructuralProperty(
+        "not-enforceable-denylist-depends", "FR-30", "AD-3", "'depended on' a managed capability",
+        NOT_ENFORCEABLE, None,
+        "no check can decide whether the core 'depends on' a managed capability (AD-33/AD-3) — the "
+        "package/extension deny-list (import_contracts) stands in as the enforceable half"),
+    StructuralProperty(
+        "not-enforceable-rejection-record", "FR-48", "AD-15", "the auth rejection record is honest",
+        NOT_ENFORCEABLE, None,
+        "AD-15's rejection-record honesty is asserted by review, not a static check (AD-33) — the "
+        "no-reversible-credential and jwt-pins-algorithms checks stand in where decidable"),
     StructuralProperty(
         "not-enforceable-plausible", "FR-19", "AD-19", "a justification is 'plausible-looking'",
         NOT_ENFORCEABLE, None,
@@ -350,6 +420,7 @@ def run() -> list[CheckResult]:
         every_structural_property_has_a_registered_check(),
         every_registered_check_is_in_the_manifest(),
         verbs_are_not_conflated(),
+        floor_of_13_has_a_structural_check(),
         manifest_matches_readme(),
         readme_lists_every_property(),
     ]

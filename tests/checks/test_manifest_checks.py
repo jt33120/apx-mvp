@@ -67,7 +67,8 @@ def test_an_unknown_verb_is_rejected() -> None:
 
 _BLOCK = (
     "<!-- structural-properties:start -->\n"
-    "| Property | FR |\n|---|---|\n| `only-one` | FR-X |\n"
+    "| Key | FR | AD | Verb | Check | Inspects |\n|---|---|---|---|---|---|\n"
+    "| `only-one` | FR-X | AD-X | structural | _noop | prose |\n"
     "<!-- structural-properties:end -->\n"
 )
 
@@ -92,3 +93,39 @@ def test_a_missing_readme_block_fails_closed(tmp_path) -> None:  # noqa: ANN001
     readme.write_text("no markers here\n", encoding="utf-8")
     assert not m.manifest_matches_readme([], readme=readme).ok
     assert not m.readme_lists_every_property([], readme=readme).ok
+
+
+_ROW_BLOCK = (
+    "<!-- structural-properties:start -->\n"
+    "| Key | FR | AD | Verb | Check | Inspects |\n|---|---|---|---|---|---|\n"
+    "| `k` | FR-X | AD-X | {verb} | _noop | prose |\n"
+    "<!-- structural-properties:end -->\n"
+)
+
+
+def test_readme_mislabelling_a_verb_is_caught(tmp_path) -> None:  # noqa: ANN001
+    # the crux of the strengthened lock: the README labels a STRUCTURAL property `review` — the key
+    # the key matches but the verb column lies — the old key-only check passed this; now it fails.
+    readme = tmp_path / "README.md"
+    readme.write_text(_ROW_BLOCK.format(verb="review"), encoding="utf-8")
+    row = m._p("k", "FR-X", "AD-X", "n", _noop, "prose")   # structural in the manifest
+    r = m.manifest_matches_readme([row], readme=readme)
+    assert not r.ok and "mislabel" in r.detail.lower() and "verb" in r.detail
+
+
+def test_readme_matching_every_column_passes(tmp_path) -> None:  # noqa: ANN001
+    readme = tmp_path / "README.md"
+    readme.write_text(_ROW_BLOCK.format(verb="structural"), encoding="utf-8")
+    row = m._p("k", "FR-X", "AD-X", "n", _noop, "prose")
+    assert m.manifest_matches_readme([row], readme=readme).ok
+
+
+def test_a_missing_floor_item_fails() -> None:
+    # a floor FR silently dropped from the manifest fails the build (the FR-33 half-ship, prevented)
+    partial = [p for p in PROPERTY_MANIFEST if p.fr != "FR-9"]
+    r = m.floor_of_13_has_a_structural_check(partial)
+    assert not r.ok and "FR-9" in r.detail
+
+
+def test_the_real_manifest_covers_the_whole_floor_of_13() -> None:
+    assert m.floor_of_13_has_a_structural_check().ok

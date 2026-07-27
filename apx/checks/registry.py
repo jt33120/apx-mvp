@@ -64,6 +64,7 @@ CHECKS: list[Callable[[], CheckResult]] = [
     projection.projectors_declare_attestation,
     # story 1.12 — the structural-properties harness: real-now checks (AD-16/AD-45/AD-24).
     isolation_harness.no_runtime_import_from_tests,
+    isolation_harness.no_fixture_path_in_runtime,
     isolation_harness.no_egress_call_site_outside_adapters,
     isolation_harness.no_tenant_identifier_in_source,
     # story 1.12 — forward-looking checks: live, vacuous now, fixture-proven (FR-9/10/14/…/23).
@@ -78,6 +79,7 @@ CHECKS: list[Callable[[], CheckResult]] = [
     manifest.every_structural_property_has_a_registered_check,
     manifest.every_registered_check_is_in_the_manifest,
     manifest.verbs_are_not_conflated,
+    manifest.floor_of_13_has_a_structural_check,
     manifest.manifest_matches_readme,
     manifest.readme_lists_every_property,
 ]
