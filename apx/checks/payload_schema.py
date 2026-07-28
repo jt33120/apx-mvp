@@ -211,10 +211,14 @@ def scope_arg_required(roots: Iterable[Path] | None = None) -> CheckResult:
 
 
 def _mapped_column_db_name(value: ast.AST, attr_name: str) -> str | None:
-    """If ``value`` is a ``mapped_column(...)`` call, return the DB column name — its first
-    string positional arg if present (``mapped_column("scope", ...)``), else the attribute
-    name. Return None when ``value`` is not a mapped_column call (not a column)."""
-    if not (isinstance(value, ast.Call) and _is_call_to(value, "mapped_column")):
+    """If ``value`` is a column definition — ``mapped_column(...)`` OR a raw ``Column(...)`` /
+    ``sa.Column(...)`` — return the DB column name: its first string positional arg if present
+    (``mapped_column("scope", ...)`` / ``Column("scope", ...)``), else the attribute name. Return
+    None when ``value`` is not a column definition. Both call forms are recognised so a column
+    smuggled via the bare ``Column`` constructor is caught, not only the ORM ``mapped_column``."""
+    is_column = isinstance(value, ast.Call) and (
+        _is_call_to(value, "mapped_column") or _is_call_to(value, "Column"))
+    if not is_column:
         return None
     for arg in value.args:
         if isinstance(arg, ast.Constant) and isinstance(arg.value, str):
@@ -264,6 +268,40 @@ def chunk_columns_enumerated(roots: Iterable[Path] | None = None) -> CheckResult
     return CheckResult(name, ad, True, "Chunk carries only enumerated columns")
 
 
+# A column named or aliased as any of these on `piece` re-creates the two-representations wall
+# AD-9 forbids (a stamped value nothing may re-stamp). Custodianship is the CUSTODIAN_LINK set;
+# scope is resolved from `matter_scope` at query time. Neither is a `piece` column (Story 2.5).
+_FORBIDDEN_PIECE_COLUMNS = frozenset({"custodian", "scope", "rbac_scope", "wall"})
+
+
+def no_custodian_or_scope_column_on_piece(roots: Iterable[Path] | None = None) -> CheckResult:
+    """The ``Piece`` model carries **no** custodian or scope column (AD-9). Custodianship is a
+    SET on the pièce (``piece_custodian``, the CUSTODIAN_LINK, unioned across imports); scope is a
+    write-time check resolved from ``matter_scope`` at query time. Denormalising either onto the
+    pièce row is the "two representations" failure AD-9 exists to prevent. Reads the real DB column
+    name, so a positional ``mapped_column("custodian")`` behind an innocent attribute is caught."""
+    name, ad = "no custodian/scope column on piece", "AD-9"
+    roots = list(roots) if roots is not None else [_APX_ROOT]
+    trees, unparseable = _load_trees(roots)
+    if unparseable:
+        return _fail_closed(name, ad, unparseable)
+    seen = False
+    for path, tree in trees:
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.ClassDef) and node.name == "Piece"):
+                continue
+            seen = True
+            for col in _chunk_db_columns(node):
+                if col in _FORBIDDEN_PIECE_COLUMNS:
+                    return CheckResult(name, ad, False,
+                                       f"{path.name}: Piece has a {col!r} column — custodianship "
+                                       "is the CUSTODIAN_LINK set and scope is resolved at query "
+                                       "time; neither is a piece column (AD-9)")
+    if not seen:
+        return CheckResult(name, ad, False, "no Piece model found to check")
+    return CheckResult(name, ad, True, "Piece carries no custodian/scope column")
+
+
 def _ondelete_value(call: ast.Call) -> str | None:
     for kw in call.keywords:
         if kw.arg == "ondelete" and isinstance(kw.value, ast.Constant):
@@ -306,10 +344,11 @@ def no_cascade_delete(roots: Iterable[Path] | None = None) -> CheckResult:
 
 
 def run() -> list[CheckResult]:
-    """All four frozen-schema checks, for the harness to fan out over."""
+    """All frozen-schema checks, for the harness to fan out over."""
     return [
         one_chunk_writer(),
         scope_arg_required(),
         chunk_columns_enumerated(),
+        no_custodian_or_scope_column_on_piece(),
         no_cascade_delete(),
     ]

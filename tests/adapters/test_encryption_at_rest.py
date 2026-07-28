@@ -14,10 +14,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
-from apx.adapters.store_postgres.models import Base, Piece
+from apx.adapters.store_postgres.models import Base, PieceCustodian
 from apx.adapters.store_postgres.store import SqlStore
 from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
 from apx.core.domain.crypto import DecryptionError
@@ -31,7 +31,8 @@ TENANT, MATTER, SCOPE = "t", "m", "wall"
 # actor/reviewer columns the review added)
 ENCRYPTED_COLUMNS = [
     ("piece", "provenance_path"),
-    ("piece", "custodian"),
+    ("piece_provenance", "provenance_path"),  # the provenance SET holds the token too (Story 2.5)
+    ("piece_custodian", "custodian"),  # custodianship is the CUSTODIAN_LINK set now (Story 2.5)
     ("failure", "filename"),
     ("failure", "submitted_path"),
     ("failure", "detail"),
@@ -130,15 +131,17 @@ def test_the_audit_chain_verifies_after_the_encrypted_detail_round_trips(seeded)
 
 def test_a_relocated_ciphertext_fails_to_decrypt(seeded) -> None:  # noqa: ANN001
     # AAD binding: a ciphertext is bound to its column. Copy piece.provenance_path's ciphertext
-    # into piece.custodian (a DB-write attacker relocating a value across columns) — the AAD no
-    # longer matches, so a read fails closed instead of silently decrypting one column's value as
-    # another's. Without AAD both columns share a key and the relocation would succeed.
+    # into piece_custodian.custodian (a DB-write attacker relocating a value across columns) — the
+    # AAD no longer matches, so a read fails closed instead of silently decrypting one column's
+    # value as another's. Without AAD both columns share a key and the relocation would succeed.
     engine, store = seeded
     with engine.begin() as conn:
         prov_ct = conn.exec_driver_sql("SELECT provenance_path FROM piece").scalar()
-        conn.execute(text("UPDATE piece SET custodian = :v"), {"v": prov_ct})
+        conn.execute(text("UPDATE piece_custodian SET custodian = :v"), {"v": prov_ct})
     with pytest.raises(DecryptionError), Session(engine) as session:
-        _ = session.get(Piece, "piece-1").custodian  # decrypting the relocated ciphertext fails
+        row = session.scalars(select(PieceCustodian).where(
+            PieceCustodian.piece_id == "piece-1")).first()
+        _ = row.custodian  # decrypting the relocated ciphertext fails (AAD mismatch)
 
 
 def test_a_tampered_audit_field_degrades_to_unverified_not_a_crash(seeded) -> None:  # noqa: ANN001

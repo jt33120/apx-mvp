@@ -51,7 +51,7 @@ development_status:
   2-2-the-non-blocking-resumable-import-job: done
   2-3-multi-format-extraction-the-largest-surface: done
   2-4-container-expansion-and-the-unit-of-the-denominator: done
-  2-5-idempotent-ingestion-with-stable-identity: backlog
+  2-5-idempotent-ingestion-with-stable-identity: done
   2-6-the-failure-register: backlog
   2-7-the-inventory-guarantee-and-the-permanent-denominator: backlog
   2-8-the-embedder-fails-loudly-and-the-index-never-deletes-itself: backlog

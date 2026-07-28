@@ -44,6 +44,38 @@ def test_no_cascade_fires_on_a_cascade_foreign_key() -> None:
     assert not result.ok and "CASCADE" in result.detail.upper()
 
 
+def test_no_custodian_on_piece_fires_on_a_custodian_column(tmp_path: Path) -> None:
+    # AD-9 / Story 2.5: custodianship is the CUSTODIAN_LINK set — a custodian column on the pièce
+    # re-creates the two-representations wall the enumeration forbids. The check must fire on it.
+    (tmp_path / "m.py").write_text(
+        "class Piece:\n"
+        "    id: Mapped[str] = mapped_column(String, primary_key=True)\n"
+        "    custodian: Mapped[str] = mapped_column(String, nullable=False)\n")
+    result = payload_schema.no_custodian_or_scope_column_on_piece([tmp_path])
+    assert not result.ok and "custodian" in result.detail
+
+
+def test_no_custodian_on_piece_catches_a_scope_db_name_alias(tmp_path: Path) -> None:
+    # the DB column is 'scope' even though the attribute is the innocent 'wall' — the check reads
+    # the real DB name, so denormalising scope onto the pièce behind an alias is caught too.
+    (tmp_path / "m.py").write_text(
+        "class Piece:\n"
+        "    id: Mapped[str] = mapped_column(String, primary_key=True)\n"
+        "    wall: Mapped[str] = mapped_column('scope', String, nullable=False)\n")
+    result = payload_schema.no_custodian_or_scope_column_on_piece([tmp_path])
+    assert not result.ok and "scope" in result.detail
+
+
+def test_no_custodian_on_piece_catches_a_bare_column_constructor(tmp_path: Path) -> None:
+    # a custodian smuggled via the raw Column(...) constructor (not mapped_column) is caught too.
+    (tmp_path / "m.py").write_text(
+        "class Piece:\n"
+        "    id = mapped_column(String, primary_key=True)\n"
+        "    custodian = Column(String, nullable=False)\n")
+    result = payload_schema.no_custodian_or_scope_column_on_piece([tmp_path])
+    assert not result.ok and "custodian" in result.detail
+
+
 def test_one_chunk_writer_reports_the_single_real_writer() -> None:
     """A positive sanity check: on the real tree there is exactly one, and it is named."""
     result = payload_schema.one_chunk_writer()
@@ -65,6 +97,7 @@ def test_checks_fail_closed_on_an_unparseable_file(tmp_path: Path) -> None:
         payload_schema.one_chunk_writer,
         payload_schema.scope_arg_required,
         payload_schema.chunk_columns_enumerated,
+        payload_schema.no_custodian_or_scope_column_on_piece,
         payload_schema.no_cascade_delete,
     ):
         result = check([tmp_path])

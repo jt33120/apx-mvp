@@ -37,6 +37,7 @@ CHECKS: list[Callable[[], CheckResult]] = [
     payload_schema.one_chunk_writer,
     payload_schema.scope_arg_required,
     payload_schema.chunk_columns_enumerated,
+    payload_schema.no_custodian_or_scope_column_on_piece,  # story 2.5 — CUSTODIAN_LINK (AD-9)
     payload_schema.no_cascade_delete,
     # story 1.4 — tenant isolation at the boundary (AD-12).
     tenant_isolation.tenant_not_null_on_owned_tables,

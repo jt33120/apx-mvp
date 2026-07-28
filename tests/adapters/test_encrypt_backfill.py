@@ -60,7 +60,9 @@ def test_the_backfill_is_idempotent(tmp_path) -> None:  # noqa: ANN001
     with engine.begin() as conn:
         assert encrypt_backfill(conn) == 0  # nothing to do — already ciphertext
     with engine.begin() as conn:
-        conn.execute(text("UPDATE piece SET custodian = 'plain'"))
+        # custodianship moved off `piece` into the piece_custodian SET (Story 2.5); seed a legacy
+        # plaintext value there to prove the backfill still covers it.
+        conn.execute(text("UPDATE piece_custodian SET custodian = 'plain'"))
         assert encrypt_backfill(conn) == 1  # the one plaintext value
         assert encrypt_backfill(conn) == 0  # re-run is a no-op
 

@@ -42,9 +42,9 @@ def _seed(sf: sessionmaker[Session]) -> str:
     pid = piece_id("cabinet", "h", "pole-penal")
     with sf() as s, s.begin():
         s.add(MatterScope(matter="pole-penal", tenant="cabinet", scope=_SCOPE))
-        s.add(Piece(
+        s.add(Piece(  # no custodian column on piece (AD-9) — it is the CUSTODIAN_LINK set now
             id=pid, tenant="cabinet", matter="pole-penal", content_hash="h", text_key="tk",
-            provenance_path="/dossier/a.pdf", custodian="me@cabinet", extraction_method="text",
+            provenance_path="/dossier/a.pdf", extraction_method="text",
             extractor_version="v", schema_version=_SCHEMA, ingestion_timestamp=_TS,
             piece_date=None, piece_date_status="undetermined", full_text="le contrat de bail",
             text_identity="ti", text_version="tv",

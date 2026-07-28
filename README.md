@@ -387,6 +387,7 @@ could contain is an inflated claim about what the suite proves).
 | `one-chunk-writer` | FR-8 | AD-9 | structural | one_chunk_writer | Chunk(...) / insert(Chunk) sites in apx/** |
 | `chunk-scope-arg-required` | FR-8 | AD-9 | structural | scope_arg_required | the chunk writer's signature (no default) |
 | `chunk-columns-enumerated` | FR-8 | AD-9 | structural | chunk_columns_enumerated | the chunk model column set |
+| `no-custodian-scope-column-on-piece` | FR-4 | AD-9 | structural | no_custodian_or_scope_column_on_piece | custodian/scope columns on the piece model |
 | `no-cascade-delete` | FR-4 | AD-7 | structural | no_cascade_delete | ON DELETE clauses on chunk/piece FKs |
 | `tenant-not-null` | FR-30 | AD-12 | structural | tenant_not_null_on_owned_tables | tenant columns in the models |
 | `scoped-access-carries-tenant` | FR-30 | AD-12 | structural | scoped_access_carries_tenant | scope predicates in apx/** |

@@ -19,7 +19,7 @@ import logging
 import random
 import secrets
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -27,6 +27,7 @@ from sqlalchemy import Text, cast, delete, event, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
+from apx.adapters.store_postgres.backfill import link_id
 from apx.adapters.store_postgres.chunk_writer import UnauthorizedScope
 from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.models import (
@@ -38,6 +39,8 @@ from apx.adapters.store_postgres.models import (
     LabelRecord,
     MatterScope,
     Piece,
+    PieceCustodian,
+    PieceProvenance,
     RecallReview,
     SessionRecord,
     TenantSetting,
@@ -45,7 +48,7 @@ from apx.adapters.store_postgres.models import (
     User,
     UserScope,
 )
-from apx.core.app.ingest import IngestionResult
+from apx.core.app.ingest import IngestedPiece, IngestionResult
 from apx.core.domain.auth import hash_password, verify_and_upgrade, verify_password
 from apx.core.domain.confidence import prevalence_upper_bound
 from apx.core.domain.config import (
@@ -138,6 +141,9 @@ class TenantBackup:
     tables: dict[str, list[dict]]
     user_scopes: list[dict]
     head_tail: list[dict]
+    # the piece SETS (Story 2.5) — keyed by piece_id, not tenant, so gathered/restored specially
+    # (like ``user_scopes``); "piece_provenance"/"piece_custodian" → their raw (ciphertext) rows.
+    piece_links: dict[str, list[dict]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -195,8 +201,19 @@ class UserInfo:
 
 @dataclass(frozen=True)
 class SaveOutcome:
-    pieces_written: int
+    """The result of persisting one ingestion result. Story 2.5 splits the corpus admission
+    into `pieces_new` (persisted anew) and `pieces_already_present` (recognised, not
+    re-written) — the "recognised-already-present" line FR-4 requires, so a re-import is
+    visibly a no-op rather than a silent overwrite (the v1 defect)."""
+
+    pieces_new: int
+    pieces_already_present: int
     failures_written: int
+
+    @property
+    def pieces_written(self) -> int:
+        """Back-compat alias — pieces persisted ANEW this call (== ``pieces_new``)."""
+        return self.pieces_new
 
 
 @dataclass(frozen=True)
@@ -536,31 +553,23 @@ class SqlStore:
                     # A restated case theory updates in place; a skipped one (None) never wipes
                     # an existing one (FR-37: statable at import or later). Versioning is Epic 4.
                     existing.case_theory = case_theory
-                if audit:
-                    # One `ingest` audit entry per call. The resumable worker (Story 2.2)
-                    # commits units with audit=False and writes ONE job-level entry at
-                    # completion, so a 100 000-unit import is one audit row, not 100 000.
-                    inv = result.inventory
-                    detail = (
-                        f"submitted={inv.submitted} corpus={inv.in_corpus} "
-                        f"failures={inv.failures} exclusions={inv.exclusions}"
-                    )
-                    self._append_audit(session, tenant, matter, actor, "ingest", detail, now)
+            pieces_new = 0
+            pieces_already_present = 0
+            seen: set[str] = set()
             for p in result.pieces:
-                session.merge(
-                    Piece(
-                        id=p.id, tenant=p.tenant, matter=p.matter, content_hash=p.content_hash,
-                        text_key=p.text_key,
-                        provenance_path=p.provenance_path, custodian=p.custodian,
-                        extraction_method=p.extraction_method,
-                        extractor_version=p.extractor_version,
-                        schema_version=p.schema_version, ingestion_timestamp=p.ingestion_timestamp,
-                        piece_date=None, piece_date_status="undetermined",
-                        full_text=p.full_text,
-                        text_identity=hashlib.sha256(p.full_text.encode()).hexdigest(),
-                        text_version=p.text_version,
-                    )
-                )
+                # Insert-if-absent — NEVER overwrite (AC2 "readable and unmodified"); the v1
+                # defect was `merge`, which overwrote provenance/custodian/timestamp on re-import.
+                if self._insert_piece_if_absent(session, p, seen):
+                    pieces_new += 1
+                else:
+                    pieces_already_present += 1
+                # Union the provenance path and the custodian into the pièce's SETS on EVERY
+                # import — new or already-present — never replaced or collapsed (AD-8/AD-9). So a
+                # second import under a different custodian keeps both; two folders keep both paths.
+                self._insert_link_if_absent(
+                    session, PieceProvenance, p.id, "provenance_path", p.provenance_path)
+                self._insert_link_if_absent(
+                    session, PieceCustodian, p.id, "custodian", p.custodian)
             for f in result.failures:
                 session.merge(
                     Failure(
@@ -571,7 +580,94 @@ class SqlStore:
                         detail=f.detail, timestamp=now,
                     )
                 )
-        return SaveOutcome(len(result.pieces), len(result.failures))
+            if matter is not None and tenant is not None and audit:
+                # One `ingest` audit entry per call, appended AFTER the loop so it carries the
+                # recognised-already-present count as its own field (AC2) — a re-import no-op is
+                # then distinguishable from a real ingest on the trail, not silently identical. The
+                # resumable worker (Story 2.2) commits units with audit=False and writes ONE
+                # job-level entry at completion (its already-present breakdown is the completion
+                # summary's job, Story 2.10), so a 100 000-unit import is one audit row, not 100k.
+                inv = result.inventory
+                detail = (
+                    f"submitted={inv.submitted} corpus={inv.in_corpus} "
+                    f"already_present={pieces_already_present} "
+                    f"failures={inv.failures} exclusions={inv.exclusions}"
+                )
+                self._append_audit(session, tenant, matter, actor, "ingest", detail, now)
+        return SaveOutcome(pieces_new, pieces_already_present, len(result.failures))
+
+    def _insert_piece_if_absent(
+        self, session: Session, p: IngestedPiece, seen: set[str]
+    ) -> bool:
+        """Insert the pièce row IF it is absent; NEVER overwrite an existing one (AC2 — a prior
+        pièce stays readable and unmodified). Returns True when newly inserted, False when already
+        present (this same result, the DB, or a worker that won a concurrent race). Conflict-safe
+        (AC5): a PK/unique collision is absorbed via a SAVEPOINT so exactly one copy survives and
+        the job does not fail. The `custodian` is NOT a column here (AD-9) — it is unioned into the
+        set separately; `provenance_path` is the first-seen representative, never re-stamped."""
+        if p.id in seen or session.get(Piece, p.id) is not None:
+            seen.add(p.id)
+            return False
+        row = Piece(
+            id=p.id, tenant=p.tenant, matter=p.matter, content_hash=p.content_hash,
+            text_key=p.text_key, provenance_path=p.provenance_path,
+            extraction_method=p.extraction_method, extractor_version=p.extractor_version,
+            schema_version=p.schema_version, ingestion_timestamp=p.ingestion_timestamp,
+            piece_date=None, piece_date_status="undetermined", full_text=p.full_text,
+            text_identity=hashlib.sha256(p.full_text.encode()).hexdigest(),
+            text_version=p.text_version)
+        try:
+            with session.begin_nested():  # SAVEPOINT: a concurrent insert of the same id rolls
+                session.add(row)          # back to here, not the whole import (AC5)
+                session.flush()
+        except IntegrityError:
+            # ONLY a concurrent insert of the SAME id is "already present" — the row is there now.
+            # Any OTHER integrity failure (a malformed pièce: NOT NULL / CHECK) is a genuine fault,
+            # never a duplicate: re-raise so it fails the unit loudly rather than vanishing, wrongly
+            # counted as already-present. The outer transaction rolls back, so no orphan link row
+            # survives either. `seen` is advanced only on a genuine outcome (found / inserted /
+            # confirmed-present), so a re-raised malformed pièce never masks a valid same-id twin.
+            if session.get(Piece, p.id) is None:
+                raise
+            seen.add(p.id)
+            return False
+        seen.add(p.id)
+        return True
+
+    def _insert_link_if_absent(
+        self, session: Session, model: type, piece_id: str, col: str, value: str
+    ) -> None:
+        """Union one value into a pièce's provenance/custodian SET (AD-8/AD-9) — insert-if-absent
+        keyed by the deterministic ``link_id`` so a repeat is one row and a concurrent double-insert
+        is absorbed (SAVEPOINT). Never replaces or collapses an existing member."""
+        lid = link_id(piece_id, value)
+        if session.get(model, lid) is not None:
+            return
+        try:
+            with session.begin_nested():
+                session.add(model(id=lid, piece_id=piece_id, **{col: value}))
+                session.flush()
+        except IntegrityError:
+            # Absorb ONLY a genuine concurrent duplicate (the member is present now); re-raise any
+            # other integrity failure (e.g. a NOT NULL from a blank value) so it is never a silent
+            # drop that leaves a pièce with an empty set.
+            if session.get(model, lid) is None:
+                raise
+
+    def provenances(self, piece_id: str) -> set[str]:
+        """Every recorded provenance path of a pièce — the set, decrypted (AD-8: a pièce may
+        carry several; path is an attribute, not identity)."""
+        with self._sf() as session:
+            return set(session.scalars(
+                select(PieceProvenance.provenance_path).where(
+                    PieceProvenance.piece_id == piece_id)))
+
+    def custodians(self, piece_id: str) -> set[str]:
+        """Every custodian who held a pièce — the CUSTODIAN_LINK set (AD-9), unioned across
+        imports and never collapsed, so who held a document survives deduplication (FR-4)."""
+        with self._sf() as session:
+            return set(session.scalars(
+                select(PieceCustodian.custodian).where(PieceCustodian.piece_id == piece_id)))
 
     # ── Story 2.2: the application-owned import-job ledger (AD-17) ──────────────────────────
     # The SOLE authority for a job's state and the processed-against-submitted figure. Every
@@ -1323,12 +1419,22 @@ class SqlStore:
                 for r in session.execute(
                     select(UserScope).where(UserScope.user_id.in_(uids))).scalars().all()
             ] if uids else []
+            # the piece SETS (Story 2.5) — keyed by piece_id, so captured via the tenant's pieces
+            # (like user_scope via the tenant's users), RAW so ciphertext is preserved.
+            piece_links: dict[str, list[dict]] = {}
+            for tbl in ("piece_provenance", "piece_custodian"):
+                rows = conn.execute(
+                    text(f"SELECT * FROM {tbl} WHERE piece_id IN "  # noqa: S608
+                         "(SELECT id FROM piece WHERE tenant = :t)"), {"t": tenant}
+                ).mappings().all()
+                piece_links[tbl] = [dict(r) for r in rows]
         head_tail: list[dict] = []
         if self._journal is not None:
             latest = self._journal.latest(tenant)
             if latest is not None:
                 head_tail = [asdict(latest)]
-        return TenantBackup(tenant, _HEAD_SCHEMA_VERSION, tables, scopes, head_tail)
+        return TenantBackup(
+            tenant, _HEAD_SCHEMA_VERSION, tables, scopes, head_tail, piece_links=piece_links)
 
     def _chain_verifies(self, session: Session, tenant: str) -> bool:
         """Recompute a tenant's audit chain end to end from the rows in ``session`` — the same
@@ -1383,6 +1489,13 @@ class SqlStore:
             for sc in backup.user_scopes:
                 conn.execute(
                     text("INSERT INTO user_scope (user_id, scope) VALUES (:user_id, :scope)"), sc)
+            for tbl in ("piece_provenance", "piece_custodian"):  # the piece SETS (Story 2.5)
+                for row in backup.piece_links.get(tbl, []):
+                    cols = list(row.keys())
+                    collist = ", ".join(cols)
+                    binds = ", ".join(f":{c}" for c in cols)
+                    conn.execute(
+                        text(f"INSERT INTO {tbl} ({collist}) VALUES ({binds})"), row)  # noqa: S608
             if not self._chain_verifies(session, backup.tenant):
                 raise ValueError(
                     f"restored audit chain for tenant {backup.tenant!r} does not verify — the "

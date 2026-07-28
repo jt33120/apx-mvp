@@ -487,9 +487,12 @@ def test_upload_threads_the_custodian_and_the_explicit_unknown(tmp_path: Path, m
             files=[("files", ("b.txt", b"note", "text/plain"))]))
     with store._sf() as s:
         rows = s.scalars(select(Piece)).all()
+    # custodianship is the CUSTODIAN_LINK set now (Story 2.5), read via store.custodians()
     m_pieces = [p for p in rows if p.matter == "m"]
-    assert len(m_pieces) == 2 and {p.custodian for p in m_pieces} == {"M. Martin"}  # EVERY piece
-    assert {p.custodian for p in rows if p.matter == "m2"} == {"custodian-undeclared"}  # not blank
+    assert len(m_pieces) == 2
+    assert all(store.custodians(p.id) == {"M. Martin"} for p in m_pieces)  # EVERY piece
+    m2_pieces = [p for p in rows if p.matter == "m2"]
+    assert all(store.custodians(p.id) == {"custodian-undeclared"} for p in m2_pieces)  # not blank
 
 
 def test_upload_cannot_file_into_a_wall_you_do_not_hold(tmp_path: Path, monkeypatch) -> None:

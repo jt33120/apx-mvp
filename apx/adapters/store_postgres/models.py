@@ -55,9 +55,14 @@ class Piece(Base):
     text_key: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     # content-bearing → application-encrypted at rest (AD-31). A path leaks custodian
     # folder structure and client names; custodianship is PII. Neither is a query key.
+    # This scalar is the FIRST-SEEN *representative* provenance (a piece may carry several,
+    # AD-8): the full set lives in `piece_provenance`, unioned across imports (Story 2.5).
     provenance_path: Mapped[str] = mapped_column(
         EncryptedText("piece.provenance_path"), nullable=False)  # attribute, not identity
-    custodian: Mapped[str] = mapped_column(EncryptedText("piece.custodian"), nullable=False)
+    # NO `custodian` column (AD-9): custodianship is a SET on the pièce (`piece_custodian`,
+    # the CUSTODIAN_LINK), unioned — never replaced or collapsed — by every import job
+    # admitting the same content, and resolved by join at read time. Enforced structurally
+    # (`no_custodian_or_scope_column_on_piece`). Removed from `piece` in Story 2.5.
     extraction_method: Mapped[str] = mapped_column(String, nullable=False)
     extractor_version: Mapped[str] = mapped_column(String, nullable=False)
     schema_version: Mapped[str] = mapped_column(String, nullable=False)
@@ -79,14 +84,52 @@ class Piece(Base):
     text_version: Mapped[str] = mapped_column(String, nullable=False)
 
 
+class PieceProvenance(Base):
+    """The provenance SET of a *pièce* (AD-8: "one *pièce* may carry several" provenance
+    paths). One row per (piece, distinct path), **unioned — never replaced — by every import
+    job** admitting the same content (Story 2.5). The path is PII → application-encrypted
+    (AD-31). AES-GCM is randomised so the ciphertext cannot be a SQL key; the set-membership
+    key is the deterministic ``id`` = sha256(piece_id \x00 path) instead — the same pattern
+    the *failure* table uses (``_failure_id``) — so a repeated path is one row and a
+    concurrent double-insert collides on the PK (absorbed, never a duplicate). No cascade FK
+    (AD-7): a *pièce* is retired, never hard-deleted out from under its provenance."""
+
+    __tablename__ = "piece_provenance"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(piece_id \0 path)
+    # no ON DELETE anywhere (AD-7) — RESTRICT by default, a retired state never a cascade
+    piece_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("piece.id"), nullable=False, index=True)
+    provenance_path: Mapped[str] = mapped_column(
+        EncryptedText("piece_provenance.provenance_path"), nullable=False)
+
+
+class PieceCustodian(Base):
+    """The CUSTODIAN_LINK (AD-9): custodianship is a SET on the *pièce*, **unioned — never
+    replaced or collapsed — by every import job** admitting the same content, resolved by
+    join at read time. Who held a document is frequently the fact in issue in *ordonnance
+    145 CPC* work, so deduplication may never collapse two custodians into one (FR-4). One
+    row per (piece, distinct custodian); the custodian is PII → application-encrypted
+    (AD-31), with the deterministic ``id`` = sha256(piece_id \x00 custodian) as the
+    set-membership key (see :class:`PieceProvenance`). No cascade FK (AD-7)."""
+
+    __tablename__ = "piece_custodian"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(piece_id \0 custodian)
+    piece_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("piece.id"), nullable=False, index=True)
+    custodian: Mapped[str] = mapped_column(
+        EncryptedText("piece_custodian.custodian"), nullable=False)
+
+
 class Chunk(Base):
     """A chunk of a *pièce*'s full text — the unit the semantic engine indexes. Its
     columns are EXACTLY the enumerated payload-schema set (AD-9); any other column fails
-    the build (Task 5 asserts it). Absent by design: **no** ``rbac_scope``/``scope``
-    column — scope is a write-time check resolved from ``matter_scope`` at query time
-    (AD-13/AD-40) — and **no** ``custodian`` column — custodianship lives on the *pièce*
-    (today a legacy scalar column; AD-9's ``CUSTODIAN_LINK`` set is a later story). The
-    embedding trio (the ``halfvec`` vector and its
+    the build (``chunk_columns_enumerated`` asserts it). Absent by design: **no**
+    ``rbac_scope``/``scope`` column — scope is a write-time check resolved from
+    ``matter_scope`` at query time (AD-13/AD-40) — and **no** ``custodian`` column —
+    custodianship is a SET on the *pièce* (:class:`PieceCustodian`, the CUSTODIAN_LINK;
+    Story 2.5). The embedding trio (the ``halfvec`` vector and its
     ``model_id``/``model_version``) is added by the embedder story (2.8); 1.3 freezes the
     non-embedding provenance. No cascade FK (AD-7): a *pièce* is retired, never
     hard-deleted out from under its chunks.

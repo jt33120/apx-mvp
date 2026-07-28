@@ -12,15 +12,24 @@ would make every historical row fail closed on read (the type refuses a non-ciph
 
 from __future__ import annotations
 
+import hashlib
+
 from sqlalchemy import Connection, text
 
 from apx.core.domain.crypto import Cipher, DecryptionError, is_ciphertext
 
-# (table, primary-key column, encrypted column, AAD context) — must match the EncryptedText
-# contexts declared on the models (the 1.7 encrypted set).
+# (table, primary key, encrypted column, AAD context) — this MUST list EVERY ``EncryptedText``
+# column in the models: rekey_all() and encrypt_backfill() iterate ONLY this list, so a column
+# omitted here is silently skipped by a key rotation and then fails closed on read under the retired
+# key (permanent PII loss). The completeness is asserted against the live model metadata by
+# ``test_rekey_covers_every_encrypted_column`` — a drift fails the build. The primary key is a
+# column name, or a TUPLE of names for a composite PK (e.g. ``matter_scope``). Story 2.5 moved
+# custodian off ``piece`` into the ``piece_custodian`` SET, added the ``piece_provenance`` SET (both
+# covered below), and swept in the eight PII columns a prior rotation had missed.
 ENCRYPTED_COLUMNS = [
     ("piece", "id", "provenance_path", "piece.provenance_path"),
-    ("piece", "id", "custodian", "piece.custodian"),
+    ("piece_provenance", "id", "provenance_path", "piece_provenance.provenance_path"),
+    ("piece_custodian", "id", "custodian", "piece_custodian.custodian"),
     ("failure", "id", "filename", "failure.filename"),
     ("failure", "id", "submitted_path", "failure.submitted_path"),
     ("failure", "id", "detail", "failure.detail"),
@@ -29,7 +38,39 @@ ENCRYPTED_COLUMNS = [
     ("piece_label", "piece_id", "rationale", "piece_label.rationale"),
     ("user_account", "id", "mfa_secret", "user_account.mfa_secret"),
     ("recall_review", "id", "reviewer", "recall_review.reviewer"),
+    ("matter_scope", ("tenant", "matter"), "case_theory", "matter_scope.case_theory"),
+    ("import_job", "id", "actor", "import_job.actor"),
+    ("import_job", "id", "custodian", "import_job.custodian"),
+    ("import_job", "id", "case_theory", "import_job.case_theory"),
+    ("import_unit", "id", "provenance_path", "import_unit.provenance_path"),
+    ("backup_record", "id", "detail", "backup_record.detail"),
+    ("truncation_marker", "tenant", "cleared_by", "truncation_marker.cleared_by"),
+    ("truncation_marker", "tenant", "reason", "truncation_marker.reason"),
 ]
+
+
+def link_id(piece_id: str, value: str) -> str:
+    """The deterministic set-membership key for a `piece_provenance` / `piece_custodian` row:
+    sha256(piece_id \x00 plaintext value) — the same shape as the store's `_failure_id`. The
+    same (piece, value) is one row, and a concurrent double-insert collides on this PK (absorbed,
+    never a duplicate). The store computes the SAME id at write time, so this and runtime agree."""
+    return hashlib.sha256(f"{piece_id}\x00{value}".encode()).hexdigest()
+
+
+def _pk_cols(pk: str | tuple[str, ...]) -> tuple[str, ...]:
+    """Normalise a PK spec to a tuple of column names (a bare string is a one-column PK)."""
+    return (pk,) if isinstance(pk, str) else tuple(pk)
+
+
+def _update_value(conn: Connection, table: str, pks: tuple[str, ...], col: str,
+                  value: str, row: dict) -> None:
+    """UPDATE one row's encrypted column, keyed by its (possibly composite) primary key. The
+    value bind is ``__v`` so it never collides with a PK column name."""
+    where = " AND ".join(f"{p} = :{p}" for p in pks)
+    params = {p: row[p] for p in pks}
+    params["__v"] = value
+    conn.execute(
+        text(f"UPDATE {table} SET {col} = :__v WHERE {where}"), params)  # noqa: S608
 
 
 def encrypt_backfill(conn: Connection) -> int:
@@ -38,20 +79,19 @@ def encrypt_backfill(conn: Connection) -> int:
     cipher = None
     encrypted = 0
     for table, pk, col, context in ENCRYPTED_COLUMNS:
+        pks = _pk_cols(pk)
+        sel = ", ".join((*pks, col))
         rows = conn.execute(
-            text(f"SELECT {pk} AS k, {col} AS v FROM {table} WHERE {col} IS NOT NULL")  # noqa: S608
-        ).all()
-        plaintext = [(r.k, r.v) for r in rows if not is_ciphertext(r.v)]
+            text(f"SELECT {sel} FROM {table} WHERE {col} IS NOT NULL")  # noqa: S608
+        ).mappings().all()
+        plaintext = [r for r in rows if not is_ciphertext(r[col])]
         if not plaintext:
             continue
         if cipher is None:
             from apx.adapters.store_postgres.crypto_types import cipher as _cipher
             cipher = _cipher()  # raises MissingEncryptionKey if absent — fail closed
-        for key, value in plaintext:
-            conn.execute(
-                text(f"UPDATE {table} SET {col} = :v WHERE {pk} = :k"),  # noqa: S608
-                {"v": cipher.encrypt(value, aad=context), "k": key},
-            )
+        for r in plaintext:
+            _update_value(conn, table, pks, col, cipher.encrypt(r[col], aad=context), r)
             encrypted += 1
     return encrypted
 
@@ -70,19 +110,96 @@ def rekey_all(conn: Connection, cipher: Cipher | None = None) -> int:
         cipher = _cipher()
     rekeyed = 0
     for table, pk, col, context in ENCRYPTED_COLUMNS:
+        pks = _pk_cols(pk)
+        sel = ", ".join((*pks, col))
         rows = conn.execute(
-            text(f"SELECT {pk} AS k, {col} AS v FROM {table} WHERE {col} IS NOT NULL")  # noqa: S608
-        ).all()
-        for key, value in [(r.k, r.v) for r in rows]:
+            text(f"SELECT {sel} FROM {table} WHERE {col} IS NOT NULL")  # noqa: S608
+        ).mappings().all()
+        for r in rows:
+            value = r[col]
             try:
                 plain = cipher.decrypt(value, aad=context) if is_ciphertext(value) else value
             except DecryptionError as exc:
                 # name the poison row so an operator can find it, instead of an opaque
                 # "no key matched" that blocks the whole (atomic) rotation.
+                key = {p: r[p] for p in pks}
                 raise DecryptionError(f"cannot decrypt {table}.{col} pk={key!r}: {exc}") from exc
-            conn.execute(
-                text(f"UPDATE {table} SET {col} = :v WHERE {pk} = :k"),  # noqa: S608
-                {"v": cipher.encrypt(plain, aad=context), "k": key},
-            )
+            _update_value(conn, table, pks, col, cipher.encrypt(plain, aad=context), r)
             rekeyed += 1
     return rekeyed
+
+
+# ── Story 2.5: move the piece's scalar custodian + provenance into the SET tables ──────────────
+# The value is re-encrypted under the NEW column's AAD (an EncryptedText AAD binds a ciphertext to
+# its column, so a verbatim copy would fail closed on read). Key-free on an EMPTY piece table (a
+# fresh DB / the CI upgrade→downgrade→upgrade cycle, which runs without APX_ENCRYPTION_KEY): the
+# cipher is loaded ONLY when a ciphertext value is present. Idempotent: an already-present link id
+# is skipped, so a re-run is a no-op.
+
+_LINK_SPECS = (
+    ("custodian", "piece.custodian", "piece_custodian", "custodian",
+     "piece_custodian.custodian"),
+    ("provenance_path", "piece.provenance_path", "piece_provenance", "provenance_path",
+     "piece_provenance.provenance_path"),
+)
+
+
+def migrate_piece_scalars_to_links(conn: Connection) -> int:
+    """Backfill each `piece` row's scalar ``custodian`` and ``provenance_path`` into the
+    ``piece_custodian`` / ``piece_provenance`` SET tables (Story 2.5). Returns the rows written.
+    Runs BEFORE the ``piece.custodian`` column is dropped."""
+    rows = conn.execute(text("SELECT id, custodian, provenance_path FROM piece")).all()
+    if not rows:
+        return 0
+    cipher = _cipher_if(any(is_ciphertext(r.custodian) or is_ciphertext(r.provenance_path)
+                            for r in rows))
+    written = 0
+    for row in rows:
+        for src_col, old_ctx, table, dst_col, new_ctx in _LINK_SPECS:
+            raw = getattr(row, src_col)
+            plain = cipher.decrypt(raw, aad=old_ctx) if (cipher and is_ciphertext(raw)) else raw
+            lid = link_id(row.id, plain)
+            if conn.execute(
+                text(f"SELECT 1 FROM {table} WHERE id = :i"), {"i": lid}  # noqa: S608
+            ).first():
+                continue  # idempotent — a re-run does not duplicate
+            stored = cipher.encrypt(plain, aad=new_ctx) if cipher else plain
+            conn.execute(
+                text(f"INSERT INTO {table} (id, piece_id, {dst_col}) "  # noqa: S608
+                     "VALUES (:i, :p, :v)"),
+                {"i": lid, "p": row.id, "v": stored})
+            written += 1
+    return written
+
+
+def revert_piece_links_to_scalar(conn: Connection) -> int:
+    """Re-populate the (re-added, nullable) ``piece.custodian`` scalar from a representative
+    ``piece_custodian`` row per piece, for a downgrade (Story 2.5). Returns the rows written. The
+    smallest link id is the deterministic representative. Key-free on an empty store."""
+    links = conn.execute(
+        text("SELECT piece_id, id, custodian FROM piece_custodian ORDER BY piece_id, id")).all()
+    if not links:
+        return 0
+    cipher = _cipher_if(any(is_ciphertext(r.custodian) for r in links))
+    reps: dict[str, str] = {}
+    for row in links:  # first (smallest id) per piece wins — ordered above
+        if row.piece_id not in reps:
+            plain = cipher.decrypt(row.custodian, aad="piece_custodian.custodian") \
+                if (cipher and is_ciphertext(row.custodian)) else row.custodian
+            reps[row.piece_id] = plain
+    written = 0
+    for piece_id, plain in reps.items():
+        stored = cipher.encrypt(plain, aad="piece.custodian") if cipher else plain
+        conn.execute(
+            text("UPDATE piece SET custodian = :v WHERE id = :k"), {"v": stored, "k": piece_id})
+        written += 1
+    return written
+
+
+def _cipher_if(needed: bool) -> Cipher | None:
+    """The env cipher when a ciphertext value must be de/re-crypted, else None (so an empty or
+    all-plaintext store needs no ``APX_ENCRYPTION_KEY``)."""
+    if not needed:
+        return None
+    from apx.adapters.store_postgres.crypto_types import cipher as _cipher
+    return _cipher()

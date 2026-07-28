@@ -47,6 +47,12 @@ def _wipe(store: SqlStore) -> None:
     """Simulate a dump restore's clean slate: drop every tenant-owned row (and user_scope), so a
     backup can be restored into the now-empty store the way real disaster recovery would."""
     with store._sf() as s, s.begin():
+        # the piece SETS (Story 2.5) reference pieces by id (no tenant column) — clear them BEFORE
+        # the pieces, so no orphan link row survives to collide with the restore's re-insert.
+        for tbl in ("piece_provenance", "piece_custodian"):
+            s.execute(text(
+                f"DELETE FROM {tbl} WHERE piece_id IN "  # noqa: S608
+                "(SELECT id FROM piece WHERE tenant = 'cabinet')"))
         for tbl in _BACKUP_TABLES:
             s.execute(text(f"DELETE FROM {tbl} WHERE tenant = 'cabinet'"))  # noqa: S608
         s.execute(text("DELETE FROM user_scope"))
@@ -69,6 +75,9 @@ def test_backup_restore_reproduces_the_tenant_identically(tmp_path) -> None:  # 
     assert dst.get_config(TENANT, "interface_language") == "en"   # configuration identical
     assert dst.get_config(TENANT, "taxonomy") == ["conclusions"]
     assert dst.read_audit("m", TENANT, {"w"}).verified         # the chain re-verifies on restore
+    # the piece SETS (Story 2.5) survive the round-trip — custodianship and provenance are not lost
+    assert dst.custodians("p0") == src.custodians("p0") == {"custodian-x"}
+    assert dst.provenances("p0") == src.provenances("p0") == {"/secret/p0.pdf"}
 
 
 def test_backup_preserves_ciphertext(tmp_path) -> None:  # noqa: ANN001

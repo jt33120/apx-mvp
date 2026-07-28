@@ -58,6 +58,10 @@ def test_rekey_all_moves_values_to_a_new_primary_key(tmp_path) -> None:  # noqa:
     assert Cipher([new]).decrypt(raw, aad=ctx) == "/secret/p1.pdf"  # readable under the new key
     with pytest.raises(DecryptionError):
         Cipher([current]).decrypt(raw, aad=ctx)  # the retired key can no longer read it
+    # the piece SETS (Story 2.5) are rekeyed too — the CUSTODIAN_LINK value reads under the new key
+    with engine.connect() as conn:
+        cust_raw = conn.exec_driver_sql("SELECT custodian FROM piece_custodian").scalar()
+    assert Cipher([new]).decrypt(cust_raw, aad="piece_custodian.custodian") == "c"
 
 
 def test_rekey_command_re_encrypts_and_records_rotation_per_tenant(tmp_path) -> None:  # noqa: ANN001
@@ -110,3 +114,22 @@ def test_rekey_leaves_the_text_index_untouched(tmp_path) -> None:  # noqa: ANN00
     with engine.connect() as conn:
         after = conn.exec_driver_sql("SELECT full_text FROM piece").scalar()
     assert before == after == "le contrat de bail"  # unchanged and still plaintext
+
+
+def test_rekey_covers_every_encrypted_column() -> None:
+    # A rotation iterates ONLY backfill.ENCRYPTED_COLUMNS; a column omitted there is silently left
+    # under the retired key and fails closed on read afterwards (permanent PII loss — a real gap the
+    # review found: 8 columns had been missing). Assert the registry equals the set of EncryptedText
+    # columns in the live model metadata, so a new encrypted column can NEVER ship uncovered.
+    from apx.adapters.store_postgres import models as m
+    from apx.adapters.store_postgres.backfill import ENCRYPTED_COLUMNS
+    from apx.adapters.store_postgres.crypto_types import EncryptedText
+
+    declared = {
+        (cls.__tablename__, col.name)
+        for cls in m.Base.__subclasses__()
+        for col in cls.__table__.columns
+        if isinstance(col.type, EncryptedText)
+    }
+    covered = {(table, col) for table, _pk, col, _ctx in ENCRYPTED_COLUMNS}
+    assert covered == declared, f"rotation registry drift (symmetric diff): {declared ^ covered}"

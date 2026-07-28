@@ -13,10 +13,12 @@ and any *scope* alias. Scope is not provenance that travels on the row — it is
 write-time authorisation resolved from the authoritative ``matter_scope`` at query time,
 so a re-scope takes effect at the next read with nothing to propagate. It reaches the
 writer as a separate required argument, never as a field here. *Custodian* is provenance
-and is carried on the *pièce*, never on the *chunk* row. (Today the *pièce* holds a legacy
-scalar ``custodian`` column from the pre-BMAD build; AD-9's ``CUSTODIAN_LINK`` *set* — a
-custodian set unioned across imports, and no column on ``piece`` either — is owed to a later
-story. 1.3 fixes only the *chunk* dimension: custodian is never a chunk column.)
+and is carried on the *pièce*, never on the *chunk* row. (Before Story 2.5 the *pièce* held a
+legacy scalar ``custodian`` column from the pre-BMAD build; AD-9's ``CUSTODIAN_LINK`` *set* — a
+custodian set unioned across imports, and no column on ``piece`` either. Story 2.5 landed the
+set (``piece_custodian``) and dropped the legacy scalar column; the structural property
+``no_custodian_or_scope_column_on_piece`` now enforces the ban. 1.3 fixed the *chunk*
+dimension: custodian is never a chunk column.)
 """
 
 from __future__ import annotations
