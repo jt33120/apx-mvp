@@ -42,6 +42,17 @@ dependencies = [
     # auth.py's pwdlib. No stdlib symmetric cipher exists, so this dependency is intrinsic
     # to the encryption story, not incidental.
     "cryptography>=44,<47",
+    # Multi-format extraction (story 2.3, AD-28). Both imported LAZILY inside their
+    # adapters so the app still imports where they are absent.
+    # openpyxl — .xlsx (Office). MIT, in-process; AD-28's named Office tool.
+    "openpyxl==3.1.5",
+    # extract-msg — .msg (Outlook compound files: RTF-compressed bodies, TNEF, charset
+    # recovery, reply chains). **GPL-3.0-only** — invoked OUT-OF-PROCESS via a subprocess
+    # worker and NEVER imported into the product process (AD-28). The process boundary
+    # keeps it a separate program (aggregation, not a derivative work); the only residual
+    # obligation is offering its source on distribution (GPL §6). To counsel in the same
+    # email as psycopg's LGPL question (AD-28). A structural check seals the boundary.
+    "extract-msg==0.56.0",
 ]
 
 [project.optional-dependencies]

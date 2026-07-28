@@ -145,6 +145,101 @@ def no_queue_import_outside_submodule(roots: Iterable[Path] | None = None) -> Ch
         f"procrastinate is imported only inside the queue submodule ({len(trees)} file(s))")
 
 
+# ── FR-3 / AD-28: extraction runs out-of-process and licence-isolated ─────────────────────────
+_EXTRACTION_DIR = _APX_ROOT / "adapters" / "extraction"
+_MSG_WORKER = _EXTRACTION_DIR / "msg_worker.py"
+
+
+def _in_extraction(path: Path) -> bool:
+    return path.is_relative_to(_EXTRACTION_DIR)
+
+
+def _extraction_trees() -> tuple[list[tuple[Path, ast.Module]], list[str]]:
+    """Parse every ``.py`` under ``adapters/extraction`` — the scope of the ``stderr`` rule (a
+    property *within* the extraction adapters). Fails closed on an unparseable file."""
+    trees: list[tuple[Path, ast.Module]] = []
+    unparseable: list[str] = []
+    for path in sorted(_EXTRACTION_DIR.rglob("*.py")):
+        tree = _parse(path)
+        if tree is None:
+            unparseable.append(path.name)
+        else:
+            trees.append((path, tree))
+    return trees, unparseable
+
+
+def no_extract_msg_import_outside_worker(roots: Iterable[Path] | None = None) -> CheckResult:
+    """``extract_msg`` (GPL-3.0) is imported ONLY inside the out-of-process worker module
+    (AD-28). The proprietary product process never imports it — the subprocess boundary is the
+    licence boundary — so a single ``import`` cannot contaminate the core; a malformed compound
+    file crashes the isolated subprocess, not the worker (AD-17)."""
+    name, ad = "extract_msg is imported only in the isolated worker", "AD-28"
+    trees, unparseable = _trees(roots)
+    if unparseable:
+        return _fail_closed(name, ad, unparseable)
+    for path, tree in trees:
+        if roots is None and path == _MSG_WORKER:
+            continue  # the one module allowed to import the GPL parser (it runs out-of-process)
+        for node in ast.walk(tree):
+            for module in _import_modules(node):
+                if module == "extract_msg" or module.startswith("extract_msg."):
+                    return CheckResult(
+                        name, ad, False,
+                        f"{_where(path)}:{node.lineno} imports extract_msg (GPL-3.0) outside the "
+                        "out-of-process worker — the product process must never import it (AD-28)")
+    return CheckResult(
+        name, ad, True,
+        f"extract_msg is imported only in the isolated worker ({len(trees)} file(s))")
+
+
+def no_subprocess_call_outside_extraction(roots: Iterable[Path] | None = None) -> CheckResult:
+    """A ``subprocess`` reach appears ONLY under ``adapters/extraction`` (AD-28) — extraction
+    engines run out-of-process there and nowhere else, so every exec boundary is one audited
+    place. (The build-time harness in ``checks/`` legitimately runs a subprocess and is excluded
+    from the runtime tree by ``_RUNTIME_EXCLUDE``.) You cannot exec without importing the module,
+    so the import leg catches every spelling."""
+    name, ad = "no subprocess call outside adapters/extraction", "AD-28"
+    trees, unparseable = _trees(roots)
+    if unparseable:
+        return _fail_closed(name, ad, unparseable)
+    for path, tree in trees:
+        if roots is None and _in_extraction(path):
+            continue  # the one place extraction engines run out-of-process
+        for node in ast.walk(tree):
+            for module in _import_modules(node):
+                if module == "subprocess" or module.startswith("subprocess."):
+                    return CheckResult(
+                        name, ad, False,
+                        f"{_where(path)}:{node.lineno} imports subprocess outside "
+                        "adapters/extraction — extraction engines run out-of-process only there, "
+                        "nowhere else (AD-28)")
+    return CheckResult(
+        name, ad, True,
+        f"subprocess is reached only under adapters/extraction ({len(trees)} file(s))")
+
+
+def no_stderr_none_in_extraction(roots: Iterable[Path] | None = None) -> CheckResult:
+    """No ``stderr=None`` within ``adapters/extraction`` (AD-28). A subprocess's stderr is always
+    captured, never inherited: the extractors emit **document fragments** on stderr for malformed
+    input, and an inherited stderr would leak them into a log, the terminal, or an export."""
+    name, ad = "no stderr=None in adapters/extraction", "AD-28"
+    trees, unparseable = (_extraction_trees() if roots is None else _load_trees(list(roots)))
+    if unparseable:
+        return _fail_closed(name, ad, unparseable)
+    for path, tree in trees:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Call):
+                for kw in node.keywords:
+                    if kw.arg == "stderr" and isinstance(kw.value, ast.Constant) \
+                            and kw.value.value is None:
+                        return CheckResult(
+                            name, ad, False,
+                            f"{_where(path)}:{node.lineno} sets stderr=None in an extraction "
+                            "adapter — stderr must be captured, never inherited (AD-28)")
+    return CheckResult(
+        name, ad, True, f"no stderr=None in adapters/extraction ({len(trees)} file(s))")
+
+
 # A ``_fixtures`` / ``fixtures`` path SEGMENT in a string literal (a dir, with or without a trailing
 # slash). Requires the segment boundary so an unrelated word like ``test_fixtures_helper`` is safe.
 _FIXTURE_PATH_RE = re.compile(r"(^|/)_?fixtures(/|$)")

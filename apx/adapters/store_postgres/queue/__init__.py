@@ -24,11 +24,14 @@ from procrastinate import App, PsycopgConnector, RetryStrategy, testing
 from apx.adapters.expansion.archives import ZipExpander
 from apx.adapters.expansion.composite import CompositeExpander
 from apx.adapters.expansion.mail import EmlExpander
+from apx.adapters.extraction.composite import CompositeExtractor
 from apx.adapters.extraction.files import FileExtractor
+from apx.adapters.extraction.msg import MsgExpander, MsgExtractor
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.store import ImportJobView, SqlStore
 from apx.core.app.ingest import enumerate_units, ingest_one_file
+from apx.core.ports.extraction import Extractor
 
 
 def _conninfo(database_url: str) -> str:
@@ -52,17 +55,19 @@ def _connector() -> PsycopgConnector | testing.InMemoryConnector:
 app = App(connector=_connector())
 
 
-def _build_extractor() -> FileExtractor | WithOcr:
-    """Compose the extractor at the worker edge (same shape as the API edge). OCR only when
-    the image sets APX_OCR — extraction/OCR itself is Story 2.3; 2.2 reuses it unchanged."""
-    base = FileExtractor()
+def _build_extractor() -> Extractor:
+    """Compose the extractor at the worker edge (same shape as the API edge): .msg routes to the
+    out-of-process, GPL-isolated MsgExtractor, everything else to FileExtractor, and — where the
+    image sets APX_OCR (Tesseract installed) — scans and images fall back to OCR. The born-digital
+    path never pays the OCR cost (AD-28)."""
+    primary = CompositeExtractor([MsgExtractor(), FileExtractor()])
     if os.environ.get("APX_OCR", "").strip().lower() in ("1", "true", "yes"):
-        return WithOcr(base, TesseractExtractor())
-    return base
+        return WithOcr(primary, TesseractExtractor())
+    return primary
 
 
 def _build_expander() -> CompositeExpander:
-    return CompositeExpander([ZipExpander(), EmlExpander()])
+    return CompositeExpander([ZipExpander(), EmlExpander(), MsgExpander()])
 
 
 def _persist_unit(

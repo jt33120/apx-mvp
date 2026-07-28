@@ -34,7 +34,9 @@ from sqlalchemy.exc import IntegrityError
 from apx.adapters.expansion.archives import ZipExpander
 from apx.adapters.expansion.composite import CompositeExpander
 from apx.adapters.expansion.mail import EmlExpander
+from apx.adapters.extraction.composite import CompositeExtractor
 from apx.adapters.extraction.files import FileExtractor
+from apx.adapters.extraction.msg import MsgExpander, MsgExtractor
 from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
@@ -441,19 +443,20 @@ def _persist(
 
 
 def _extractor() -> Extractor:
-    """The text extractor composed at the edge. With APX_OCR enabled (the Docker image
-    sets it, where Tesseract is installed), scans and images fall back to OCR; the fast
-    born-digital path is unchanged and never pays the OCR cost."""
-    base = FileExtractor()
+    """The text extractor composed at the edge: .msg routes to the out-of-process, GPL-isolated
+    MsgExtractor, everything else to FileExtractor. With APX_OCR enabled (the Docker image sets
+    it, where Tesseract is installed), scans and images fall back to OCR; the fast born-digital
+    path is unchanged and never pays the OCR cost (AD-28)."""
+    primary = CompositeExtractor([MsgExtractor(), FileExtractor()])
     if os.environ.get("APX_OCR", "").strip().lower() in ("1", "true", "yes"):
-        return WithOcr(base, TesseractExtractor())
-    return base
+        return WithOcr(primary, TesseractExtractor())
+    return primary
 
 
 def _expander() -> CompositeExpander:
-    """Container expansion composed at the edge: a .zip is unpacked and its members
-    ingested individually; an email adds its attachments (its body is a piece too)."""
-    return CompositeExpander([ZipExpander(), EmlExpander()])
+    """Container expansion composed at the edge: a .zip is unpacked and its members ingested
+    individually; an email (.eml/.msg) adds its attachments (its body is a piece too)."""
+    return CompositeExpander([ZipExpander(), EmlExpander(), MsgExpander()])
 
 
 def _held_wall(req_scope: str, ident: Identity) -> str:

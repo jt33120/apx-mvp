@@ -345,6 +345,16 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("queue-sealed", "FR-2", "AD-17", "the queue is sealed behind one submodule",
        isolation_harness.no_queue_import_outside_submodule,
        "procrastinate imports in the runtime tree (excl. the queue submodule)"),
+    # ── story 2.3: extraction runs out-of-process & licence-isolated (AD-28) ───────────────────
+    _p("extract-msg-sealed", "FR-3", "AD-28", "extract_msg imported only in the isolated worker",
+       isolation_harness.no_extract_msg_import_outside_worker,
+       "extract_msg imports in the runtime tree (excl. adapters/extraction/msg_worker.py)"),
+    _p("subprocess-only-in-extraction", "FR-3", "AD-28", "no subprocess call outside extraction",
+       isolation_harness.no_subprocess_call_outside_extraction,
+       "subprocess imports in the runtime tree (excl. adapters/extraction)"),
+    _p("no-stderr-none-in-extraction", "FR-3", "AD-28", "no stderr=None in extraction adapters",
+       isolation_harness.no_stderr_none_in_extraction,
+       "stderr=None kwargs in adapters/extraction"),
     # ── story 1.12: the enumerated FR-56 floor — forward-looking checks ───────────────────────
     _p("no-fallback-embedder", "FR-9", "AD-11", "no fallback embedder",
        forward_looking.embedder_has_one_implementation,

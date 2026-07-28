@@ -1,13 +1,14 @@
 """File-based text extraction (a slice of story 2.3).
 
-Covers plain text (.txt/.md/.log/.csv), born-digital PDF (pypdf), Word (.docx) and
-email (.eml) — the formats a real dossier is actually made of. Word and email are
-read with the standard library only (a .docx is a zip of XML; email has a parser in
-the stdlib), so no dependency and nothing for the egress guard to forbid. Everything
-else is `unsupported-format`; an extraction that yields no text is `extracted-empty`
-(NOT counted in the corpus — otherwise an absence claim would assert it was searched).
-Scanned-PDF OCR and .msg are later (they pull a dependency / touch the timed run).
-Runs inside the tenant boundary (no hosted service).
+Covers plain text (.txt/.md/.log/.csv), born-digital PDF (pypdf), Word (.docx),
+spreadsheets (.xlsx via openpyxl — AD-28's named Office tool) and email (.eml). Text,
+Word and email are read with the standard library only (a .docx is a zip of XML; email
+has a parser in the stdlib), so no dependency and nothing for the egress guard to forbid;
+.xlsx uses openpyxl (MIT, in-process, imported lazily). Everything else is
+`unsupported-format`; an extraction that yields no text is `extracted-empty` (NOT counted
+in the corpus — otherwise an absence claim would assert it was searched). .msg is handled
+out-of-process by the GPL-isolated MsgExtractor (AD-28), not here. Scanned-PDF OCR is the
+Tesseract adapter. Runs inside the tenant boundary (no hosted service).
 """
 
 from __future__ import annotations
@@ -63,6 +64,8 @@ class FileExtractor:
             return self._pdf(path)
         if suffix == ".docx":
             return self._docx(path)
+        if suffix == ".xlsx":
+            return self._xlsx(path)
         if suffix == ".eml":
             return self._eml(path)
         return ExtractOutcome("", "none", self.version, ErrorClass.UNSUPPORTED_FORMAT)
@@ -108,6 +111,36 @@ class FileExtractor:
         if not text.strip():
             return ExtractOutcome("", "docx", self.version, ErrorClass.EXTRACTED_EMPTY)
         return ExtractOutcome(text, "docx", self.version)
+
+    def _xlsx(self, path: Path) -> ExtractOutcome:
+        """A .xlsx read across every sheet — cell VALUES only, ``data_only`` so a saved
+        formula surfaces as its cached value, never its ``=A1+A2`` text. ``read_only``
+        streams the workbook so a large sheet need not load whole (AD-17 memory bound).
+        openpyxl (AD-28's named Office tool, MIT, in-process) is imported lazily so the
+        app still imports where it is absent."""
+        import openpyxl
+        from openpyxl.utils.exceptions import InvalidFileException
+
+        _readerr = (InvalidFileException, zipfile.BadZipFile, KeyError, OSError, ValueError)
+        try:
+            workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        except _readerr:
+            return ExtractOutcome("", "xlsx", self.version, ErrorClass.UNREADABLE)
+        try:
+            lines: list[str] = []
+            for sheet in workbook.worksheets:
+                for row in sheet.iter_rows(values_only=True):
+                    cells = [str(v) for v in row if v is not None and str(v).strip()]
+                    if cells:
+                        lines.append(" ".join(cells))
+        except _readerr:
+            return ExtractOutcome("", "xlsx", self.version, ErrorClass.UNREADABLE)
+        finally:
+            workbook.close()
+        text = "\n".join(lines)
+        if not text.strip():
+            return ExtractOutcome("", "xlsx", self.version, ErrorClass.EXTRACTED_EMPTY)
+        return ExtractOutcome(text, "xlsx", self.version)
 
     def _eml(self, path: Path) -> ExtractOutcome:
         """An email as searchable text: the routing headers a lawyer needs (from, to,

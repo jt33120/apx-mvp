@@ -406,6 +406,9 @@ could contain is an inflated claim about what the suite proves).
 | `no-egress-call-site` | FR-32 | AD-45 | structural | no_egress_call_site_outside_adapters | network imports + call sites in apx/** (excl. the egress adapters) |
 | `no-tenant-identifier-source` | FR-30 | AD-24 | structural | no_tenant_identifier_in_source | conditionals in the runtime tree |
 | `queue-sealed` | FR-2 | AD-17 | structural | no_queue_import_outside_submodule | procrastinate imports in the runtime tree (excl. the queue submodule) |
+| `extract-msg-sealed` | FR-3 | AD-28 | structural | no_extract_msg_import_outside_worker | extract_msg imports in the runtime tree (excl. adapters/extraction/msg_worker.py) |
+| `subprocess-only-in-extraction` | FR-3 | AD-28 | structural | no_subprocess_call_outside_extraction | subprocess imports in the runtime tree (excl. adapters/extraction) |
+| `no-stderr-none-in-extraction` | FR-3 | AD-28 | structural | no_stderr_none_in_extraction | stderr=None kwargs in adapters/extraction |
 | `no-fallback-embedder` | FR-9 | AD-11 | structural | embedder_has_one_implementation | embed/encode-method classes + except-handlers in the runtime tree (vacuous until 2.8) |
 | `destructive-index-one-entry` | FR-10 | AD-7 | structural | destructive_index_ops_single_entry | index drop/truncate call sites (vacuous until 2.8) |
 | `no-post-filter-retrieval` | FR-14 | AD-14 | structural | no_post_filter_in_retrieval | functions taking a result set + a scope (vacuous until 3.x) |
