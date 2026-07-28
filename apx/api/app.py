@@ -272,6 +272,26 @@ class FailureOut(BaseModel):
     error_class: str
 
 
+class RegisterEntryOut(BaseModel):
+    """One failure-register entry (Story 2.6, FR-5). The visual/interaction UX is a later pass;
+    this is the data contract the register screen will render."""
+
+    id: str
+    matter: str | None
+    filename: str
+    path: str
+    custodian: str | None
+    error_class: str
+    cardinality: str            # one | unknown (AD-38)
+    resolution_state: str       # open | resolved (never removed, AD-7)
+    timestamp: str
+    retryable: bool             # the retry action affordance (FR-5)
+
+
+class RegisterOut(BaseModel):
+    entries: list[RegisterEntryOut]
+
+
 class InventoryOut(BaseModel):
     submitted: int
     in_corpus: int
@@ -1098,6 +1118,45 @@ def read_audit(matter: str, ident: Identity = Depends(current_identity)) -> Audi
         ],
         verified=trail.verified,
     )
+
+
+def _register_out(e: object) -> RegisterEntryOut:
+    return RegisterEntryOut(
+        id=e.id, matter=e.matter, filename=e.filename, path=e.submitted_path,
+        custodian=e.custodian, error_class=e.error_class, cardinality=e.cardinality,
+        resolution_state=e.resolution_state, timestamp=e.timestamp, retryable=e.retryable)
+
+
+@app.get("/api/matters/{matter}/register", response_model=RegisterOut)
+def read_register(matter: str, ident: Identity = Depends(current_identity)) -> RegisterOut:
+    """The failure register for one matter (Story 2.6, FR-5) — 403 outside the scope. Open and
+    resolved entries; a resolved one is kept as history (AD-7). The retry/bulk-retry actions and
+    the register screen are the deferred UX pass; this is the read contract."""
+    store = _require_store()
+    try:
+        entries = store.register(matter, ident.tenant, ident.scopes)
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    return RegisterOut(entries=[_register_out(e) for e in entries])
+
+
+@app.get("/api/register", response_model=RegisterOut)
+def read_register_all(ident: Identity = Depends(current_identity)) -> RegisterOut:
+    """The tenant-wide failure register within the caller's RBAC scope (FR-49). Entries whose
+    matter could not be determined are included ONLY for the tenant-wide administrator."""
+    store = _require_store()
+    entries = store.register_all(ident.tenant, ident.scopes, is_admin=ident.is_admin)
+    return RegisterOut(entries=[_register_out(e) for e in entries])
+
+
+@app.get("/api/register/export", response_model=RegisterOut)
+def export_register(ident: Identity = Depends(current_identity)) -> RegisterOut:
+    """Export the register one-pièce-per-line within the caller's RBAC scope, recorded in the
+    audit (FR-5/FR-49). Undetermined-matter entries appear only for the tenant admin."""
+    store = _require_store()
+    export = store.export_register(
+        ident.tenant, ident.scopes, ident.actor, is_admin=ident.is_admin)
+    return RegisterOut(entries=[_register_out(e) for e in export.lines])
 
 
 @app.get("/api/matters/{matter}/triage", response_model=TriageOut)

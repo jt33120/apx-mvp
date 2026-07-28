@@ -32,6 +32,7 @@ ENCRYPTED_COLUMNS = [
     ("piece_custodian", "id", "custodian", "piece_custodian.custodian"),
     ("failure", "id", "filename", "failure.filename"),
     ("failure", "id", "submitted_path", "failure.submitted_path"),
+    ("failure", "id", "custodian", "failure.custodian"),
     ("failure", "id", "detail", "failure.detail"),
     ("audit_record", "id", "actor", "audit_record.actor"),
     ("audit_record", "id", "detail", "audit_record.detail"),
@@ -194,6 +195,19 @@ def revert_piece_links_to_scalar(conn: Connection) -> int:
             text("UPDATE piece SET custodian = :v WHERE id = :k"), {"v": stored, "k": piece_id})
         written += 1
     return written
+
+
+def backfill_failure_cardinality(conn: Connection) -> int:
+    """Set each existing failure-register row's `cardinality` (Story 2.6, AD-38): `unknown` for a
+    `container-unopenable` entry (it stands for an unknown number of pièces), else `one`. Idempotent
+    and key-free (only NULL rows are touched). Returns the number of rows actually SET. Run once,
+    after the column is added."""
+    unknown = conn.execute(text(
+        "UPDATE failure SET cardinality = 'unknown' "
+        "WHERE error_class = 'container-unopenable' AND cardinality IS NULL")).rowcount or 0
+    one = conn.execute(text(
+        "UPDATE failure SET cardinality = 'one' WHERE cardinality IS NULL")).rowcount or 0
+    return unknown + one
 
 
 def _cipher_if(needed: bool) -> Cipher | None:

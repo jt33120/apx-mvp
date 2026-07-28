@@ -166,17 +166,34 @@ class Chunk(Base):
 
 
 class Failure(Base):
+    """The failure register (FR-5): every pièce submitted but not in the corpus, enumerated,
+    attributed and actionable. Resolved by STATE CHANGE, never removed (AD-7): a resolved entry
+    stays so "what was and was not reviewed" remains answerable. `resolution_state` transitions are
+    conditional commits owned by the store's register use cases (AD-37) — asserted by the
+    `register_state_written_once` structural property. `matter` is nullable: an entry that could
+    not be attributed to a matter (undetermined) is visible only to the tenant-wide admin (FR-49);
+    a NULL matter has no `matter_scope` row, so the scope pre-filter excludes it from every ordinary
+    read by construction."""
+
     __tablename__ = "failure"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     tenant: Mapped[str] = mapped_column(String, nullable=False)
-    matter: Mapped[str] = mapped_column(String, nullable=False)
-    # content-bearing → application-encrypted (AD-31): filenames/paths/details name the
-    # documents that did not enter the corpus. error_class/resolution_state are categorical.
+    # nullable = the matter could not be determined (undetermined) — admin-only visibility (FR-49)
+    matter: Mapped[str | None] = mapped_column(String, nullable=True)
+    # content-bearing → application-encrypted (AD-31): filenames/paths/details/custodian name the
+    # documents that did not enter the corpus. error_class/resolution_state/cardinality are
+    # categorical (query keys), left plaintext.
     filename: Mapped[str] = mapped_column(EncryptedText("failure.filename"), nullable=False)
     submitted_path: Mapped[str] = mapped_column(
         EncryptedText("failure.submitted_path"), nullable=False)
+    # the custodian who held the pièce, WHERE KNOWN (FR-5) — PII, nullable
+    custodian: Mapped[str | None] = mapped_column(
+        EncryptedText("failure.custodian"), nullable=True)
     error_class: Mapped[str] = mapped_column(String, nullable=False)
+    # AD-38: `one` for an ordinary pièce; `unknown` for a `container-unopenable` entry (it stands
+    # for an unknown number of pièces and is never summed into a total).
+    cardinality: Mapped[str] = mapped_column(String, nullable=False, default="one")
     resolution_state: Mapped[str] = mapped_column(String, nullable=False)  # open|resolved
     detail: Mapped[str | None] = mapped_column(EncryptedText("failure.detail"), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -109,7 +109,8 @@ def _process_unit(
     attempts = store.bump_import_attempt(unit_id)
     if attempts > max_attempts:
         store.quarantine_unit(
-            unit_id=unit_id, provenance=provenance, matter=job.matter, tenant=job.tenant, now=now)
+            unit_id=unit_id, provenance=provenance, matter=job.matter, tenant=job.tenant, now=now,
+            custodian=job.custodian)
         return
     try:
         work(store, job, unit_id, provenance, max_bytes=max_bytes, now=now)
@@ -119,7 +120,7 @@ def _process_unit(
             # exception handler cannot roll the quarantine back and retry the poison forever.
             store.quarantine_unit(
                 unit_id=unit_id, provenance=provenance, matter=job.matter, tenant=job.tenant,
-                now=now)
+                now=now, custodian=job.custodian)
             return
         raise  # leave it pending; the job re-dispatches and the (committed) counter advances
 

@@ -48,7 +48,7 @@ from apx.adapters.store_postgres.models import (
     User,
     UserScope,
 )
-from apx.core.app.ingest import IngestedPiece, IngestionResult
+from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
 from apx.core.domain.auth import hash_password, verify_and_upgrade, verify_password
 from apx.core.domain.confidence import prevalence_upper_bound
 from apx.core.domain.config import (
@@ -61,7 +61,7 @@ from apx.core.domain.config import (
 )
 from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.dedup import cluster
-from apx.core.domain.failures import ErrorClass
+from apx.core.domain.failures import ErrorClass, cardinality_for
 from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.search import snippet
@@ -260,6 +260,52 @@ class MatterSummary:
 
 
 @dataclass(frozen=True)
+class RegisterEntry:
+    """One failure-register entry (FR-5), decrypted for reading. `retryable` is the retry-action
+    affordance: every OPEN entry can be retried; a resolved one cannot (it is history, kept)."""
+
+    id: str
+    matter: str | None            # None = undetermined (admin-only visibility, FR-49)
+    filename: str
+    submitted_path: str
+    custodian: str | None         # where known (FR-5)
+    error_class: str
+    cardinality: str              # one | unknown (AD-38)
+    resolution_state: str         # open | resolved (never removed, AD-7)
+    timestamp: str
+    retryable: bool               # the retry action (FR-5) — true iff open
+
+
+@dataclass(frozen=True)
+class RetryOutcome:
+    """The result of an ingestion-retry (AD-37, `open → resolved`, a conditional commit)."""
+
+    entry_id: str
+    # resolved | still-failing | precondition-not-met | not-found
+    outcome: str
+    resolution_state: str | None
+
+
+@dataclass(frozen=True)
+class BulkRetryOutcome:
+    """A bulk retry over a filtered set — ONE audit entry, never one per pièce (FR-5)."""
+
+    attempted: int
+    resolved: int
+    still_failing: int
+    skipped: int  # entries no longer open at retry time (never clobbered — the AD-37 defense)
+    errored: int = 0  # entries whose re-ingest/commit raised — counted, never aborting the set
+
+
+@dataclass(frozen=True)
+class RegisterExport:
+    """The register exported one-pièce-per-line within the caller's RBAC scope (FR-5/FR-49)."""
+
+    lines: tuple[RegisterEntry, ...]
+    scope_count: int  # how many held scopes the export covered (for the audit detail)
+
+
+@dataclass(frozen=True)
 class AuditEntry:
     seq: int
     actor: str
@@ -353,8 +399,12 @@ def _excerpt(text: str, width: int = 240) -> str:
     return flat[:width] + ("…" if len(flat) > width else "")
 
 
-def _failure_id(matter: str, submitted_path: str) -> str:
-    return hashlib.sha256(f"{matter}\x00{submitted_path}".encode()).hexdigest()
+def _failure_id(tenant: str, matter: str | None, submitted_path: str) -> str:
+    """A register entry's deterministic id — tenant-qualified (AD-12), exactly as ``piece_id`` is:
+    a matter name is tenant-local, so WITHOUT the tenant two firms sharing a matter name and a path
+    would collide on one PK and one firm's ingest would `merge`-overwrite the other's entry (a
+    Chinese-wall breach, AD-7 'never removed'). ``matter`` is None for an undetermined entry."""
+    return hashlib.sha256(f"{tenant}\x00{matter or ''}\x00{submitted_path}".encode()).hexdigest()
 
 
 def _unit_id(job_id: str, provenance: str) -> str:
@@ -571,15 +621,7 @@ class SqlStore:
                 self._insert_link_if_absent(
                     session, PieceCustodian, p.id, "custodian", p.custodian)
             for f in result.failures:
-                session.merge(
-                    Failure(
-                        id=_failure_id(f.matter, f.submitted_path),
-                        tenant=f.tenant, matter=f.matter,
-                        filename=f.filename, submitted_path=f.submitted_path,
-                        error_class=str(f.error_class), resolution_state="open",
-                        detail=f.detail, timestamp=now,
-                    )
-                )
+                self._write_failure(session, f, now)
             if matter is not None and tenant is not None and audit:
                 # One `ingest` audit entry per call, appended AFTER the loop so it carries the
                 # recognised-already-present count as its own field (AC2) — a re-import no-op is
@@ -765,19 +807,22 @@ class SqlStore:
 
     def quarantine_unit(
         self, *, unit_id: str, provenance: str, matter: str, tenant: str, now: datetime,
+        custodian: str | None = None,
     ) -> None:
         """Quarantine a poison unit in a transaction INDEPENDENT of the failing unit's (AD-17):
         flip the unit AND write its `quarantined` failure-register entry together here, so an
         exception handler running inside the failing unit's transaction cannot roll it back and
-        retry the poison forever."""
+        retry the poison forever. The entry carries the job's `custodian` (where known) and
+        cardinality `one` (a quarantined unit is one pièce), like every register entry (FR-5)."""
         with self._sf() as session, session.begin():
             u = session.get(ImportUnit, unit_id)
             if u is not None:
                 u.state = "quarantined"
             session.merge(Failure(
-                id=_failure_id(matter, provenance), tenant=tenant, matter=matter,
+                id=_failure_id(tenant, matter, provenance), tenant=tenant, matter=matter,
                 filename=provenance.rsplit("/", 1)[-1], submitted_path=provenance,
-                error_class=str(ErrorClass.QUARANTINED), resolution_state="open",
+                custodian=custodian, error_class=str(ErrorClass.QUARANTINED),
+                cardinality=cardinality_for(ErrorClass.QUARANTINED), resolution_state="open",
                 detail="repeatedly killed the worker; quarantined after the configured attempts",
                 timestamp=now))
 
@@ -863,6 +908,197 @@ class SqlStore:
                 raise ScopeDenied(matter)  # fail closed, and never disclose existence
             in_corpus, failures = self._counts(session, matter, tenant)
         return Inventory(in_corpus + failures, in_corpus, failures, 0)
+
+    # ── Story 2.6: the failure register (FR-5; AD-37 conditional commits, AD-7 never removed) ──
+
+    def _register_entry(self, f: Failure) -> RegisterEntry:
+        return RegisterEntry(
+            id=f.id, matter=f.matter, filename=f.filename, submitted_path=f.submitted_path,
+            custodian=f.custodian, error_class=f.error_class, cardinality=f.cardinality,
+            resolution_state=f.resolution_state, timestamp=_as_utc(f.timestamp).isoformat(),
+            retryable=f.resolution_state == "open")
+
+    def register(self, matter: str, tenant: str, scopes: set[str]) -> list[RegisterEntry]:
+        """The durable failure register for one matter — scope-checked; OPEN and RESOLVED entries
+        (a resolved entry is kept as history, never removed — AD-7), deterministically ordered."""
+        with self._sf() as session:
+            scope = session.scalar(select(MatterScope.scope).where(
+                MatterScope.matter == matter, MatterScope.tenant == tenant))
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)
+            rows = session.scalars(select(Failure).where(
+                Failure.tenant == tenant, Failure.matter == matter)).all()
+            entries = [self._register_entry(f) for f in rows]
+        return sorted(entries, key=lambda e: (e.resolution_state, e.submitted_path, e.id))
+
+    def register_all(
+        self, tenant: str, scopes: set[str], *, is_admin: bool
+    ) -> list[RegisterEntry]:
+        """The tenant-wide register: entries whose matter's scope is held, PLUS — only for the
+        tenant-wide admin — the undetermined-matter entries (matter IS NULL). A non-admin never
+        sees an undetermined entry (AD-12/FR-49, fail closed)."""
+        with self._sf() as session:
+            held = set(session.scalars(select(MatterScope.matter).where(
+                MatterScope.tenant == tenant, MatterScope.scope.in_(scopes)))) if scopes else set()
+            rows = session.scalars(select(Failure).where(Failure.tenant == tenant)).all()
+            out = [
+                self._register_entry(f) for f in rows
+                if (f.matter in held) or (f.matter is None and is_admin)
+            ]
+        return sorted(
+            out, key=lambda e: (e.matter or "", e.resolution_state, e.submitted_path, e.id))
+
+    def _authorise_entry(
+        self, session: Session, f: Failure, tenant: str, scopes: set[str], is_admin: bool
+    ) -> None:
+        """Fail closed unless the caller may act on this entry: it must be the caller's TENANT
+        (AD-12, scope is never applied without a tenant); then a determined entry needs its matter's
+        scope held, while an undetermined (matter IS NULL) entry is admin-only (FR-49)."""
+        if f.tenant != tenant:
+            raise ScopeDenied(f.matter or "undetermined")  # cross-tenant — never disclose
+        if f.matter is None:
+            if not is_admin:
+                raise ScopeDenied("undetermined")
+            return
+        scope = session.scalar(select(MatterScope.scope).where(
+            MatterScope.matter == f.matter, MatterScope.tenant == f.tenant))
+        if scope is None or scope not in scopes:
+            raise ScopeDenied(f.matter)
+
+    def _write_failure(
+        self, session: Session, f: IngestedFailure, now: datetime, *, if_absent: bool = False
+    ) -> None:
+        """Persist one register entry (`open`) — the single failure-write, shared by ``save`` and
+        the retry reconcile. ``if_absent`` inserts only when the id is new, so a container member
+        recovered alongside failures never clobbers — nor re-opens — an existing entry (AD-7)."""
+        fid = _failure_id(f.tenant, f.matter, f.submitted_path)
+        if if_absent and session.get(Failure, fid) is not None:
+            return
+        session.merge(Failure(
+            id=fid, tenant=f.tenant, matter=f.matter, filename=f.filename,
+            submitted_path=f.submitted_path, custodian=f.custodian,
+            error_class=str(f.error_class), cardinality=cardinality_for(f.error_class),
+            resolution_state="open", detail=f.detail, timestamp=now))
+
+    def _reconcile_retry(
+        self, session: Session, f: Failure, result: IngestionResult, now: datetime
+    ) -> str:
+        """Reconcile an observed-OPEN entry against a freshly-run ingestion result, in the caller's
+        transaction. Persist every recovered pièce that belongs to THIS entry (same tenant+matter;
+        a foreign-matter pièce is ignored, never resolving this entry nor landing unscoped). Record
+        every OTHER (container-member) failure as its own entry — never dropped (FR-5). The entry
+        RESOLVES iff its own path succeeded — a pièce recovered and NO fresh failure for that path
+        (AD-7 keeps the row); a fresh failure for its own path refreshes it and keeps it OPEN. No
+        audit here — the caller writes one. Returns 'resolved' | 'still-failing'."""
+        own_pieces = [p for p in result.pieces if p.tenant == f.tenant and p.matter == f.matter]
+        own_failure = next(
+            (nf for nf in result.failures if nf.submitted_path == f.submitted_path), None)
+        for nf in result.failures:  # member failures — recorded, never dropped, never clobbering
+            if nf.submitted_path != f.submitted_path:
+                self._write_failure(session, nf, now, if_absent=True)
+        seen: set[str] = set()
+        for p in own_pieces:  # recovered content is persisted whether or not the unit itself failed
+            self._insert_piece_if_absent(session, p, seen)
+            self._insert_link_if_absent(
+                session, PieceProvenance, p.id, "provenance_path", p.provenance_path)
+            self._insert_link_if_absent(session, PieceCustodian, p.id, "custodian", p.custodian)
+        if own_failure is not None:  # the unit's OWN path still fails — refresh, keep open
+            f.error_class = str(own_failure.error_class)
+            f.cardinality = cardinality_for(own_failure.error_class)
+            f.detail = own_failure.detail
+            return "still-failing"
+        if own_pieces:
+            f.resolution_state = "resolved"
+            return "resolved"
+        return "still-failing"  # nothing recovered for this unit, no fresh own-path failure
+
+    def retry_failure(
+        self, entry_id: str, reingest: Callable[[], IngestionResult], tenant: str,
+        scopes: set[str], actor: str, *, is_admin: bool = False, now: datetime | None = None,
+    ) -> RetryOutcome:
+        """AD-37's ingestion-retry (`open → resolved`), a CONDITIONAL COMMIT. Phase 1: confirm the
+        entry is the caller's tenant, is open, and the caller may act on it (fail closed). Phase 2
+        (no tx held): re-run ingestion via `reingest`. Phase 3 (one tx): RE-OBSERVE open under a ROW
+        LOCK (`with_for_update`, so a concurrent override committing between the read and the write
+        cannot be lost on Postgres — the AD-37 override-race defense), RE-AUTHORISE (scope may have
+        moved), reconcile, and write ONE `retry` audit entry. Never clobbers what moved."""
+        now = now or datetime.now(UTC)
+        with self._sf() as session:  # phase 1 — cheap precondition + authorisation read
+            f0 = session.get(Failure, entry_id)
+            if f0 is None:
+                return RetryOutcome(entry_id, "not-found", None)
+            self._authorise_entry(session, f0, tenant, scopes, is_admin)
+            if f0.resolution_state != "open":
+                return RetryOutcome(entry_id, "precondition-not-met", f0.resolution_state)
+        result = reingest()  # phase 2 — slow extraction, no transaction held
+        with self._sf() as session, session.begin():  # phase 3 — the conditional commit
+            f = session.get(Failure, entry_id, with_for_update=True)  # row-locked re-observe
+            if f is None:
+                return RetryOutcome(entry_id, "not-found", None)
+            self._authorise_entry(session, f, tenant, scopes, is_admin)  # re-authorise; scope moves
+            if f.resolution_state != "open":  # moved during reingest — never clobber (AD-37)
+                return RetryOutcome(entry_id, "precondition-not-met", f.resolution_state)
+            outcome = self._reconcile_retry(session, f, result, now)
+            state = f.resolution_state
+            self._append_audit(
+                session, f.tenant, f.matter, actor, "retry",
+                f"entry={entry_id} outcome={outcome}", now)
+        return RetryOutcome(entry_id, outcome, state)
+
+    def bulk_retry(
+        self, tenant: str, scopes: set[str], *,
+        reingest_for: Callable[[RegisterEntry], Callable[[], IngestionResult]],
+        error_class: str | None = None, matter: str | None = None, custodian: str | None = None,
+        actor: str, is_admin: bool = False, now: datetime | None = None,
+    ) -> BulkRetryOutcome:
+        """Retry every OPEN entry matching the filter (by class / matter / custodian), each a
+        conditional commit under a row lock; write EXACTLY ONE `bulk-retry` audit entry naming the
+        filter and the counts — never one per pièce (AD-6/FR-5). An entry no longer open at retry
+        time is skipped, never clobbered (the AD-37 override-race defense); a per-entry re-ingest or
+        commit error is COUNTED (`errored`) and the batch continues, so one poison unit never aborts
+        the set nor loses the single audit entry. Candidates come from the scope/admin-filtered
+        register read, so a wall the caller lacks is never touched."""
+        now = now or datetime.now(UTC)
+        candidates = [
+            e for e in self.register_all(tenant, scopes, is_admin=is_admin)
+            if e.resolution_state == "open"
+            and (error_class is None or e.error_class == error_class)
+            and (matter is None or e.matter == matter)
+            and (custodian is None or e.custodian == custodian)
+        ]
+        resolved = still = skipped = errored = 0
+        for entry in candidates:
+            try:
+                result = reingest_for(entry)()  # slow, no transaction held
+                with self._sf() as session, session.begin():
+                    f = session.get(Failure, entry.id, with_for_update=True)
+                    if f is None or f.resolution_state != "open":
+                        skipped += 1
+                        continue
+                    outcome = self._reconcile_retry(session, f, result, now)
+                    resolved += outcome == "resolved"
+                    still += outcome == "still-failing"
+            except Exception:  # noqa: BLE001 — a poison unit is counted, never aborts the whole set
+                errored += 1
+        with self._sf() as session, session.begin():  # ONE audit entry for the set, ALWAYS written
+            detail = (f"filter=class:{error_class or '*'},matter:{matter or '*'},"
+                      f"custodian:{'set' if custodian else '*'} attempted={len(candidates)} "
+                      f"resolved={resolved} still_open={still} skipped={skipped} errored={errored}")
+            self._append_audit(session, tenant, matter, actor, "bulk-retry", detail, now)
+        return BulkRetryOutcome(len(candidates), resolved, still, skipped, errored)
+
+    def export_register(
+        self, tenant: str, scopes: set[str], actor: str, *, is_admin: bool,
+        now: datetime | None = None,
+    ) -> RegisterExport:
+        """Export the register one-pièce-per-line within the caller's RBAC scope (undetermined
+        entries only for the admin), recorded with ONE `export-register` audit entry (FR-49)."""
+        entries = self.register_all(tenant, scopes, is_admin=is_admin)
+        with self._sf() as session, session.begin():
+            self._append_audit(
+                session, tenant, None, actor, "export-register",
+                f"lines={len(entries)} scopes={len(scopes)}", now or datetime.now(UTC))
+        return RegisterExport(tuple(entries), len(scopes))
 
     def deduplicate(self, matter: str, tenant: str, scopes: set[str]) -> DedupSummary:
         """The deterministic tier of the judgment cascade for a matter — scope-checked.

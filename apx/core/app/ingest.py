@@ -24,7 +24,7 @@ from pathlib import Path
 from apx.core.domain.config import ExpansionBounds
 from apx.core.domain.dedup import text_key
 from apx.core.domain.extraction import ExtractOutcome
-from apx.core.domain.failures import ErrorClass
+from apx.core.domain.failures import ErrorClass, redacted_diagnostic
 from apx.core.domain.identity import content_hash, piece_id
 from apx.core.domain.inventory import Inventory
 from apx.core.ports.expansion import ContainerUnopenable, Expander
@@ -65,6 +65,7 @@ class IngestedFailure:
     tenant: str
     error_class: ErrorClass
     detail: str | None = None
+    custodian: str | None = None  # the job's custodian, carried onto the register entry (FR-5)
 
 
 @dataclass(frozen=True)
@@ -129,7 +130,8 @@ def _ingest_one(
     if max_bytes is not None and path.is_file() and path.stat().st_size > max_bytes:
         result.failures.append(IngestedFailure(
             path.name, prov, matter, tenant, ErrorClass.RESOURCE_EXHAUSTED,
-            f"{path.stat().st_size} bytes exceeds the configured per-unit bound"))
+            f"{path.stat().st_size} bytes exceeds the configured per-unit bound",
+            custodian=custodian))
         return
 
     expanded = False
@@ -143,7 +145,8 @@ def _ingest_one(
             # level further down) are not lost.
             result.failures.append(IngestedFailure(
                 path.name, prov, matter, tenant, ErrorClass.CONTAINER_UNOPENABLE,
-                f"nesting depth exceeds the configured limit of {bounds.max_depth}"))
+                f"nesting depth exceeds the configured limit of {bounds.max_depth}",
+                custodian=custodian))
             return
         try:
             members = expander.members(path)
@@ -151,11 +154,13 @@ def _ingest_one(
             # A recognised container that breached a declared bound (ratio / member / attachment
             # count) — one register entry of cardinality `unknown`, the bomb never read whole.
             result.failures.append(IngestedFailure(
-                path.name, prov, matter, tenant, ErrorClass.CONTAINER_UNOPENABLE, cu.reason))
+                path.name, prov, matter, tenant, ErrorClass.CONTAINER_UNOPENABLE, cu.reason,
+                custodian=custodian))
             return
         except Exception as exc:  # noqa: BLE001 — a broken container is a failure, not an outage
             result.failures.append(IngestedFailure(
-                path.name, prov, matter, tenant, ErrorClass.EXTRACTION_ERROR, str(exc)))
+                path.name, prov, matter, tenant, ErrorClass.EXTRACTION_ERROR,
+                redacted_diagnostic(exc), custodian=custodian))
             return
         if members:
             expanded = True
@@ -167,7 +172,8 @@ def _ingest_one(
                     # extracted as a piece rather than folded away.
                     result.failures.append(IngestedFailure(
                         path.name, prov, matter, tenant, ErrorClass.CONTAINER_UNOPENABLE,
-                        f"total expanded members exceed the limit of {bounds.max_members}"))
+                        f"total expanded members exceed the limit of {bounds.max_members}",
+                        custodian=custodian))
                     break
                 counter[0] += 1
                 member_path = tmpdir / f"m{counter[0]}{Path(name).suffix}"
@@ -178,7 +184,8 @@ def _ingest_one(
                     # exception that would 500 the sync path — recorded, never dropped.
                     result.failures.append(IngestedFailure(
                         name, f"{prov}/{name}", matter, tenant, ErrorClass.EXTRACTION_ERROR,
-                        f"could not spool the member ({type(exc).__name__})"))
+                        f"could not spool the member ({type(exc).__name__})",
+                        custodian=custodian))
                     continue
                 _ingest_one(
                     member_path, f"{prov}/{name}", depth + 1, result=result, matter=matter,
@@ -195,7 +202,8 @@ def _ingest_one(
     except Exception as exc:  # noqa: BLE001 — any extractor crash is a failure, not an outage
         if not expanded:
             result.failures.append(IngestedFailure(
-                path.name, prov, matter, tenant, ErrorClass.EXTRACTION_ERROR, str(exc)))
+                path.name, prov, matter, tenant, ErrorClass.EXTRACTION_ERROR,
+                redacted_diagnostic(exc), custodian=custodian))
         return
 
     if outcome.ok:
@@ -223,7 +231,8 @@ def _ingest_one(
             # A recognised but empty container (an empty archive): we DO support the format — it
             # simply had nothing inside — so it is `extracted-empty`, not `unsupported-format`.
             cls = ErrorClass.EXTRACTED_EMPTY
-        result.failures.append(IngestedFailure(path.name, prov, matter, tenant, cls))
+        result.failures.append(IngestedFailure(
+            path.name, prov, matter, tenant, cls, custodian=custodian))
     # else: a container with own members but no own text (a .zip) — transparent, members counted.
 
 

@@ -39,6 +39,7 @@ from apx.checks import (
     isolation_harness,
     payload_schema,
     projection,
+    register_ownership,
     scope_admin,
     secrets,
     tenant_isolation,
@@ -380,6 +381,10 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("no-banned-confidence-phrasing", "FR-23", "FR-23", "no banned confidence-bound phrasing",
        forward_looking.no_banned_confidence_phrasing,
        "banned phrases in string literals / locale resources (vacuous until 5.4/6.x)"),
+    # ── story 2.6: the failure register — one owning module per state transition (AD-37) ──────
+    _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
+       register_ownership.register_state_written_once,
+       "Failure.resolution_state writes across apx/**"),
     # ── story 1.12: the harness checks ITSELF (the meta-checks) ───────────────────────────────
     _p("meta-property-has-check", "FR-56", "AD-33", "every property has a registered check",
        every_structural_property_has_a_registered_check, "this manifest vs CHECKS"),

@@ -42,7 +42,8 @@ _PLAINTEXT_ALLOWLIST = {
     "content_hash", "text_key", "text_identity",
     "extraction_method", "extractor_version", "schema_version", "text_version",
     "full_text_version", "chunking_config_version", "piece_date_status", "external_ref",
-    "error_class", "resolution_state", "action", "chain", "label", "judge", "outcome",
+    "error_class", "resolution_state", "cardinality", "action", "chain", "label", "judge",
+    "outcome",
     "email", "password_hash", "display_name",
     "full_text",  # the AD-31 exempt deterministic text index (also asserted un-encrypted below)
 }

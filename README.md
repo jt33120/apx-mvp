@@ -421,6 +421,7 @@ could contain is an inflated claim about what the suite proves).
 | `no-hardcoded-locale` | FR-35 | AD-24 | structural | no_hardcoded_locale | locale= / setlocale / Locale literals (vacuous until 6.4) |
 | `no-model-reported-confidence` | FR-42 | AD-19 | structural | no_model_reported_confidence | confidence fields read off a model response (vacuous until 4.x) |
 | `no-banned-confidence-phrasing` | FR-23 | FR-23 | structural | no_banned_confidence_phrasing | banned phrases in string literals / locale resources (vacuous until 5.4/6.x) |
+| `register-state-written-once` | FR-5 | AD-37 | structural | register_state_written_once | Failure.resolution_state writes across apx/** |
 | `meta-property-has-check` | FR-56 | AD-33 | structural | every_structural_property_has_a_registered_check | this manifest vs CHECKS |
 | `meta-check-in-manifest` | FR-56 | AD-33 | structural | every_registered_check_is_in_the_manifest | CHECKS vs this manifest |
 | `meta-verbs-not-conflated` | FR-56 | AD-33 | structural | verbs_are_not_conflated | this manifest's verbs |
