@@ -40,6 +40,9 @@ class ZipExpander:
     def __init__(self, bounds: ExpansionBounds | None = None) -> None:
         self._bounds = bounds or ExpansionBounds.defaults()
 
+    def recognises(self, path: Path) -> bool:
+        return path.suffix.lower() == ".zip"     # a pure container (no own leaf body)
+
     def members(self, path: Path) -> list[tuple[str, bytes]] | None:
         if path.suffix.lower() != ".zip":
             return None
@@ -64,12 +67,15 @@ class SevenZipExpander:
     def __init__(self, bounds: ExpansionBounds | None = None) -> None:
         self._bounds = bounds or ExpansionBounds.defaults()
 
+    def recognises(self, path: Path) -> bool:
+        return path.suffix.lower() == ".7z"      # a pure container (no own leaf body)
+
     def members(self, path: Path) -> list[tuple[str, bytes]] | None:
         if path.suffix.lower() != ".7z":
             return None
-        import py7zr
-
         try:
+            import py7zr
+
             with py7zr.SevenZipFile(path, "r") as probe:
                 infos = [i for i in probe.list() if not i.is_directory]
                 _guard_archive(
@@ -79,10 +85,13 @@ class SevenZipExpander:
             with tempfile.TemporaryDirectory(prefix="apx-7z-") as td, \
                     py7zr.SevenZipFile(path, "r") as archive:
                 archive.extractall(path=td)
+                root = Path(td).resolve()
                 members: list[tuple[str, bytes]] = []
                 for info in infos:
-                    member = Path(td) / info.filename
-                    if member.is_file():
+                    member = (root / info.filename).resolve()
+                    # Defence-in-depth against a Zip-Slip arcname: read only what stayed inside the
+                    # temp dir (py7zr already sanitises on extract; this re-validates on read).
+                    if member.is_relative_to(root) and member.is_file():
                         members.append((info.filename, member.read_bytes()))
                 return members
         except ContainerUnopenable:

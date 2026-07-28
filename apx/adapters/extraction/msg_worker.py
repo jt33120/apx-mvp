@@ -67,7 +67,9 @@ def _embedded_bytes(att: Any) -> bytes | None:
 
     try:
         with tempfile.TemporaryDirectory() as td:
-            att.save(customPath=td)
+            # extractEmbedded=True is REQUIRED: without it extract-msg's save writes a text export
+            # into a subfolder (or raises), never a top-level .msg — so this path would always fail.
+            att.save(customPath=td, extractEmbedded=True)
             files = [os.path.join(td, f) for f in os.listdir(td)]
             files = [f for f in files if os.path.isfile(f)]
             if not files:

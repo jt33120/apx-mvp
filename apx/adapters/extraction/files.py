@@ -81,12 +81,14 @@ class FileExtractor:
 
     def _pdf(self, path: Path) -> ExtractOutcome:
         from pypdf import PdfReader
-        from pypdf.errors import PdfError
+        from pypdf.errors import (
+            PyPdfError,  # the base pypdf error; `PdfError` does not exist (6.14)
+        )
 
         try:
             reader = PdfReader(str(path))
             text = "\n".join((page.extract_text() or "") for page in reader.pages)
-        except (PdfError, OSError, ValueError):
+        except (PyPdfError, OSError, ValueError):
             return ExtractOutcome("", "pypdf", self.version, ErrorClass.UNREADABLE)
         if not text.strip():
             # A born-digital PDF with no text layer (e.g. a scan) — OCR is story 2.3.

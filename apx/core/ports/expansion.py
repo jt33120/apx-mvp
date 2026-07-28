@@ -33,3 +33,12 @@ class Expander(Protocol):
         ``ContainerUnopenable`` when a recognised container breaches a configured bound
         (member count / expansion ratio) — the use case turns that into a register entry."""
         ...
+
+    def recognises(self, path: Path) -> bool:
+        """True iff ``path`` is a **pure container** — all its content is members, no own leaf
+        body — that this expander would expand (a cheap suffix check, NO reading). Archives and
+        mailboxes are pure containers; an email/message/PDF is a leaf-with-attachments and returns
+        False here (its body is still a piece). The use case uses this to refuse a pure container
+        nested past the depth limit WITHOUT decompressing it, while still extracting a
+        leaf-with-attachments' body at the limit."""
+        ...

@@ -189,7 +189,7 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
     ),
     ConfigKey(
         "container_max_members", "int", 5000,
-        governs="the maximum number of members expanded across one ingestion, so a fan-out "
+        governs="the maximum members expanded from one top-level unit, so a container fan-out "
                 "cannot exhaust the machine (AD-17)",
         valid=lambda v: 1 <= v <= 1_000_000,
     ),

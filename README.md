@@ -288,7 +288,7 @@ The configuration keys (each editable as data, no redeploy):
 | `import_unit_max_bytes` | int | `209715200` | the per-unit size ceiling above which an import unit is `resource-exhausted` rather than read whole into memory (AD-17) |
 | `import_max_attempts` | int | `3` | attempts after which a unit that keeps killing the worker is quarantined and the job proceeds (AD-17) |
 | `container_max_depth` | int | `6` | maximum container nesting depth; deeper is a `container-unopenable` entry, never recursed (AD-17) |
-| `container_max_members` | int | `5000` | maximum members expanded across one ingestion, so a fan-out cannot exhaust the machine (AD-17) |
+| `container_max_members` | int | `5000` | maximum members expanded from one top-level unit, so a container fan-out cannot exhaust the machine (AD-17) |
 | `container_max_expansion_ratio` | int | `100` | maximum ratio of expanded bytes to a container's size; over it is a zip-bomb `container-unopenable` entry (AD-17) |
 | `attachments_per_message_max` | int | `1000` | maximum attachments expanded from one message before it is a `container-unopenable` entry (AD-17) |
 

@@ -4,7 +4,7 @@ baseline_commit: cd4bbe5acd6f4845ead6ac511cef0ce1eb6cdb01
 
 # Story 2.4: Container expansion and the unit of the denominator
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -267,8 +267,14 @@ claude-opus-4-8[1m]
 - **Container formats (Tasks 4–7):** `.7z` via **py7zr 1.1.3** (LGPL-2.1, in-process, lazy); PDF
   portfolio via pypdf's `.attachments`; `.mbox` via stdlib `mailbox` (each message → a member
   `.eml` that recurses, incl. its own attachments); nested `.msg`-in-`.msg` un-deferred — the
-  GPL-isolated worker serialises an embedded message back to `.msg` bytes via extract-msg's `save`
-  (an unserialisable one is surfaced with empty bytes and recorded as a failure, never dropped).
+  GPL-isolated worker serialises an embedded message back to `.msg` bytes via
+  `att.save(customPath=…, extractEmbedded=True)` (the kwarg is **required**; the review caught that
+  its omission made the path dead — without it extract-msg writes a text-export folder, not a
+  `.msg`). An unserialisable embedded message is surfaced with empty bytes and recorded as a
+  failure, never dropped. **Known limitation:** as in 2.3, the real-library `.msg` round-trip has no
+  synthesisable fixture, so the embedded-serialisation happy path is unit-tested against a fake that
+  models the real `extractEmbedded` contract + an end-to-end recursion test with the worker mocked;
+  the real extract-msg round-trip on a valid embedded `.msg` remains unverified.
 - **Config-bounded expansion (Tasks 1–2):** four AD-17 config keys (`container_max_depth`,
   `container_max_members`, `container_max_expansion_ratio`, `attachments_per_message_max`), an
   `ExpansionBounds` value object built from a tenant's config by both edges. The **ratio / member /
@@ -310,8 +316,12 @@ claude-opus-4-8[1m]
 - `apx/core/domain/failures.py` — `ErrorClass.CONTAINER_UNOPENABLE`
 - `apx/core/domain/inventory.py` — `unknown_cardinality_entries` (never summed) + words helper
 - `apx/core/domain/config.py` — 4 container config keys + `ExpansionBounds` + `expansion_bounds`
-- `apx/core/ports/expansion.py` — the `ContainerUnopenable` signal
-- `apx/core/app/ingest.py` — config-bounded depth/members, `container-unopenable`, `bounds` threaded
+- `apx/core/ports/expansion.py` — the `ContainerUnopenable` signal + `Expander.recognises`
+- `apx/core/app/ingest.py` — config-bounded depth (via `recognises`) / members, `container-unopenable`,
+  empty-container accounting, member-cap keeps the body, `bounds` threaded, per-unit member counter
+- `apx/adapters/extraction/files.py` — the `pypdf.errors.PyPdfError` fix (born-digital PDF)
+- `apx/adapters/extraction/msg_worker.py` — `extractEmbedded=True` (nested `.msg`)
+- `apx/adapters/expansion/composite.py` — `recognises` delegation
 - `apx/adapters/expansion/archives.py` — `ZipExpander` bounded + `SevenZipExpander` (py7zr)
 - `apx/adapters/expansion/mail.py` — `EmlExpander` attachment cap + `MboxExpander`
 - `apx/adapters/extraction/msg.py` — `MsgExpander` attachment cap + bounds
@@ -331,3 +341,65 @@ claude-opus-4-8[1m]
   register entry of cardinality `unknown`, refused by declared sizes before decompressing), and
   `Inventory.unknown_cardinality_entries` never summed + rendered in words (AD-38/AD-17). The
   permanent denominator + no-`int` property deferred to 2.7. Status → review.
+- 2026-07-28 — Addressed the adversarial 3-reviewer code review: 9 findings resolved (3 High, 1 Med,
+  5 Low/Nit). Status → done.
+
+## Senior Developer Review (AI)
+
+**Reviewed:** 2026-07-28 — adversarial three-reviewer pass, each execution-verified against a fresh
+tree, distinct lenses: **R1** expansion bounds & bomb-safety (AD-17), **R2** denominator (AD-38) &
+container correctness, **R3** test-quality / honesty / scope / regression. **Outcome: Changes
+Requested** — the bomb defence, AD-38 denominator core, provenance threading and edge-builder parity
+were confirmed sound, but three real correctness/honesty defects (two of them delivering AC content
+that did not run in production) had to be fixed.
+
+**Confirmed correct by the reviewers (no change):** the zip/7z bomb is refused on **declared** sizes
+before decompression (never read whole); nested & inner bombs caught; `.7z` Zip-Slip safe (py7zr
+sanitises); config-as-data end-to-end (both edges read `store.get_config`); AD-38
+`unknown_cardinality_entries` never summed and rendered in words (the forbidden "· N not indexed"
+appears nowhere); three-levels-deep provenance + custodian (incl. mixed `.zip→.7z→.eml`); mbox→`.eml`
+recursion; edge-builder AST-identity; member-cap consistency; the AD-28 `.msg` GPL seal; py7zr
+licence/lock accuracy; all completion-note gate numbers.
+
+### Action Items — all resolved
+
+**High**
+- [x] **R2/R3:** nested-`.msg` was **non-functional in production** — the worker called
+  `att.save(customPath=…)` WITHOUT `extractEmbedded=True`, so against the real extract-msg every
+  embedded message serialised to nothing (a text-export folder, not a `.msg`) and became an empty
+  failure; the completion note falsely claimed it worked and the test's fake hid it. Fixed: added
+  `extractEmbedded=True`; the test fake now asserts the kwarg (locks it) + an end-to-end recursion
+  test; the note is corrected and states the honest real-`.msg` limitation.
+- [x] **R1 (High) / R2 (Low-Med):** a recognised-but-**empty** container (`.zip`/`.7z`/`.mbox`) was
+  **silently dropped** — neither corpus, register, nor exclusion — breaking the inventory guarantee
+  that is this story's charter. Fixed: `_ingest_one` now treats empty `members` as *not expanded*
+  and falls through to the extractor, remapping a recognised empty archive to `extracted-empty`
+  (an email with a body but no attachments still yields its body). Tests for each empty form added.
+- [x] **R2:** `apx/adapters/extraction/files.py` imported `pypdf.errors.PdfError`, which **does not
+  exist** in pypdf 6.14 — so **every** born-digital PDF raised `ImportError` (PDF completely broken,
+  a portfolio's cover text silently lost). Pre-existing (from the 2.3 slice), never caught for lack
+  of a PDF happy-path test. Fixed: `PdfError` → `PyPdfError`; a born-digital-PDF text test + a
+  portfolio cover-text test added.
+
+**Medium**
+- [x] **R1:** the depth bound was enforced *after* `members()` decompressed the immediate level.
+  Fixed: added `Expander.recognises(path)` (a cheap suffix check for a *pure* container); the use
+  case refuses an over-deep pure container BEFORE decompressing, while a leaf-with-attachments at
+  the limit still yields its body.
+
+**Low / Nit**
+- [x] **R1/R2:** the member-cap early-`return` folded a readable email/`.msg` body into "contents
+  unknown". Fixed: `break` instead of `return` so the container body is still extracted.
+- [x] **R1:** `container_max_members` scope differed (sync per-folder vs worker per-unit). Fixed:
+  `ingest_folder` now uses a per-top-level-unit counter; the key's `governs`/README say "per
+  top-level unit".
+- [x] **R1:** a member spool `write_bytes` `OSError` could escape `_ingest_one` (500 on the sync
+  path). Fixed: wrapped → the member becomes a recorded failure, never an outage.
+- [x] **R1:** the `.7z` readback now re-validates each member path stays inside the temp dir
+  (defence-in-depth against a Zip-Slip arcname); py7zr imports moved inside the try.
+- [x] **R3:** the stale `test_msg_expansion.py` docstring (2.3 "skipped") was refreshed; the missing
+  end-to-end nested-`.msg` recursion test was added.
+
+**Process note:** one reviewer's first run returned a spurious non-review (a memory-protocol message,
+0 tool calls) and was re-dispatched; the shared working tree across three concurrently mutation-
+testing reviewers again argues for isolated worktrees next time.

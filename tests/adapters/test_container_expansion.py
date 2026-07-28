@@ -16,13 +16,38 @@ import pytest
 
 from apx.adapters.expansion.archives import SevenZipExpander, ZipExpander
 from apx.adapters.expansion.composite import CompositeExpander
-from apx.adapters.expansion.mail import MboxExpander
+from apx.adapters.expansion.mail import EmlExpander, MboxExpander
 from apx.adapters.expansion.pdf import PdfPortfolioExpander
 from apx.adapters.extraction.files import FileExtractor
 from apx.core.app.ingest import ingest_folder
 from apx.core.domain.config import ExpansionBounds
 from apx.core.domain.failures import ErrorClass
 from apx.core.ports.expansion import ContainerUnopenable
+
+
+def _text_pdf(path: Path, text: str) -> None:
+    """A minimal born-digital PDF with one line of extractable text (pypdf recovers the xref)."""
+    stream = f"BT /F1 18 Tf 20 100 Td ({text}) Tj ET".encode()
+    path.write_bytes(
+        b"%PDF-1.4\n"
+        b"1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n"
+        b"2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n"
+        b"3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 144]"
+        b"/Resources<</Font<</F1 4 0 R>>>>/Contents 5 0 R>>endobj\n"
+        b"4 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n"
+        b"5 0 obj<</Length " + str(len(stream)).encode() + b">>stream\n" + stream
+        + b"\nendstream endobj\ntrailer<</Root 1 0 R/Size 6>>\nstartxref\n0\n%%EOF\n")
+
+
+def _eml(path: Path, subject: str, body: str, attachments: dict[str, bytes] | None = None) -> None:
+    from email.message import EmailMessage
+
+    msg = EmailMessage()
+    msg["From"], msg["To"], msg["Subject"] = "a@x.fr", "b@y.fr", subject
+    msg.set_content(body)
+    for name, data in (attachments or {}).items():
+        msg.add_attachment(data, maintype="application", subtype="octet-stream", filename=name)
+    path.write_bytes(msg.as_bytes())
 
 
 def _zip_bytes(entries: dict[str, bytes]) -> bytes:
@@ -164,3 +189,68 @@ def test_a_container_nested_past_the_depth_limit_is_container_unopenable(tmp_pat
     assert [f.error_class for f in result.failures] == [ErrorClass.CONTAINER_UNOPENABLE]
     assert result.inventory.in_corpus == 0                   # deep.txt never reached
     assert "nesting depth" in (result.failures[0].detail or "")
+
+
+# ── FR-6: a recognised but EMPTY container is recorded, never silently dropped ────────────────
+def test_an_empty_archive_is_extracted_empty_not_vanished(tmp_path: Path) -> None:
+    (tmp_path / "vide.zip").write_bytes(_zip_bytes({}))
+    result = _ingest(tmp_path)
+    assert result.inventory.submitted == 1 and result.inventory.in_corpus == 0
+    assert [f.error_class for f in result.failures] == [ErrorClass.EXTRACTED_EMPTY]
+    assert result.inventory.is_consistent()             # accounted, not a silent 0/0
+
+
+def test_an_empty_mbox_is_extracted_empty_not_vanished(tmp_path: Path) -> None:
+    (tmp_path / "vide.mbox").write_bytes(b"")           # a valid but empty mailbox
+    result = ingest_folder(tmp_path, matter="m", tenant="t", extractor=FileExtractor(),
+                           custodian="C", expander=CompositeExpander([MboxExpander()]))
+    assert result.inventory.submitted == 1
+    assert [f.error_class for f in result.failures] == [ErrorClass.EXTRACTED_EMPTY]
+
+
+def test_an_email_with_a_body_but_no_attachments_still_yields_its_body(tmp_path: Path) -> None:
+    # EmlExpander returns [] (no attachments) → the .eml must NOT vanish: its body is a piece.
+    _eml(tmp_path / "note.eml", "Sans PJ", "Le corps du courriel sans pièce jointe.")
+    result = ingest_folder(tmp_path, matter="m", tenant="t", extractor=FileExtractor(),
+                           custodian="C", expander=CompositeExpander([EmlExpander()]))
+    assert result.inventory.in_corpus == 1              # the body, not lost
+    assert "corps du courriel" in result.pieces[0].full_text
+
+
+# ── born-digital PDF (locks the pypdf.errors.PyPdfError fix) + portfolio cover text ───────────
+def test_a_born_digital_pdf_extracts_its_text(tmp_path: Path) -> None:
+    # Before the PdfError→PyPdfError fix, `_pdf` raised ImportError on EVERY pdf — this locks it.
+    _text_pdf(tmp_path / "acte.pdf", "Conclusions en defense")
+    out = FileExtractor().extract(tmp_path / "acte.pdf")
+    assert out.ok and out.method == "pypdf" and "Conclusions en defense" in out.text
+
+
+def test_a_pdf_portfolio_yields_its_embedded_members_and_its_cover_text(tmp_path: Path) -> None:
+    from pypdf import PdfReader, PdfWriter
+
+    p = tmp_path / "portfolio.pdf"
+    _text_pdf(p, "Page de garde du portfolio")
+    reader = PdfReader(str(p))
+    writer = PdfWriter()
+    writer.append(reader)
+    writer.add_attachment("annexe.txt", b"contenu de l'annexe")
+    with p.open("wb") as fh:
+        writer.write(fh)
+    result = ingest_folder(tmp_path, matter="m", tenant="t", extractor=FileExtractor(),
+                           custodian="C", expander=CompositeExpander([PdfPortfolioExpander()]))
+    provs = {pc.provenance_path for pc in result.pieces}
+    assert "portfolio.pdf" in provs                     # the cover text — a piece (AC1)
+    assert "portfolio.pdf/annexe.txt" in provs          # the embedded member — N+1
+
+
+# ── the member-cap keeps an email/.msg body rather than folding it into "unknown" (R2 Low) ────
+def test_the_member_cap_still_extracts_the_container_body(tmp_path: Path) -> None:
+    _eml(tmp_path / "gros.eml", "Deux PJ", "Corps important à ne pas perdre.",
+         {"a.txt": b"annexe A", "b.txt": b"annexe B"})
+    result = ingest_folder(
+        tmp_path, matter="m", tenant="t", extractor=FileExtractor(), custodian="C",
+        expander=CompositeExpander([EmlExpander()]), bounds=_bounds(max_members=1))
+    # 1 attachment (before the cap) + the body = 2 pieces; the container is 1 container-unopenable.
+    assert result.inventory.in_corpus == 2 and result.inventory.unknown_cardinality_entries == 1
+    assert any("Corps important" in pc.full_text for pc in result.pieces)   # body NOT folded away
+    assert result.inventory.is_consistent()

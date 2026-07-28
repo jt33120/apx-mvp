@@ -21,6 +21,9 @@ class PdfPortfolioExpander:
     def __init__(self, bounds: ExpansionBounds | None = None) -> None:
         self._bounds = bounds or ExpansionBounds.defaults()
 
+    def recognises(self, path: Path) -> bool:
+        return False     # a PDF is a leaf (its cover text is a piece), not a pure container
+
     def members(self, path: Path) -> list[tuple[str, bytes]] | None:
         if path.suffix.lower() != ".pdf":
             return None

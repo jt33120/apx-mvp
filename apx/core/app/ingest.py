@@ -133,7 +133,18 @@ def _ingest_one(
         return
 
     expanded = False
+    recognised_empty = False
     if expander is not None:
+        if depth >= bounds.max_depth and expander.recognises(path):
+            # A PURE container (archive/mailbox) nested past the configured depth is refused
+            # WITHOUT decompressing — one `container-unopenable` entry of cardinality `unknown`
+            # (AD-17/AD-38). A leaf-with-attachments (.eml/.msg/.pdf) at the limit is NOT refused
+            # here: it still yields its body, and its members (leaves, or containers refused one
+            # level further down) are not lost.
+            result.failures.append(IngestedFailure(
+                path.name, prov, matter, tenant, ErrorClass.CONTAINER_UNOPENABLE,
+                f"nesting depth exceeds the configured limit of {bounds.max_depth}"))
+            return
         try:
             members = expander.members(path)
         except ContainerUnopenable as cu:
@@ -146,30 +157,38 @@ def _ingest_one(
             result.failures.append(IngestedFailure(
                 path.name, prov, matter, tenant, ErrorClass.EXTRACTION_ERROR, str(exc)))
             return
-        if members is not None:
-            if depth >= bounds.max_depth:
-                # A container nested past the configured depth is refused, not recursed — one
-                # `container-unopenable` entry of cardinality `unknown` (AD-17/AD-38).
-                result.failures.append(IngestedFailure(
-                    path.name, prov, matter, tenant, ErrorClass.CONTAINER_UNOPENABLE,
-                    f"nesting depth exceeds the configured limit of {bounds.max_depth}"))
-                return
+        if members:
             expanded = True
             for name, content in members:
                 if counter[0] >= bounds.max_members:
                     # The cross-ingestion fan-out backstop: this container could not be fully
-                    # expanded, so it is one `container-unopenable` entry (contents partly unknown).
+                    # expanded → one `container-unopenable` entry (contents partly unknown). Break
+                    # rather than return, so the container's OWN body (an .eml/.msg body) is still
+                    # extracted as a piece rather than folded away.
                     result.failures.append(IngestedFailure(
                         path.name, prov, matter, tenant, ErrorClass.CONTAINER_UNOPENABLE,
                         f"total expanded members exceed the limit of {bounds.max_members}"))
-                    return
+                    break
                 counter[0] += 1
                 member_path = tmpdir / f"m{counter[0]}{Path(name).suffix}"
-                member_path.write_bytes(content)
+                try:
+                    member_path.write_bytes(content)
+                except OSError as exc:
+                    # A spool write that fails (disk full) is this member's failure, not an escaping
+                    # exception that would 500 the sync path — recorded, never dropped.
+                    result.failures.append(IngestedFailure(
+                        name, f"{prov}/{name}", matter, tenant, ErrorClass.EXTRACTION_ERROR,
+                        f"could not spool the member ({type(exc).__name__})"))
+                    continue
                 _ingest_one(
                     member_path, f"{prov}/{name}", depth + 1, result=result, matter=matter,
                     tenant=tenant, custodian=custodian, extractor=extractor, expander=expander,
                     now=now, tmpdir=tmpdir, counter=counter, max_bytes=max_bytes, bounds=bounds)
+        elif members is not None:
+            # A recognised but EMPTY container (members == []). It is NOT transparent: fall through
+            # to the extractor so it is accounted — an empty archive lands `extracted-empty`, an
+            # email with a body but no attachments still yields its body (FR-6, never a silent 0/0).
+            recognised_empty = True
 
     try:
         outcome: ExtractOutcome = extractor.extract(path)
@@ -199,9 +218,13 @@ def _ingest_one(
         ))
     elif not expanded:
         # An ordinary leaf that produced no text — enumerated, never dropped.
-        result.failures.append(IngestedFailure(
-            path.name, prov, matter, tenant, outcome.error_class or ErrorClass.UNKNOWN))
-    # else: a container with no own text (a .zip) — transparent, its members counted.
+        cls = outcome.error_class or ErrorClass.UNKNOWN
+        if recognised_empty and cls is ErrorClass.UNSUPPORTED_FORMAT:
+            # A recognised but empty container (an empty archive): we DO support the format — it
+            # simply had nothing inside — so it is `extracted-empty`, not `unsupported-format`.
+            cls = ErrorClass.EXTRACTED_EMPTY
+        result.failures.append(IngestedFailure(path.name, prov, matter, tenant, cls))
+    # else: a container with own members but no own text (a .zip) — transparent, members counted.
 
 
 def ingest_one_file(
@@ -248,15 +271,17 @@ def ingest_folder(
     optional — without it, containers are ingested as ordinary files (contents unexpanded)."""
     result = IngestionResult()
     now = datetime.now(UTC)
-    counter = [0]
     resolved = bounds or ExpansionBounds.defaults()
     with tempfile.TemporaryDirectory(prefix="apx-expand-") as tmp:
         tmpdir = Path(tmp)
         for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+            # A fresh member counter per top-level unit — the SAME scope the worker's
+            # ``ingest_one_file`` uses (``container_max_members`` is per top-level unit, so the sync
+            # whole-folder path and the resumable per-unit path enforce it identically).
             _ingest_one(
                 path, str(path.relative_to(folder)), 0, result=result, matter=matter,
                 tenant=tenant, custodian=custodian, extractor=extractor, expander=expander,
-                now=now, tmpdir=tmpdir, counter=counter, max_bytes=max_bytes, bounds=resolved)
+                now=now, tmpdir=tmpdir, counter=[0], max_bytes=max_bytes, bounds=resolved)
     # The guarantee must hold on every result (FR-6 / SM-3 shape).
     result.inventory.require_consistent()
     return result

@@ -20,3 +20,6 @@ class CompositeExpander:
             if result is not None:
                 return result
         return None
+
+    def recognises(self, path: Path) -> bool:
+        return any(expander.recognises(path) for expander in self._expanders)
