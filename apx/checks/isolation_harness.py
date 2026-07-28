@@ -168,11 +168,28 @@ def _extraction_trees() -> tuple[list[tuple[Path, ast.Module]], list[str]]:
     return trees, unparseable
 
 
+def _dynamic_import_target(node: ast.AST) -> str | None:
+    """The string module name of a DYNAMIC import — ``importlib.import_module("x")`` or
+    ``__import__("x")`` — or None. Dynamic import is the one spelling the static ``_import_modules``
+    leg cannot see, so the GPL seal scans for it explicitly (a string target IS decidable)."""
+    if not isinstance(node, ast.Call):
+        return None
+    dotted = _call_dotted(node)
+    is_dynamic = dotted in ("importlib.import_module", "__import__") or (
+        dotted is not None and dotted.endswith(".import_module"))
+    if is_dynamic and node.args and isinstance(node.args[0], ast.Constant) \
+            and isinstance(node.args[0].value, str):
+        return node.args[0].value
+    return None
+
+
 def no_extract_msg_import_outside_worker(roots: Iterable[Path] | None = None) -> CheckResult:
     """``extract_msg`` (GPL-3.0) is imported ONLY inside the out-of-process worker module
     (AD-28). The proprietary product process never imports it — the subprocess boundary is the
     licence boundary — so a single ``import`` cannot contaminate the core; a malformed compound
-    file crashes the isolated subprocess, not the worker (AD-17)."""
+    file crashes the isolated subprocess, not the worker (AD-17). Both static imports (any
+    aliased/from/dotted spelling) and a dynamic ``importlib.import_module``/``__import__`` of a
+    string literal are caught."""
     name, ad = "extract_msg is imported only in the isolated worker", "AD-28"
     trees, unparseable = _trees(roots)
     if unparseable:
@@ -181,23 +198,39 @@ def no_extract_msg_import_outside_worker(roots: Iterable[Path] | None = None) ->
         if roots is None and path == _MSG_WORKER:
             continue  # the one module allowed to import the GPL parser (it runs out-of-process)
         for node in ast.walk(tree):
-            for module in _import_modules(node):
-                if module == "extract_msg" or module.startswith("extract_msg."):
-                    return CheckResult(
-                        name, ad, False,
-                        f"{_where(path)}:{node.lineno} imports extract_msg (GPL-3.0) outside the "
-                        "out-of-process worker — the product process must never import it (AD-28)")
+            hit = next((m for m in _import_modules(node)
+                        if m == "extract_msg" or m.startswith("extract_msg.")), None)
+            dyn = _dynamic_import_target(node)
+            if dyn == "extract_msg" or (dyn is not None and dyn.startswith("extract_msg.")):
+                hit = dyn
+            if hit is not None:
+                return CheckResult(
+                    name, ad, False,
+                    f"{_where(path)}:{node.lineno} imports extract_msg (GPL-3.0) outside the "
+                    "out-of-process worker — the product process must never import it (AD-28)")
     return CheckResult(
         name, ad, True,
         f"extract_msg is imported only in the isolated worker ({len(trees)} file(s))")
 
 
+# Process-spawning primitives OTHER than the subprocess module — `os.system`/`popen`/`exec*`/
+# `spawn*`/`posix_spawn*` and `pty.spawn`/`fork`. AD-28's rule is "no subprocess CALL outside
+# extraction"; an exec is such a call and needs no `import subprocess`, so a call-site leg is
+# required alongside the import leg (the import claim alone is false — os is imported everywhere).
+def _is_process_spawn(dotted: str) -> bool:
+    if dotted in ("os.system", "os.popen", "os.posix_spawn", "os.posix_spawnp",
+                  "pty.spawn", "pty.fork"):
+        return True
+    return dotted.startswith("os.exec") or dotted.startswith("os.spawn")
+
+
 def no_subprocess_call_outside_extraction(roots: Iterable[Path] | None = None) -> CheckResult:
-    """A ``subprocess`` reach appears ONLY under ``adapters/extraction`` (AD-28) — extraction
-    engines run out-of-process there and nowhere else, so every exec boundary is one audited
-    place. (The build-time harness in ``checks/`` legitimately runs a subprocess and is excluded
-    from the runtime tree by ``_RUNTIME_EXCLUDE``.) You cannot exec without importing the module,
-    so the import leg catches every spelling."""
+    """Process spawning appears ONLY under ``adapters/extraction`` (AD-28) — extraction engines
+    run out-of-process there and nowhere else, so every exec boundary is one audited place. Two
+    legs: an IMPORT of ``subprocess`` (any spelling), and a CALL SITE of a non-subprocess spawn
+    (``os.system``/``popen``/``exec*``/``spawn*``/``posix_spawn``, ``pty.spawn``/``fork``) — the
+    latter needs no ``import subprocess``, so the import leg alone would miss it. (The build-time
+    harness in ``checks/`` legitimately runs a subprocess and is excluded from the runtime tree.)"""
     name, ad = "no subprocess call outside adapters/extraction", "AD-28"
     trees, unparseable = _trees(roots)
     if unparseable:
@@ -213,31 +246,84 @@ def no_subprocess_call_outside_extraction(roots: Iterable[Path] | None = None) -
                         f"{_where(path)}:{node.lineno} imports subprocess outside "
                         "adapters/extraction — extraction engines run out-of-process only there, "
                         "nowhere else (AD-28)")
+            if isinstance(node, ast.Call):
+                dotted = _call_dotted(node)
+                if dotted is not None and _is_process_spawn(dotted):
+                    return CheckResult(
+                        name, ad, False,
+                        f"{_where(path)}:{node.lineno} spawns a process ({dotted}) outside "
+                        "adapters/extraction — every exec boundary is one audited place (AD-28)")
     return CheckResult(
         name, ad, True,
-        f"subprocess is reached only under adapters/extraction ({len(trees)} file(s))")
+        f"process spawning is confined to adapters/extraction ({len(trees)} file(s))")
 
 
-def no_stderr_none_in_extraction(roots: Iterable[Path] | None = None) -> CheckResult:
-    """No ``stderr=None`` within ``adapters/extraction`` (AD-28). A subprocess's stderr is always
-    captured, never inherited: the extractors emit **document fragments** on stderr for malformed
-    input, and an inherited stderr would leak them into a log, the terminal, or an export."""
-    name, ad = "no stderr=None in adapters/extraction", "AD-28"
+_SUBPROCESS_EXEC = frozenset({"run", "Popen", "call", "check_call", "check_output"})
+
+
+def _subprocess_imported_names(tree: ast.Module) -> set[str]:
+    """The names bound by ``from subprocess import run, Popen [as p]`` in this module — so a bare
+    call is a subprocess one ONLY when the name is really imported, never a local ``run``."""
+    names: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.module == "subprocess":
+            names.update(a.asname or a.name for a in node.names)
+    return names
+
+
+def _is_subprocess_exec_call(node: ast.Call, imported: set[str]) -> bool:
+    """A subprocess run/Popen/call/check_* call — ``subprocess.<fn>`` (qualified), or a bare name
+    ONLY if ``from subprocess import``-ed here (so a local function named ``run`` is not it)."""
+    dotted = _call_dotted(node)
+    if dotted is None:
+        return False
+    parts = dotted.split(".")
+    if len(parts) == 2 and parts[0] == "subprocess" and parts[1] in _SUBPROCESS_EXEC:
+        return True
+    return len(parts) == 1 and parts[0] in imported and parts[0] in _SUBPROCESS_EXEC
+
+
+def _captures_stderr(call: ast.Call) -> bool:
+    """The call captures stderr: ``capture_output=True``, or ``stderr`` set to ``PIPE``/``DEVNULL``
+    (bare or ``subprocess.``-qualified). An OMITTED stderr (inherited by default), ``stderr=None``,
+    ``sys.stderr``, ``subprocess.STDOUT`` (merges into the stdout/JSON channel), or a raw fd all
+    fail — none captures it."""
+    kws = {kw.arg: kw.value for kw in call.keywords if kw.arg}
+    co = kws.get("capture_output")
+    if isinstance(co, ast.Constant) and co.value is True:
+        return True
+    se = kws.get("stderr")
+    if se is None:  # the stderr keyword is absent → inherited
+        return False
+    if isinstance(se, ast.Attribute):
+        return se.attr in ("PIPE", "DEVNULL")
+    return isinstance(se, ast.Name) and se.id in ("PIPE", "DEVNULL")
+
+
+def extraction_subprocess_captures_stderr(roots: Iterable[Path] | None = None) -> CheckResult:
+    """Every subprocess call within ``adapters/extraction`` **captures** stderr —
+    ``capture_output=True`` or ``stderr=PIPE``/``DEVNULL`` — never inheriting it (AD-28). The
+    extractors emit **document fragments** on stderr for malformed input (the *normal* case at the
+    design target); an inherited stderr — the default when omitted, or ``stderr=None`` /
+    ``sys.stderr`` / ``subprocess.STDOUT`` / a raw fd — would leak them into a log, the terminal,
+    or (via STDOUT) the JSON channel the parent parses. Scoped to the extraction adapters."""
+    name, ad = "extraction subprocess calls capture stderr", "AD-28"
     trees, unparseable = (_extraction_trees() if roots is None else _load_trees(list(roots)))
     if unparseable:
         return _fail_closed(name, ad, unparseable)
     for path, tree in trees:
+        imported = _subprocess_imported_names(tree)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call):
-                for kw in node.keywords:
-                    if kw.arg == "stderr" and isinstance(kw.value, ast.Constant) \
-                            and kw.value.value is None:
-                        return CheckResult(
-                            name, ad, False,
-                            f"{_where(path)}:{node.lineno} sets stderr=None in an extraction "
-                            "adapter — stderr must be captured, never inherited (AD-28)")
+            if isinstance(node, ast.Call) and _is_subprocess_exec_call(node, imported) \
+                    and not _captures_stderr(node):
+                return CheckResult(
+                    name, ad, False,
+                    f"{_where(path)}:{node.lineno} a subprocess call in an extraction adapter does "
+                    "not capture stderr (need capture_output=True or stderr=PIPE/DEVNULL) — an "
+                    "inherited stderr leaks document fragments (AD-28)")
     return CheckResult(
-        name, ad, True, f"no stderr=None in adapters/extraction ({len(trees)} file(s))")
+        name, ad, True,
+        f"every extraction subprocess call captures stderr ({len(trees)} file(s))")
 
 
 # A ``_fixtures`` / ``fixtures`` path SEGMENT in a string literal (a dir, with or without a trailing
@@ -401,12 +487,3 @@ def no_tenant_identifier_in_source(roots: Iterable[Path] | None = None) -> Check
                     "tenant is a filter argument and a row key, never a branch (FR-30/AD-24)")
     return CheckResult(name, ad, True,
                        f"no tenant branch in {len(trees)} runtime module(s)")
-
-
-def run() -> list[CheckResult]:
-    return [
-        no_runtime_import_from_tests(),
-        no_fixture_path_in_runtime(),
-        no_egress_call_site_outside_adapters(),
-        no_tenant_identifier_in_source(),
-    ]

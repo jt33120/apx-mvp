@@ -4,7 +4,7 @@ baseline_commit: ebc2bc1763a03ecb7dc2ea20264ebfdc270c861b
 
 # Story 2.3: Multi-format extraction — the largest surface
 
-Status: review
+Status: done
 
 <!-- Note: Validation is optional. Run validate-create-story for quality check before dev-story. -->
 
@@ -347,6 +347,14 @@ claude-opus-4-8[1m]
   provenance recorded, inventory consistent.
 - **Deferred to 2.4 (stated, not silently dropped):** recursive `.msg`-in-`.msg` / nested-container
   expansion, depth/ratio bounds, and the `container-unopenable` register class.
+- **Known limitation (honest):** a VALID Outlook `.msg` cannot be synthesised from the standard
+  library, so the *success* path is covered by (a) the worker's transform logic against a fake
+  message object, (b) the adapter's mapping with the subprocess mocked, and (c) verification that
+  every attribute the worker reads (`openMsg`, `.sender/.to/.cc/.date/.subject/.body/.attachments/
+  .close`, attachment `.data/.longFilename/.shortFilename`) exists in the installed extract-msg
+  0.56.0. What remains UNVERIFIED against the real library is the end-to-end *semantics* on a valid
+  file (that `.body` carries the reply chain inline, that a real parse keeps stdout pure). The
+  failure/crash/no-leak paths ARE exercised against the real subprocess.
 - **Dependencies:** `openpyxl==3.1.5` (MIT) and `extract-msg==0.56.0` (**GPL-3.0**, out-of-process
   only) added to `pyproject.toml` + `uv.lock` via `uv add`; web-verified both pins are current.
 - **Gate:** ruff clean (`apx tests`); **557 passed, 9 skipped** (+31 over baseline, no regressions);
@@ -388,3 +396,62 @@ claude-opus-4-8[1m]
   `.msg` surface (extract-msg out-of-process + GPL-isolated, `MsgExtractor`/`MsgExpander`), sealed by
   three AD-28 structural checks, with the subprocess I/O no-leak discipline. Nested `.msg`-in-`.msg`
   deferred to 2.4. Status → review.
+- 2026-07-28 — Addressed the adversarial 3-reviewer code review: 11 findings resolved (2 High, 4 Med,
+  5 Low). Status → done.
+
+## Senior Developer Review (AI)
+
+**Reviewed:** 2026-07-28 — adversarial three-reviewer pass, each execution-verified against a fresh
+tree, distinct lenses: **R1** AD-28 isolation/licence/subprocess-security, **R2** correctness &
+data-integrity, **R3** test-quality/honesty/scope. **Outcome: Changes Requested** — implemented
+behaviour was correct and the gate honestly green, but binding AD-28 guarantees were under-locked
+and two seal checks were narrower than the property they claimed. All findings resolved below.
+
+**Confirmed correct by the reviewers (no change):** extract-msg 0.56.0 attribute names verified
+against the installed library (the valid-`.msg` success-path risk is retired); AC2 N+1 / custodian /
+provenance; AC5 empty-`.msg` handling (the `MsgExpander→None` design); Composite/OCR routing;
+edge-builder non-duplication (AST-identical); AD-40 method+version; licence honesty; crash/hang/
+timeout isolation and the no-leak path (empirically proven); scope discipline (no over-build); the
+2.4 deferral is genuine per Story 2.4's own ACs.
+
+### Action Items — all resolved
+
+**High**
+- [x] **R2:** `_xlsx` did not catch `ET.ParseError` (valid-zip/malformed-sheet-XML `.xlsx` escaped
+  → misclassified `extraction-error` and routed into ingest's `str(exc)` leak path). Fixed: a broad
+  catch in `_xlsx_read` maps every openpyxl failure to `unreadable`, never leaking `str(exc)`; test
+  `test_xlsx_with_malformed_sheet_xml_is_unreadable`.
+- [x] **R3:** AC8 "stderr never inherited" was **unproven** — a mutation that inherited stderr
+  reintroduced a real fd2 document leak and stayed green. Fixed: (a) a `capfd` fd-level test locks
+  it; (b) the check now requires every extraction subprocess call to **capture** stderr.
+
+**Medium**
+- [x] **R2/R3:** `.xlsx` `data_only=True` silently dropped non-cached formula content (a false *not
+  in corpus*) and the test that named it was vacuous (a literal, not a formula). Fixed: dual-read
+  fallback (empty under `data_only` → re-read formulas/labels so the sheet is searchable — recall
+  over precision); the test now uses a real formula and a formula-only fallback case is added.
+- [x] **R3:** AC6's required "worker that exceeds the timeout" test was absent. Added
+  `test_a_worker_that_exceeds_the_timeout_is_unreadable_not_an_outage` (real `TimeoutExpired`).
+- [x] **R1:** `no_subprocess_call_outside_extraction` was import-only (missed `os.system`/`exec*`/
+  `spawn*`/`pty.spawn`). Added a call-site leg; corrected the false "cannot exec without importing"
+  docstring.
+- [x] **R1:** the stderr seal matched only literal `stderr=None` (missed omission / `sys.stderr` /
+  `subprocess.STDOUT` / raw fd). Strengthened to require capture and **renamed**
+  `extraction_subprocess_captures_stderr` for honesty; evasion tests added.
+
+**Low**
+- [x] **R2:** `MsgExtractor` trusted present-but-empty worker fields; `.ok` used `bool(text)` not
+  `.strip()`. Added a guard (whitespace-only text → `extracted-empty`; empty method/version →
+  constants).
+- [x] **R1:** the GPL seal missed dynamic `importlib.import_module`/`__import__("extract_msg")`.
+  Added a dynamic-import scan.
+- [x] **R1:** the vestigial `isolation_harness.run()` (4 stale checks) was deleted (the registry is
+  authoritative).
+- [x] **R3:** honesty — a "Known limitation" line about the untested valid-`.msg` *semantics* was
+  added to the Completion Notes (previously only in test docstrings).
+- [x] **R3:** `msg_worker` imported `extract_msg` OUTSIDE the `redirect_stdout` guard (a latent
+  stdout-corruption on the success path). Moved inside the guard.
+
+**Process note (not a code defect):** the three reviewers shared one working tree and mutation-tested
+concurrently, briefly corrupting each other's gate runs. Future adversarial passes should run each
+reviewer in an isolated git worktree.

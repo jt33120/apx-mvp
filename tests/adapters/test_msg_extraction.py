@@ -112,3 +112,34 @@ def test_a_malformed_msg_leaks_no_seeded_token_into_the_register_or_a_log(
     assert failure.error_class is ErrorClass.UNREADABLE
     assert seed not in (failure.detail or "")            # no document byte in the register detail
     assert seed not in caplog.text                       # nor in any emitted log
+
+
+def test_the_child_subprocess_stderr_never_reaches_the_parent_fd(
+        tmp_path: Path, capfd: pytest.CaptureFixture[str]) -> None:
+    # AC8 lock at the file-descriptor level: capfd captures the CHILD's fd1/fd2. With
+    # capture_output=True the child's streams are PIPEs, never the parent's fds, so a seeded token
+    # in a malformed .msg reaches neither. A mutation that inherited stderr would put the parser's
+    # document fragments on the parent fd2 and fail this — which .detail/caplog tests cannot see.
+    pytest.importorskip("extract_msg")
+    seed = "SEEDED-FD-LEAK-4c8e17"
+    p = tmp_path / "fuite.msg"
+    p.write_bytes(f"garbage {seed} garbage".encode())
+    MsgExtractor().extract(p)
+    captured = capfd.readouterr()
+    assert seed not in captured.err and seed not in captured.out
+
+
+def test_a_worker_that_exceeds_the_timeout_is_unreadable_not_an_outage(
+        monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    # AC6's "worker that exceeds the timeout" half (the malformed-.msg half is the real-subprocess
+    # test above): a genuine subprocess.TimeoutExpired must map to unreadable, never raise.
+    import subprocess
+
+    def _raise_timeout(*args: object, **kwargs: object) -> None:
+        raise subprocess.TimeoutExpired(cmd="msg_worker", timeout=0.01)
+
+    monkeypatch.setattr(msgmod.subprocess, "run", _raise_timeout)
+    p = tmp_path / "lent.msg"
+    p.write_bytes(b"placeholder; subprocess.run is patched to time out")
+    out = MsgExtractor().extract(p)
+    assert not out.ok and out.error_class is ErrorClass.UNREADABLE

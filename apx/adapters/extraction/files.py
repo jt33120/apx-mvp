@@ -113,34 +113,49 @@ class FileExtractor:
         return ExtractOutcome(text, "docx", self.version)
 
     def _xlsx(self, path: Path) -> ExtractOutcome:
-        """A .xlsx read across every sheet — cell VALUES only, ``data_only`` so a saved
-        formula surfaces as its cached value, never its ``=A1+A2`` text. ``read_only``
-        streams the workbook so a large sheet need not load whole (AD-17 memory bound).
-        openpyxl (AD-28's named Office tool, MIT, in-process) is imported lazily so the
-        app still imports where it is absent."""
-        import openpyxl
-        from openpyxl.utils.exceptions import InvalidFileException
-
-        _readerr = (InvalidFileException, zipfile.BadZipFile, KeyError, OSError, ValueError)
-        try:
-            workbook = openpyxl.load_workbook(path, read_only=True, data_only=True)
-        except _readerr:
+        """A .xlsx read across every sheet. ``data_only`` reads a formula's **cached value**,
+        never its ``=A1+A2`` text — so a normal Excel/LibreOffice workbook contributes its
+        computed values with no formula noise. But a workbook whose writer cached **no** values
+        (a purely programmatic export) would read empty under ``data_only``; rather than a false
+        *not in corpus* (an absence claim would then wrongly assert it was searched), fall back to
+        reading the formulas/literals so the sheet is still searchable — recall over precision.
+        ``read_only`` streams so a large sheet need not load whole (AD-17)."""
+        text = self._xlsx_read(path, data_only=True)
+        if text is None:
             return ExtractOutcome("", "xlsx", self.version, ErrorClass.UNREADABLE)
+        if not text.strip():
+            fallback = self._xlsx_read(path, data_only=False)
+            if fallback is None:
+                return ExtractOutcome("", "xlsx", self.version, ErrorClass.UNREADABLE)
+            text = fallback
+        if not text.strip():
+            return ExtractOutcome("", "xlsx", self.version, ErrorClass.EXTRACTED_EMPTY)
+        return ExtractOutcome(text, "xlsx", self.version)
+
+    def _xlsx_read(self, path: Path, *, data_only: bool) -> str | None:
+        """Join every sheet's non-blank cell values into text, or ``None`` on ANY read failure
+        (→ ``unreadable``). openpyxl's failure surface on the malformed input AD-28 calls the
+        *normal* case is broad — bad zip, malformed sheet XML (``ET.ParseError``), encrypted,
+        truncated — so a broad catch maps them ALL to a clean outcome and, crucially, never lets
+        a parser message escape into ``str(exc)`` and the register (AD-28 I/O discipline). openpyxl
+        is imported lazily so the app still imports where it is absent."""
+        import openpyxl
+
+        workbook = None
         try:
+            workbook = openpyxl.load_workbook(path, read_only=True, data_only=data_only)
             lines: list[str] = []
             for sheet in workbook.worksheets:
                 for row in sheet.iter_rows(values_only=True):
                     cells = [str(v) for v in row if v is not None and str(v).strip()]
                     if cells:
                         lines.append(" ".join(cells))
-        except _readerr:
-            return ExtractOutcome("", "xlsx", self.version, ErrorClass.UNREADABLE)
+            return "\n".join(lines)
+        except Exception:  # noqa: BLE001 — malformed is the normal case (AD-28); never leak str(exc)
+            return None
         finally:
-            workbook.close()
-        text = "\n".join(lines)
-        if not text.strip():
-            return ExtractOutcome("", "xlsx", self.version, ErrorClass.EXTRACTED_EMPTY)
-        return ExtractOutcome(text, "xlsx", self.version)
+            if workbook is not None:
+                workbook.close()
 
     def _eml(self, path: Path) -> ExtractOutcome:
         """An email as searchable text: the routing headers a lawyer needs (from, to,

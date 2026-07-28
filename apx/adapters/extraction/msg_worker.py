@@ -66,11 +66,12 @@ def _attachments(msg: Any) -> dict[str, Any]:
 
 
 def run(mode: str, path: str) -> dict[str, Any]:
-    """Open the .msg and dispatch on ``mode``. All parse-time stdout is redirected to stderr so
-    stdout carries only the final JSON the caller reads."""
-    import extract_msg
-
+    """Open the .msg and dispatch on ``mode``. The ``extract_msg`` import AND all parse-time
+    stdout are inside the ``redirect_stdout`` guard, so any chatter the library writes to stdout
+    (even at import time) goes to stderr — stdout carries ONLY the final JSON the caller reads."""
     with contextlib.redirect_stdout(sys.stderr):
+        import extract_msg
+
         msg = extract_msg.openMsg(path)
         try:
             if mode == "text":

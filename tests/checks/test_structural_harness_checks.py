@@ -26,7 +26,7 @@ _CASES = [
     (ih.no_queue_import_outside_submodule, "queue_leak"),
     (ih.no_extract_msg_import_outside_worker, "extract_msg_leak"),
     (ih.no_subprocess_call_outside_extraction, "subprocess_leak"),
-    (ih.no_stderr_none_in_extraction, "stderr_none"),
+    (ih.extraction_subprocess_captures_stderr, "stderr_none"),
     (fl.embedder_has_one_implementation, "two_embedders"),
     (fl.destructive_index_ops_single_entry, "two_index_deleters"),
     (fl.no_post_filter_in_retrieval, "post_filter"),
@@ -66,7 +66,7 @@ def test_checks_fail_closed_on_an_unparseable_file(tmp_path) -> None:  # noqa: A
                   ih.no_queue_import_outside_submodule,
                   ih.no_extract_msg_import_outside_worker,
                   ih.no_subprocess_call_outside_extraction,
-                  ih.no_stderr_none_in_extraction,
+                  ih.extraction_subprocess_captures_stderr,
                   fl.no_post_filter_in_retrieval):
         r = check([tmp_path])
         assert not r.ok and "failing closed" in r.detail, f"{r.name} did not fail closed"

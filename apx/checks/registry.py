@@ -72,7 +72,7 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # story 2.3 — extraction runs out-of-process & licence-isolated (AD-28).
     isolation_harness.no_extract_msg_import_outside_worker,
     isolation_harness.no_subprocess_call_outside_extraction,
-    isolation_harness.no_stderr_none_in_extraction,
+    isolation_harness.extraction_subprocess_captures_stderr,
     # story 1.12 — forward-looking checks: live, vacuous now, fixture-proven (FR-9/10/14/…/23).
     forward_looking.embedder_has_one_implementation,
     forward_looking.destructive_index_ops_single_entry,

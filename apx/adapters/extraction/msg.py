@@ -69,10 +69,15 @@ class MsgExtractor:
         if not result.get("ok"):
             cls = _CLASSES.get(result.get("error_class"), ErrorClass.UNREADABLE)
             return ExtractOutcome("", "extract-msg", self.version, cls)
+        # Trust boundary for the corpus and for AD-40 identity (method+version ∈ chunk_id): a
+        # drifted/older worker returning ok=true with blank text or an empty method/version must
+        # never seed a degenerate piece. Whitespace-only text is extracted-empty; the constants
+        # stand in for empty method/version.
+        text = result.get("text") or ""
+        if not text.strip():
+            return ExtractOutcome("", "extract-msg", self.version, ErrorClass.EXTRACTED_EMPTY)
         return ExtractOutcome(
-            result.get("text", ""),
-            result.get("method", "extract-msg"),
-            result.get("version", self.version))
+            text, result.get("method") or "extract-msg", result.get("version") or self.version)
 
 
 class MsgExpander:

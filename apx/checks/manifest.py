@@ -352,9 +352,9 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("subprocess-only-in-extraction", "FR-3", "AD-28", "no subprocess call outside extraction",
        isolation_harness.no_subprocess_call_outside_extraction,
        "subprocess imports in the runtime tree (excl. adapters/extraction)"),
-    _p("no-stderr-none-in-extraction", "FR-3", "AD-28", "no stderr=None in extraction adapters",
-       isolation_harness.no_stderr_none_in_extraction,
-       "stderr=None kwargs in adapters/extraction"),
+    _p("extraction-captures-stderr", "FR-3", "AD-28", "extraction subprocesses capture stderr",
+       isolation_harness.extraction_subprocess_captures_stderr,
+       "subprocess call sites in adapters/extraction (capture_output / stderr=PIPE|DEVNULL)"),
     # ── story 1.12: the enumerated FR-56 floor — forward-looking checks ───────────────────────
     _p("no-fallback-embedder", "FR-9", "AD-11", "no fallback embedder",
        forward_looking.embedder_has_one_implementation,
