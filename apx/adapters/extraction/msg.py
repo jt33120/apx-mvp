@@ -22,8 +22,10 @@ import subprocess
 import sys
 from pathlib import Path
 
+from apx.core.domain.config import ExpansionBounds
 from apx.core.domain.extraction import ExtractOutcome
 from apx.core.domain.failures import ErrorClass
+from apx.core.ports.expansion import ContainerUnopenable
 
 _WORKER = "apx.adapters.extraction.msg_worker"
 # The subprocess's own resource bound (AD-28): a hung compound-file parse is a failure, not an
@@ -89,7 +91,12 @@ class MsgExpander:
     A ``.msg`` with **no** attachments returns ``None`` (a plain leaf), so its body is a piece
     when present and an **empty** ``.msg`` becomes ``extracted-empty`` via the extractor path
     rather than vanishing as a transparent-but-empty container (AC5). A broken ``.msg`` also
-    returns ``None`` — the extractor path then records it once as ``unreadable``; never a raise."""
+    returns ``None`` — the extractor path then records it once as ``unreadable``; never a raise.
+    An embedded ``.msg`` attachment is surfaced as a member ``.msg`` the use case recurses into
+    (Story 2.4); more attachments than the configured limit is a ``ContainerUnopenable``."""
+
+    def __init__(self, bounds: ExpansionBounds | None = None) -> None:
+        self._bounds = bounds or ExpansionBounds.defaults()
 
     def members(self, path: Path) -> list[tuple[str, bytes]] | None:
         if path.suffix.lower() != ".msg":
@@ -97,8 +104,13 @@ class MsgExpander:
         result = _run_msg_worker(path, "attachments")
         if result is None or not result.get("ok"):
             return None
+        atts = result.get("attachments", [])
+        cap = self._bounds.attachments_per_message_max
+        if len(atts) > cap:
+            raise ContainerUnopenable(
+                f"{len(atts)} attachments exceed the configured limit of {cap}")
         members: list[tuple[str, bytes]] = []
-        for att in result.get("attachments", []):
+        for att in atts:
             try:
                 members.append((str(att["name"]), base64.b64decode(att["b64"])))
             except (KeyError, ValueError, TypeError):

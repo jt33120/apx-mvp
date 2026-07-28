@@ -51,17 +51,51 @@ def _text(msg: Any) -> dict[str, Any]:
     return {"ok": True, "text": text, "method": "extract-msg", "version": VERSION}
 
 
+def _att_name(att: Any) -> str:
+    return str(getattr(att, "longFilename", None) or getattr(att, "shortFilename", None)
+               or "piece-jointe")
+
+
+def _embedded_bytes(att: Any) -> bytes | None:
+    """Serialise an embedded ``.msg`` attachment (``.data`` is a Message, not bytes) back to bytes
+    so the ingestion use case can recurse into it (Story 2.4). extract-msg's ``save`` writes an
+    embedded message as a ``.msg``; we save to a temp dir and read it back. Returns None if the
+    library cannot serialise it — the caller then surfaces it as a member the ingestion records as
+    a failure, never a silent drop."""
+    import os
+    import tempfile
+
+    try:
+        with tempfile.TemporaryDirectory() as td:
+            att.save(customPath=td)
+            files = [os.path.join(td, f) for f in os.listdir(td)]
+            files = [f for f in files if os.path.isfile(f)]
+            if not files:
+                return None
+            with open(files[0], "rb") as fh:  # noqa: PTH123 — a transient temp path, not a repo path
+                return fh.read()
+    except Exception:  # noqa: BLE001 — any serialisation failure → None; the caller never drops it
+        return None
+
+
 def _attachments(msg: Any) -> dict[str, Any]:
-    """Top-level attachments whose payload is raw bytes. An attachment that is itself an
-    embedded message (``.data`` is a Message, not bytes) is a nested container — Story 2.4's
-    recursion owns it — and is left for that story rather than surfaced half-expanded here."""
+    """Top-level attachments as members. A byte attachment is its bytes; an embedded ``.msg``
+    (``.data`` is a Message) is serialised back to ``.msg`` bytes so the ingestion use case
+    recurses into it (Story 2.4 — its own attachments are then grandchildren, depth-bounded). An
+    embedded message the library cannot serialise is surfaced with empty bytes, which ingestion
+    records as a failure rather than dropping it."""
     out: list[dict[str, str]] = []
     for att in getattr(msg, "attachments", []) or []:
         data = getattr(att, "data", None)
         if isinstance(data, (bytes, bytearray)):
-            name = getattr(att, "longFilename", None) or getattr(att, "shortFilename", None) \
-                or "piece-jointe"
-            out.append({"name": str(name), "b64": base64.b64encode(bytes(data)).decode("ascii")})
+            out.append({"name": _att_name(att),
+                        "b64": base64.b64encode(bytes(data)).decode("ascii")})
+        else:
+            name = _att_name(att)
+            if not name.lower().endswith(".msg"):
+                name = f"{name}.msg"
+            raw = _embedded_bytes(att) or b""
+            out.append({"name": name, "b64": base64.b64encode(raw).decode("ascii")})
     return {"ok": True, "attachments": out, "method": "extract-msg", "version": VERSION}
 
 

@@ -20,4 +20,8 @@ class ErrorClass(StrEnum):
     # configured number of attempts so resume never loops onto it forever.
     RESOURCE_EXHAUSTED = "resource-exhausted"
     QUARANTINED = "quarantined"
+    # Story 2.4 (AD-38/AD-17): a container that cannot be opened, or one exceeding the configured
+    # depth or expansion ratio (a zip bomb), is ONE register entry with cardinality `unknown` — it
+    # stands for an unknown number of pièces and is never summed into a total (AD-38).
+    CONTAINER_UNOPENABLE = "container-unopenable"
     UNKNOWN = "unknown"

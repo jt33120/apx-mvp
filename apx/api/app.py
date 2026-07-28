@@ -31,9 +31,10 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
-from apx.adapters.expansion.archives import ZipExpander
+from apx.adapters.expansion.archives import SevenZipExpander, ZipExpander
 from apx.adapters.expansion.composite import CompositeExpander
-from apx.adapters.expansion.mail import EmlExpander
+from apx.adapters.expansion.mail import EmlExpander, MboxExpander
+from apx.adapters.expansion.pdf import PdfPortfolioExpander
 from apx.adapters.extraction.composite import CompositeExtractor
 from apx.adapters.extraction.files import FileExtractor
 from apx.adapters.extraction.msg import MsgExpander, MsgExtractor
@@ -48,7 +49,7 @@ from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.triage import triage_pieces
 from apx.core.domain import capacity
-from apx.core.domain.config import ConfigError, default_of
+from apx.core.domain.config import ConfigError, ExpansionBounds, default_of, expansion_bounds
 from apx.core.domain.head_journal import open_journal
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
@@ -453,10 +454,14 @@ def _extractor() -> Extractor:
     return primary
 
 
-def _expander() -> CompositeExpander:
-    """Container expansion composed at the edge: a .zip is unpacked and its members ingested
-    individually; an email (.eml/.msg) adds its attachments (its body is a piece too)."""
-    return CompositeExpander([ZipExpander(), EmlExpander(), MsgExpander()])
+def _expander(bounds: ExpansionBounds) -> CompositeExpander:
+    """Container expansion composed at the edge (same chain as the worker, Story 2.4): archives
+    (.zip/.7z), mailbox (.mbox), email (.eml) + PDF portfolios, and .msg (nested) — each bounded
+    by configuration. A container's members are ingested individually; an email's body is a piece
+    too. Kept behaviour-identical with the worker's ``_build_expander``."""
+    return CompositeExpander([
+        ZipExpander(bounds), SevenZipExpander(bounds), MboxExpander(bounds),
+        EmlExpander(bounds), PdfPortfolioExpander(bounds), MsgExpander(bounds)])
 
 
 def _held_wall(req_scope: str, ident: Identity) -> str:
@@ -910,9 +915,12 @@ def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> I
     if not folder.is_dir():
         raise HTTPException(status_code=400, detail=f"not a folder: {req.folder}")
     _capacity_preflight(sum(1 for p in folder.rglob("*") if p.is_file()))  # refuse if it won't fit
+    store = _store()
+    bounds = (expansion_bounds(lambda k: store.get_config(ident.tenant, k))
+              if store is not None else ExpansionBounds.defaults())
     result = ingest_folder(
         folder, matter=req.matter, tenant=ident.tenant,
-        extractor=_extractor(), custodian=custodian, expander=_expander(),
+        extractor=_extractor(), custodian=custodian, expander=_expander(bounds), bounds=bounds,
     )
     persisted = _persist(
         result, wall, ident.actor,

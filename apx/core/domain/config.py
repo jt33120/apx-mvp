@@ -179,6 +179,32 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
                 "quarantined as its own register entry and the job proceeds (AD-17)",
         valid=lambda v: 1 <= v <= 100,  # at least one attempt; a sane upper bound
     ),
+    # ── container-expansion bounds (AD-17/AD-38): a breach is a `container-unopenable` register
+    # entry of cardinality `unknown`, never an outage or an OOM ──
+    ConfigKey(
+        "container_max_depth", "int", 6,
+        governs="the maximum nesting depth of containers expanded; a container deeper than this "
+                "is a `container-unopenable` register entry, never recursed (AD-17)",
+        valid=lambda v: 1 <= v <= 64,  # at least one level; a sane ceiling against runaway nesting
+    ),
+    ConfigKey(
+        "container_max_members", "int", 5000,
+        governs="the maximum number of members expanded across one ingestion, so a fan-out "
+                "cannot exhaust the machine (AD-17)",
+        valid=lambda v: 1 <= v <= 1_000_000,
+    ),
+    ConfigKey(
+        "container_max_expansion_ratio", "int", 100,
+        governs="the maximum ratio of total expanded bytes to a container's own size; a container "
+                "exceeding it is a `container-unopenable` entry — a zip bomb, not an outage",
+        valid=lambda v: 1 <= v <= 100_000,  # 1:1 … a generous ceiling, legit archives well under
+    ),
+    ConfigKey(
+        "attachments_per_message_max", "int", 1000,
+        governs="the maximum attachments expanded from one email/message before it is a "
+                "`container-unopenable` entry (AD-17)",
+        valid=lambda v: 1 <= v <= 100_000,
+    ),
     # ── the two switchable guarantees — the v1 defects, encoded as build-checked predicates ──
     ConfigKey(
         "off_corpus_refusal_enabled", "bool", True,
@@ -228,6 +254,38 @@ def default_config() -> dict[str, Any]:
     """Every key at its default — the configuration of a freshly provisioned, never-edited
     tenant."""
     return {name: spec.default for name, spec in CONFIG_SCHEMA.items()}
+
+
+@dataclass(frozen=True)
+class ExpansionBounds:
+    """The container-expansion capacity bounds (AD-17) as one value object, so the ingestion use
+    case and the expander adapters share exactly the configured numbers — never a hard-coded
+    constant. Built from a tenant's config by ``expansion_bounds``; ``defaults()`` gives the
+    freshly-provisioned values for callers with no tenant in hand (tests, the sync path)."""
+
+    max_depth: int
+    max_members: int
+    max_expansion_ratio: int
+    attachments_per_message_max: int
+
+    @classmethod
+    def defaults(cls) -> ExpansionBounds:
+        return cls(
+            max_depth=default_of("container_max_depth"),
+            max_members=default_of("container_max_members"),
+            max_expansion_ratio=default_of("container_max_expansion_ratio"),
+            attachments_per_message_max=default_of("attachments_per_message_max"),
+        )
+
+
+def expansion_bounds(get: Callable[[str], Any]) -> ExpansionBounds:
+    """Build the bounds from a per-key getter (e.g. ``lambda k: store.get_config(tenant, k)``)."""
+    return ExpansionBounds(
+        max_depth=int(get("container_max_depth")),
+        max_members=int(get("container_max_members")),
+        max_expansion_ratio=int(get("container_max_expansion_ratio")),
+        attachments_per_message_max=int(get("attachments_per_message_max")),
+    )
 
 
 # ── storage encoding: one JSON text value per (tenant, key) row ─────────────────────────────────

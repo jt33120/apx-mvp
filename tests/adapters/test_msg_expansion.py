@@ -30,13 +30,27 @@ def test_worker_attachments_returns_byte_payloads_with_names() -> None:
     assert base64.b64decode(out["attachments"][0]["b64"]) == b"PDF bytes"
 
 
-def test_worker_attachments_skips_an_embedded_message() -> None:
-    # an embedded .msg has a Message object as .data (not bytes) — a nested container, Story 2.4.
-    embedded = SimpleNamespace(
-        data=SimpleNamespace(subject="nested"), longFilename="inner.msg", shortFilename=None)
+def test_worker_attachments_surfaces_an_embedded_message_as_a_msg_member(tmp_path: Path) -> None:
+    # Story 2.4 un-defers nested .msg: an embedded message (data is a Message, not bytes) is
+    # serialised back to .msg bytes via extract-msg's save() so ingestion recurses into it.
+    def _save(customPath: str | None = None, **kw: object) -> None:
+        (Path(customPath) / "inner.msg").write_bytes(b"EMBEDDED-MSG-BYTES")
+
+    embedded = SimpleNamespace(data=SimpleNamespace(subject="nested"), longFilename="courrier",
+                               shortFilename=None, save=_save)
     real = SimpleNamespace(data=b"x", longFilename="a.txt", shortFilename=None)
     out = _attachments(SimpleNamespace(attachments=[embedded, real]))
-    assert [a["name"] for a in out["attachments"]] == ["a.txt"]   # only the byte attachment
+    assert [a["name"] for a in out["attachments"]] == ["courrier.msg", "a.txt"]  # .msg member added
+    assert base64.b64decode(out["attachments"][0]["b64"]) == b"EMBEDDED-MSG-BYTES"
+
+
+def test_worker_never_silently_drops_an_unserialisable_embedded_message() -> None:
+    # If extract-msg cannot serialise the embedded message (no save path here), it is surfaced with
+    # empty bytes — ingestion records that member as a failure, never a silent drop.
+    embedded = SimpleNamespace(
+        data=SimpleNamespace(subject="x"), longFilename="inner.msg", shortFilename=None)
+    out = _attachments(SimpleNamespace(attachments=[embedded]))
+    assert out["attachments"][0]["name"] == "inner.msg" and out["attachments"][0]["b64"] == ""
 
 
 # ── layer 2: MsgExpander maps a (mocked) worker result ────────────────────────────────────────

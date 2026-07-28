@@ -53,6 +53,11 @@ dependencies = [
     # obligation is offering its source on distribution (GPL §6). To counsel in the same
     # email as psycopg's LGPL question (AD-28). A structural check seals the boundary.
     "extract-msg==0.56.0",
+    # py7zr — .7z container expansion (story 2.4). **LGPL-2.1-or-later**, in-process: dynamic use
+    # of an unmodified LGPL library by a proprietary app is the LGPL §4 case (like psycopg) — to
+    # counsel with the AD-28 licence note. Fully offline; pulls a heavy transitive tree
+    # (pycryptodomex, pyppmd, pybcj, brotli, inflate64, multivolumefile). Imported lazily.
+    "py7zr==1.1.3",
 ]
 
 [project.optional-dependencies]

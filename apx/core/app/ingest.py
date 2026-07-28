@@ -21,12 +21,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 
+from apx.core.domain.config import ExpansionBounds
 from apx.core.domain.dedup import text_key
 from apx.core.domain.extraction import ExtractOutcome
 from apx.core.domain.failures import ErrorClass
 from apx.core.domain.identity import content_hash, piece_id
 from apx.core.domain.inventory import Inventory
-from apx.core.ports.expansion import Expander
+from apx.core.ports.expansion import ContainerUnopenable, Expander
 from apx.core.ports.extraction import Extractor
 
 SCHEMA_VERSION = "slice-a"
@@ -34,9 +35,9 @@ SCHEMA_VERSION = "slice-a"
 # Filesystem noise: a declared, countable exclusion class, not a silent drop (FR-6).
 NOISE_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini", ".gitkeep"})
 
-# Expansion bounds — a malicious archive must not exhaust the machine.
-MAX_DEPTH = 6           # nested containers (a zip in a zip in a …)
-MAX_MEMBERS = 5000      # total members expanded across one ingestion
+# Expansion bounds are configuration-as-data (AD-17): the numbers come from ``ExpansionBounds``
+# (per-tenant config, or its defaults), never a hard-coded constant. A breach is a
+# `container-unopenable` register entry of cardinality `unknown` (AD-38), never an outage/OOM.
 
 
 @dataclass(frozen=True)
@@ -75,11 +76,14 @@ class IngestionResult:
     @property
     def inventory(self) -> Inventory:
         submitted = len(self.pieces) + len(self.failures) + len(self.exclusions)
+        unknown = sum(
+            1 for f in self.failures if f.error_class is ErrorClass.CONTAINER_UNOPENABLE)
         return Inventory(
             submitted=submitted,
             in_corpus=len(self.pieces),
             failures=len(self.failures),
             exclusions=len(self.exclusions),
+            unknown_cardinality_entries=unknown,
         )
 
 
@@ -110,6 +114,7 @@ def _ingest_one(
     tmpdir: Path,
     counter: list[int],
     max_bytes: int | None,
+    bounds: ExpansionBounds,
 ) -> None:
     """Route one file into exactly one of pieces / failures / exclusions (containers expanded to
     their members, recursively). Shared by ``ingest_folder`` (the whole-folder path) and
@@ -128,25 +133,43 @@ def _ingest_one(
         return
 
     expanded = False
-    if expander is not None and depth < MAX_DEPTH:
+    if expander is not None:
         try:
             members = expander.members(path)
+        except ContainerUnopenable as cu:
+            # A recognised container that breached a declared bound (ratio / member / attachment
+            # count) — one register entry of cardinality `unknown`, the bomb never read whole.
+            result.failures.append(IngestedFailure(
+                path.name, prov, matter, tenant, ErrorClass.CONTAINER_UNOPENABLE, cu.reason))
+            return
         except Exception as exc:  # noqa: BLE001 — a broken container is a failure, not an outage
             result.failures.append(IngestedFailure(
                 path.name, prov, matter, tenant, ErrorClass.EXTRACTION_ERROR, str(exc)))
             return
         if members is not None:
+            if depth >= bounds.max_depth:
+                # A container nested past the configured depth is refused, not recursed — one
+                # `container-unopenable` entry of cardinality `unknown` (AD-17/AD-38).
+                result.failures.append(IngestedFailure(
+                    path.name, prov, matter, tenant, ErrorClass.CONTAINER_UNOPENABLE,
+                    f"nesting depth exceeds the configured limit of {bounds.max_depth}"))
+                return
             expanded = True
             for name, content in members:
-                if counter[0] >= MAX_MEMBERS:
-                    break
+                if counter[0] >= bounds.max_members:
+                    # The cross-ingestion fan-out backstop: this container could not be fully
+                    # expanded, so it is one `container-unopenable` entry (contents partly unknown).
+                    result.failures.append(IngestedFailure(
+                        path.name, prov, matter, tenant, ErrorClass.CONTAINER_UNOPENABLE,
+                        f"total expanded members exceed the limit of {bounds.max_members}"))
+                    return
                 counter[0] += 1
                 member_path = tmpdir / f"m{counter[0]}{Path(name).suffix}"
                 member_path.write_bytes(content)
                 _ingest_one(
                     member_path, f"{prov}/{name}", depth + 1, result=result, matter=matter,
                     tenant=tenant, custodian=custodian, extractor=extractor, expander=expander,
-                    now=now, tmpdir=tmpdir, counter=counter, max_bytes=max_bytes)
+                    now=now, tmpdir=tmpdir, counter=counter, max_bytes=max_bytes, bounds=bounds)
 
     try:
         outcome: ExtractOutcome = extractor.extract(path)
@@ -192,17 +215,19 @@ def ingest_one_file(
     expander: Expander | None = None,
     now: datetime | None = None,
     max_bytes: int | None = None,
+    bounds: ExpansionBounds | None = None,
 ) -> IngestionResult:
     """Ingest exactly one submitted file — a *unit* of work (AD-17). It lands as pieces, a
     failure, or a noise exclusion; a container expands atomically within this one result. The
     resumable worker (Story 2.2) commits one of these per unit."""
     result = IngestionResult()
     stamp = now or datetime.now(UTC)
+    resolved = bounds or ExpansionBounds.defaults()
     with tempfile.TemporaryDirectory(prefix="apx-expand-") as tmp:
         _ingest_one(
             path, prov, 0, result=result, matter=matter, tenant=tenant, custodian=custodian,
             extractor=extractor, expander=expander, now=stamp, tmpdir=Path(tmp), counter=[0],
-            max_bytes=max_bytes)
+            max_bytes=max_bytes, bounds=resolved)
     return result
 
 
@@ -215,6 +240,7 @@ def ingest_folder(
     custodian: str = "custodian-undeclared",
     expander: Expander | None = None,
     max_bytes: int | None = None,
+    bounds: ExpansionBounds | None = None,
 ) -> IngestionResult:
     """Walk ``folder`` recursively; every file lands in exactly one of three places (containers
     expanded to their members). The synchronous whole-folder path (Story 2.1 and tests); the
@@ -223,13 +249,14 @@ def ingest_folder(
     result = IngestionResult()
     now = datetime.now(UTC)
     counter = [0]
+    resolved = bounds or ExpansionBounds.defaults()
     with tempfile.TemporaryDirectory(prefix="apx-expand-") as tmp:
         tmpdir = Path(tmp)
         for path in sorted(p for p in folder.rglob("*") if p.is_file()):
             _ingest_one(
                 path, str(path.relative_to(folder)), 0, result=result, matter=matter,
                 tenant=tenant, custodian=custodian, extractor=extractor, expander=expander,
-                now=now, tmpdir=tmpdir, counter=counter, max_bytes=max_bytes)
+                now=now, tmpdir=tmpdir, counter=counter, max_bytes=max_bytes, bounds=resolved)
     # The guarantee must hold on every result (FR-6 / SM-3 shape).
     result.inventory.require_consistent()
     return result
