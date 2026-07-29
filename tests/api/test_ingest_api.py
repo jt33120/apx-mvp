@@ -21,6 +21,9 @@ from apx.adapters.store_postgres.store import SqlStore
 from apx.api import app as app_module
 from apx.api.app import app
 from apx.core.app.ingest import IngestedPiece, IngestionResult
+from tests.embedding_fakes import FakeEmbedder
+
+_FAKE = FakeEmbedder()  # story 2.8: the embedder injected at the port boundary (never the real one)
 
 
 def _run_upload(store: SqlStore, resp) -> None:
@@ -28,7 +31,7 @@ def _run_upload(store: SqlStore, resp) -> None:
     directly). Story 2.2 made /api/ingest-upload non-blocking: the POST returns a job handle
     (202); the worker fills the corpus."""
     assert resp.status_code == 202, resp.text
-    _run_import(store, resp.json()["job_id"])
+    _run_import(store, resp.json()["job_id"], embedder=_FAKE)
 
 SECRET = "test-secret"
 
@@ -44,9 +47,11 @@ def _matter(root: Path) -> None:
 def _reset_state():
     app_module._store.cache_clear()
     app_module._login_limiter._fails.clear()
+    app_module._EMBEDDER = _FAKE   # story 2.8: the fake embedder, injected at the port (AD-11)
     yield
     app_module._store.cache_clear()
     app_module._login_limiter._fails.clear()
+    app_module._EMBEDDER = None
 
 
 def _prepare(tmp_path: Path, monkeypatch) -> SqlStore:

@@ -7,9 +7,11 @@ the egress guard is green on the empty tree. Vacuous-green is honest ONLY with a
 vacuous check without one is the anti-pattern this harness exists to prevent.
 
 - **embedder_has_one_implementation (FR-9/AD-11):** at most one concrete ``Embedder`` and no
-  embedder constructed in an exception handler — the v1 silent hash fallback. (Embedder = 2.8.)
+  embedder constructed in an exception handler — the v1 silent hash fallback. (LIVE as of 2.8 —
+  the one impl is ``embedder_bgem3``; this check now guards live code.)
 - **destructive_index_ops_single_entry (FR-10/AD-7):** a bulk index drop/truncate is reachable
-  from at most one function — the v1 self-wiping index. (Index = 2.8.)
+  from at most one function — the v1 self-wiping index. (The 2.8 vector write path is INSERT-only,
+  so this stays vacuous — a runtime destructive op would make it non-vacuous.)
 - **no_post_filter_in_retrieval (FR-14/AD-14):** no function takes a fetched result set AND a
   scope — scope is a query pre-filter, never a post-filter. (Retrieval = 3.x.)
 - **no_natural_language_translation_key (FR-34):** a translation call's key is namespaced, never
@@ -40,30 +42,53 @@ from apx.checks.payload_schema import _enclosing_func, _fail_closed, _parent_map
 _EMBED_METHODS = frozenset({"embed", "encode", "embed_documents", "embed_query"})
 
 
+def _defines_dimensions(cls: ast.ClassDef) -> bool:
+    """The class assigns a ``dimensions`` attribute (the Embedder port's fixed member) — as a class
+    annotation/assignment or a ``self.dimensions = …`` in a method. This is the port SHAPE, so a
+    disguised fallback (the v1 hash, named anything) is still counted if it is a usable embedder."""
+    for sub in ast.walk(cls):
+        if isinstance(sub, ast.AnnAssign):
+            tgt = sub.target
+            if (isinstance(tgt, ast.Name) and tgt.id == "dimensions") or (
+                    isinstance(tgt, ast.Attribute) and tgt.attr == "dimensions"):
+                return True
+        if isinstance(sub, ast.Assign):
+            for tgt in sub.targets:
+                if (isinstance(tgt, ast.Name) and tgt.id == "dimensions") or (
+                        isinstance(tgt, ast.Attribute) and tgt.attr == "dimensions"):
+                    return True
+    return False
+
+
 def _is_concrete_embedder(node: ast.AST, path: Path) -> bool:
-    """A concrete Embedder implementation: a ClassDef (not a Protocol/ABC) that BOTH looks like an
-    embedder (its name contains ``embed``, OR it lives under an ``embed``-named adapter dir, OR it
-    subclasses ``Embedder``) AND exposes an embedding method (``embed``/``encode``/…). The name/path
-    gate keeps a stray ``.encode`` (JSON, base64) from being miscounted; the ``Embedder(Protocol)``
-    port is excluded. A name/path/method heuristic, hardened against the real adapter at 2.8."""
+    """A concrete Embedder implementation: a ClassDef (not a Protocol/ABC) that exposes an embedding
+    method (``embed``/``encode``/…) AND either looks like an embedder (name contains ``embed``, OR
+    lives under an ``embed``-named dir, OR subclasses ``Embedder``) OR carries the port SHAPE (a
+    ``dimensions`` member) — so a disguised fallback named anything (the v1 hash) is still counted,
+    while a stray ``.encode`` (JSON/base64) with no ``dimensions`` and no embed-name is not. The
+    ``Embedder(Protocol)`` port is excluded. A heuristic — a determined evader can still hide, but
+    a *usable* second embedder (one the pipeline could inject) has the shape and is caught."""
     if not isinstance(node, ast.ClassDef):
         return False
     bases = {b.id for b in node.bases if isinstance(b, ast.Name)} | {
         b.attr for b in node.bases if isinstance(b, ast.Attribute)}
     if bases & {"Protocol", "ABC"}:
         return False
-    looks_like = (
-        "embed" in node.name.lower() or "embed" in str(path).lower() or "Embedder" in bases)
     has_method = any(
         isinstance(m, ast.FunctionDef | ast.AsyncFunctionDef) and m.name in _EMBED_METHODS
         for m in node.body)
-    return looks_like and has_method
+    if not has_method:
+        return False
+    looks_like = (
+        "embed" in node.name.lower() or "embed" in str(path).lower() or "Embedder" in bases)
+    return looks_like or _defines_dimensions(node)
 
 
 def _except_constructs_embedder(tree: ast.Module) -> ast.AST | None:
     """An ``except`` handler that constructs an embedder-named object — the v1 silent fallback path.
-    A NAME heuristic (a ctor whose name mentions ``embed``); the robust guarantee is the ≤1 count
-    above, which catches a second real impl whatever it is named."""
+    A NAME heuristic (a ctor whose name mentions ``embed``), backstopped by the ≤1 count above,
+    which (via the port-shape leg) catches a second *usable* embedder even under a disguised
+    name."""
     for node in ast.walk(tree):
         if not isinstance(node, ast.ExceptHandler):
             continue
@@ -104,18 +129,20 @@ def embedder_has_one_implementation(roots: Iterable[Path] | None = None) -> Chec
         return CheckResult(name, ad, False,
                            f"more than one Embedder implementation (a fallback): {sorted(impls)} "
                            "— there is exactly one non-test embedder (FR-9/AD-11)")
-    shape = impls[0] if impls else "none yet (vacuous until story 2.8)"
+    shape = impls[0] if impls else "none — the one embedder implementation is missing (2.8)"
     return CheckResult(name, ad, True, f"at most one embedder implementation: {shape}")
 
 
 # ── FR-10 / AD-7: destructive index operations reachable from one entry point only ────────────
 # Vector-store / collection destruction by method name (Qdrant's real API is `recreate_collection`
-# / `delete_collection`) AND by raw DDL. Extended as the real index adapter lands (story 2.8).
+# / `delete_collection`) AND by raw DDL/DML. Since story 2.8 the vector lives ON the chunk row, so a
+# bulk `DELETE FROM chunk` (ORM `.delete()` or raw SQL) is a corpus wipe too — included (FR-10).
 _DESTRUCTIVE_INDEX_CALLS = frozenset({
     "drop_index", "drop_collection", "delete_collection", "recreate_index", "recreate_collection",
     "reset_index", "truncate_index", "wipe_index", "rebuild_index", "delete_index", "delete_all",
 })
-_DESTRUCTIVE_SQL_RE = re.compile(r"\b(drop\s+index|drop\s+table|truncate)\b", re.IGNORECASE)
+_DESTRUCTIVE_SQL_RE = re.compile(
+    r"\b(drop\s+index|drop\s+table|truncate|delete\s+from)\b", re.IGNORECASE)
 
 
 def _destructive_call(node: ast.Call) -> bool:
@@ -125,6 +152,11 @@ def _destructive_call(node: ast.Call) -> bool:
     fn = node.func
     nm = fn.id if isinstance(fn, ast.Name) else (fn.attr if isinstance(fn, ast.Attribute) else "")
     if nm in _DESTRUCTIVE_INDEX_CALLS:
+        return True
+    # an ORM BULK delete — `query(...).delete()` / `session.query(X).delete()` — takes NO positional
+    # object (unlike single-row `session.delete(obj)`), so a no-positional-arg `.delete()` is the
+    # bulk-wipe form (FR-10; the chunk row IS the index since 2.8); single-row delete is not.
+    if nm == "delete" and isinstance(fn, ast.Attribute) and not node.args:
         return True
     if nm in ("execute", "text"):
         return any(

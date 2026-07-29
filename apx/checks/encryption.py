@@ -42,6 +42,7 @@ _PLAINTEXT_ALLOWLIST = {
     "content_hash", "text_key", "text_identity",
     "extraction_method", "extractor_version", "schema_version", "text_version",
     "full_text_version", "chunking_config_version", "piece_date_status", "external_ref",
+    "model_id", "model_version",  # the embedder identity (AD-11) — categorical, non-content (2.8)
     "error_class", "resolution_state", "cardinality", "action", "chain", "label", "judge",
     "outcome",
     "email", "password_hash", "display_name",

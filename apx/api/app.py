@@ -31,6 +31,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
 
+from apx.adapters.embedder_bgem3.bgem3 import Bgem3Embedder
 from apx.adapters.expansion.archives import SevenZipExpander, ZipExpander
 from apx.adapters.expansion.composite import CompositeExpander
 from apx.adapters.expansion.mail import EmlExpander, MboxExpander
@@ -41,6 +42,7 @@ from apx.adapters.extraction.msg import MsgExpander, MsgExtractor
 from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
+from apx.adapters.store_postgres.admission import admit
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.queue import enqueue_import
 from apx.adapters.store_postgres.store import ScopeConflict, ScopeDenied, SqlStore
@@ -57,6 +59,7 @@ from apx.core.domain.config import (
     expansion_bounds,
 )
 from apx.core.domain.head_journal import open_journal
+from apx.core.ports.embedding import Embedder
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
 from apx.core.projection import project_all
@@ -473,11 +476,26 @@ def _persist(
     if store is None:
         return False
     try:
-        store.save(result, scope, actor, matter=matter, tenant=tenant, case_theory=case_theory)
+        # embed-before-admission (Story 2.8): an embedder failure lands the piece in the register,
+        # never the corpus, never a chunk — the same seam the async worker uses.
+        admit(store, _embedder(), result, scope=scope, actor=actor, matter=matter, tenant=tenant,
+              audit=True, case_theory=case_theory)
     except ScopeConflict as exc:
         # a re-ingest may not move a matter's wall — that is the admin re-scope path (409)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
     return True
+
+
+_EMBEDDER: Embedder | None = None
+
+
+def _embedder() -> Embedder:
+    """The ONE embedder (AD-11), built once and cached for the process. A test replaces it at the
+    port boundary (monkeypatching this function), never a stub in the runtime tree."""
+    global _EMBEDDER
+    if _EMBEDDER is None:
+        _EMBEDDER = Bgem3Embedder()
+    return _EMBEDDER
 
 
 def _extractor() -> Extractor:

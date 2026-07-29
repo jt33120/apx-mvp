@@ -34,10 +34,15 @@ _EVASIONS = [
     ("embedder-by-encode-method", fl.embedder_has_one_implementation,
      "class AEmbedder:\n    def encode(self, t): return []\n"
      "class BEmbedder:\n    def encode(self, t): return []\n"),
+    ("embedder-disguised-by-port-shape", fl.embedder_has_one_implementation,
+     "class RealEmbedder:\n    def embed(self, t): return []\n"        # named
+     "class Bow:\n    dimensions = 1024\n    def encode(self, t): return []\n"),  # disguised shape
     ("index-recreate-collection", fl.destructive_index_ops_single_entry,
      "def a(s): s.recreate_collection()\ndef b(s): s.recreate_collection()\n"),
     ("index-raw-drop-truncate", fl.destructive_index_ops_single_entry,
      "def a(s): s.execute('DROP INDEX i')\ndef b(s): s.execute('TRUNCATE t')\n"),
+    ("index-bulk-delete", fl.destructive_index_ops_single_entry,
+     "def a(s): s.query(C).delete()\ndef b(s): s.execute('DELETE FROM chunk')\n"),
     ("post-filter-docs-rbac", fl.no_post_filter_in_retrieval,
      "def apply(docs, rbac): return [d for d in docs if d in rbac]\n"),
     ("attribute-form-translator", fl.no_natural_language_translation_key,
@@ -72,3 +77,10 @@ def test_confidence_check_does_not_flag_a_domain_result(tmp_path: Path) -> None:
     # a statistical confidence on a domain result (subject not a model response) is legitimate
     src = "def show(result): return result.confidence\n"
     assert fl.no_model_reported_confidence([_mod(tmp_path, src)]).ok
+
+
+def test_destructive_index_check_does_not_flag_single_row_delete(tmp_path: Path) -> None:
+    # a single-row `session.delete(obj)` (one positional arg) is NOT a bulk wipe — must not fire,
+    # in two functions (the real store has several such calls). Only a no-arg bulk `.delete()` is.
+    src = "def a(s, o): s.delete(o)\ndef b(s, o): s.delete(o)\n"
+    assert fl.destructive_index_ops_single_entry([_mod(tmp_path, src)]).ok

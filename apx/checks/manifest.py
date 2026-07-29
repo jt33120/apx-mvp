@@ -363,7 +363,7 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     # ── story 1.12: the enumerated FR-56 floor — forward-looking checks ───────────────────────
     _p("no-fallback-embedder", "FR-9", "AD-11", "no fallback embedder",
        forward_looking.embedder_has_one_implementation,
-       "embed/encode-method classes + except-handlers in the runtime tree (vacuous until 2.8)"),
+       "embed/encode-method classes + except-handlers in the runtime tree (live as of 2.8)"),
     _p("destructive-index-one-entry", "FR-10", "AD-7", "destructive index ops from one entry point",
        forward_looking.destructive_index_ops_single_entry,
        "index drop/truncate call sites (vacuous until 2.8)"),

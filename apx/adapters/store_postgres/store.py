@@ -901,6 +901,18 @@ class SqlStore:
                 job_id, j.tenant, j.matter, j.state, j.submitted, committed + quarantined,
                 committed, quarantined, pending, j.provisional)
 
+    def existing_piece_ids(self, tenant: str, matter: str, ids: list[str]) -> set[str]:
+        """Which of ``ids`` are ALREADY corpus pièces for this matter (Story 2.8). A pièce already
+        in the corpus has met the embed-precondition, so re-ingestion must NOT re-embed it — a
+        re-embed failure on an already-admitted pièce would double-count it (in_corpus AND a new
+        register entry, masked by the 2.7 watermark). Empty ``ids`` → empty set (no query)."""
+        if not ids:
+            return set()
+        with self._sf() as session:
+            rows = session.scalars(select(Piece.id).where(
+                Piece.tenant == tenant, Piece.matter == matter, Piece.id.in_(ids))).all()
+        return set(rows)
+
     def _counts(self, session: Session, matter: str, tenant: str) -> tuple[int, int]:
         in_corpus = session.scalar(
             select(func.count()).select_from(Piece).where(

@@ -11,10 +11,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
-from apx.adapters.store_postgres.models import Base
+from apx.adapters.store_postgres.models import EMBEDDING_DIM, Base, Chunk
 from apx.adapters.store_postgres.store import _BACKUP_TABLES, SqlStore
 from apx.core.app.ingest import IngestedPiece, IngestionResult
 from apx.core.domain.head_journal import HeadJournal
@@ -42,6 +42,12 @@ def _seed(store: SqlStore) -> None:
         excl = ["sub/.DS_Store"] if i == 0 else []   # one filesystem-noise exclusion (Story 2.7)
         store.save(
             IngestionResult(pieces=[_piece(f"p{i}")], exclusions=excl), "w", actor="admin")
+    # a chunk with its embedding trio, to prove the halfvec vector survives backup/restore (2.8)
+    with store._sf() as s, s.begin():
+        s.add(Chunk(
+            chunk_id="c0", piece_id="p0", tenant=TENANT, matter="m", position=0,
+            full_text_version="v", chunking_config_version="c", schema_version="s1",
+            model_id="bge-m3", model_version="v1", vector=[0.5] * EMBEDDING_DIM))
     store.set_config(TENANT, "admin", "interface_language", "en")
 
 
@@ -84,6 +90,13 @@ def test_backup_restore_reproduces_the_tenant_identically(tmp_path) -> None:  # 
     # the piece SETS (Story 2.5) survive the round-trip — custodianship and provenance are not lost
     assert dst.custodians("p0") == src.custodians("p0") == {"custodian-x"}
     assert dst.provenances("p0") == src.provenances("p0") == {"/secret/p0.pdf"}
+    # a chunk's embedding trio survives the round-trip — the model identity AND the halfvec vector
+    # itself, proving the column-agnostic SELECT * backup carries the vector value, not just its
+    # presence (Story 2.8, AD-11; the restore re-inserts through the same typed column).
+    with dst._sf() as s:
+        chunk = s.scalars(select(Chunk).where(Chunk.piece_id == "p0")).one()
+    assert chunk.vector == [0.5] * EMBEDDING_DIM
+    assert (chunk.model_id, chunk.model_version) == ("bge-m3", "v1")
 
 
 def test_backup_preserves_ciphertext(tmp_path) -> None:  # noqa: ANN001

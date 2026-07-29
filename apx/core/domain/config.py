@@ -157,6 +157,10 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         governs="the chunking configuration identity carried into every chunk id (AD-9/AD-40)",
         affects_retrieval=True,
     ),
+    # No embedder config keys (AD-11: "no configuration-as-data key … selects one"). The ONE
+    # embedder is hardcoded (`Bgem3Embedder`); its own `model_id`/`model_version` stamp every chunk
+    # (so the stamp cannot diverge from the model that produced the vector — AD-11 detectability),
+    # and the vector width is the frozen `models.EMBEDDING_DIM`, asserted at admission (Story 2.8).
     ConfigKey(
         "backup_interval_hours", "int", 24,
         governs="the interval within which a backup must succeed before the tenant is flagged "

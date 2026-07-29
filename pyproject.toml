@@ -61,8 +61,14 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# No runtime extras in 1.1. Auth, embedder, extraction, OCR, LLM deps belong to
-# their own stories (see Dev Notes › What this story must NOT do).
+# The embedder (story 2.8, AD-11). BGE-M3 is a LOCAL, offline model (no egress); its backend pulls
+# the heavy torch tree, so it is an OPTIONAL extra kept OUT of the base install — `apx.adapters.
+# embedder_bgem3.bgem3` imports it LAZILY inside `encode()`, so the app (and CI) run without it, and
+# a real embedding call fails loud (EmbedderUnavailable) where it is absent. The offline deployment
+# installs it with `uv sync --extra embedder`. (FlagEmbedding is MIT; AD-28 counsel: local, no egress.)
+embedder = [
+    "FlagEmbedding>=1.3,<2",
+]
 
 [dependency-groups]
 dev = [

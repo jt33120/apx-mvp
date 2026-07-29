@@ -10,12 +10,12 @@ import os
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import Engine, create_engine, inspect
+from sqlalchemy import Engine, create_engine, inspect, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from apx.adapters.store_postgres.chunk_writer import ChunkStore
-from apx.adapters.store_postgres.models import Base, MatterScope, Piece
+from apx.adapters.store_postgres.models import EMBEDDING_DIM, Base, MatterScope, Piece
 from apx.core.domain.identity import chunk_id, piece_id
 from apx.core.domain.payload import PayloadRecord
 
@@ -26,16 +26,21 @@ pytestmark = pytest.mark.skipif(not _IS_PG, reason="no PostgreSQL DATABASE_URL â
 _TS = datetime(2026, 7, 23, tzinfo=UTC)
 _SCHEMA, _CFG, _SCOPE = "1", "c1", "wall-penal"
 
-# The AD-9 enumerated non-embedding chunk columns (the embedding trio is story 2.8).
+# The AD-9 enumerated chunk columns, now including the embedding trio (story 2.8, AD-11).
 _ENUMERATED = {
     "chunk_id", "piece_id", "tenant", "matter", "position",
     "full_text_version", "chunking_config_version", "schema_version", "external_ref",
+    "model_id", "model_version", "vector",
 }
+_VEC = [0.1] * EMBEDDING_DIM  # a valid embedding trio for the write tests (story 2.8)
+_MID, _MVER = "bge-m3", "v1"
 
 
 @pytest.fixture
 def engine() -> Engine:
     eng = create_engine(_URL, future=True)
+    with eng.begin() as c:
+        c.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))  # the halfvec column needs it
     Base.metadata.drop_all(eng)
     Base.metadata.create_all(eng)
     return eng
@@ -94,7 +99,9 @@ def test_piece_text_identity_is_not_null(engine: Engine) -> None:
 def test_writes_a_chunk_on_postgres(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
     store = ChunkStore(sf, schema_version=_SCHEMA, chunking_config_version=_CFG)
-    assert store.write_chunk(_payload(pid), rbac_scope=_SCOPE) == chunk_id(pid, "tv", 0, _CFG)
+    assert store.write_chunk(
+        _payload(pid), rbac_scope=_SCOPE, vector=_VEC, model_id=_MID, model_version=_MVER,
+    ) == chunk_id(pid, "tv", 0, _CFG)
 
 
 def test_a_chunk_for_a_missing_piece_is_refused_by_the_fk(sf: sessionmaker[Session]) -> None:
@@ -103,4 +110,6 @@ def test_a_chunk_for_a_missing_piece_is_refused_by_the_fk(sf: sessionmaker[Sessi
         s.add(MatterScope(matter="pole-penal", tenant="cabinet", scope=_SCOPE))
     store = ChunkStore(sf, schema_version=_SCHEMA, chunking_config_version=_CFG)
     with pytest.raises(IntegrityError):
-        store.write_chunk(_payload(piece_id("cabinet", "h", "pole-penal")), rbac_scope=_SCOPE)
+        store.write_chunk(
+            _payload(piece_id("cabinet", "h", "pole-penal")),
+            rbac_scope=_SCOPE, vector=_VEC, model_id=_MID, model_version=_MVER)

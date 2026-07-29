@@ -13,6 +13,7 @@ unit's (so an exception handler cannot roll the quarantine back with the failure
 
 from __future__ import annotations
 
+import functools
 import os
 import shutil
 from collections.abc import Callable
@@ -21,6 +22,7 @@ from pathlib import Path
 
 from procrastinate import App, PsycopgConnector, RetryStrategy, testing
 
+from apx.adapters.embedder_bgem3.bgem3 import Bgem3Embedder
 from apx.adapters.expansion.archives import SevenZipExpander, ZipExpander
 from apx.adapters.expansion.composite import CompositeExpander
 from apx.adapters.expansion.mail import EmlExpander, MboxExpander
@@ -29,10 +31,12 @@ from apx.adapters.extraction.composite import CompositeExtractor
 from apx.adapters.extraction.files import FileExtractor
 from apx.adapters.extraction.msg import MsgExpander, MsgExtractor
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
+from apx.adapters.store_postgres.admission import admit
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.store import ImportJobView, SqlStore
 from apx.core.app.ingest import enumerate_units, ingest_one_file
 from apx.core.domain.config import ExpansionBounds, expansion_bounds
+from apx.core.ports.embedding import Embedder
 from apx.core.ports.extraction import Extractor
 
 
@@ -77,14 +81,22 @@ def _build_expander(bounds: ExpansionBounds) -> CompositeExpander:
         EmlExpander(bounds), PdfPortfolioExpander(bounds), MsgExpander(bounds)])
 
 
+def _build_embedder() -> Embedder:
+    """The ONE embedder (AD-11), built ONCE at the composition root — never per unit (a local model
+    is expensive to construct). Tests inject a fake at this seam instead (AD-11)."""
+    return Bgem3Embedder()
+
+
 def _persist_unit(
     store: SqlStore, job: ImportJobView, unit_id: str, provenance: str, *,
-    max_bytes: int, now: datetime,
+    max_bytes: int, now: datetime, embedder: Embedder,
 ) -> None:
-    """The default unit work: extract one file and persist its pieces/failures idempotently
-    (``audit=False`` — one job-level audit entry is written at completion), then mark the unit
-    committed. A clean extraction failure is a register row, not a raise; only a hard crash
-    (SIGKILL/OOM in reality) escapes, which the resumable loop and quarantine handle."""
+    """The default unit work: extract one file, EMBED each piece (Story 2.8 — a precondition of
+    corpus admission: an embedder failure moves the piece to the *failure register* with its class,
+    never a Piece and never a chunk), persist idempotently (``audit=False`` — one job-level audit
+    entry at completion), write the chunk(s), and mark the unit committed. A clean extraction OR
+    embedder failure is a register row, not a raise; only a hard crash (SIGKILL/OOM in reality)
+    escapes, which the resumable loop and quarantine handle."""
     path = Path(job.spool_path) / provenance
     bounds = expansion_bounds(lambda k: store.get_config(job.tenant, k))
     noise_patterns = store.get_config(job.tenant, "exclusion_list")  # config-as-data (FR-6)
@@ -92,9 +104,9 @@ def _persist_unit(
         path, provenance, job.matter, job.tenant, _build_extractor(),
         custodian=job.custodian, expander=_build_expander(bounds), now=now, max_bytes=max_bytes,
         bounds=bounds, noise_patterns=noise_patterns)
-    store.save(
-        result, scope=job.scope, actor=job.actor, matter=job.matter, tenant=job.tenant,
-        audit=False)
+    admit(
+        store, embedder, result, scope=job.scope, actor=job.actor, matter=job.matter,
+        tenant=job.tenant, audit=False)
     store.mark_unit_committed(unit_id)
 
 
@@ -127,12 +139,16 @@ def _process_unit(
 
 
 def _run_import(
-    store: SqlStore, job_id: str, *, work: UnitWork = _persist_unit, now: datetime | None = None,
+    store: SqlStore, job_id: str, *, work: UnitWork | None = None,
+    embedder: Embedder | None = None, now: datetime | None = None,
 ) -> None:
     """The resumable orchestration (AD-17) — pure of Procrastinate, so it is tested directly with
     a SQLite store. Enumerate (freeze submitted, idempotent), process each pending unit, finish
     with one job-level audit entry, then drop the spool. A re-dispatch after a kill re-enumerates
-    (idempotent) and processes only the still-pending units — resume."""
+    (idempotent) and processes only the still-pending units — resume. The ONE embedder is built
+    once here and threaded into the default unit work (Story 2.8); a test injects a fake instead."""
+    embedder = embedder if embedder is not None else _build_embedder()
+    work = work if work is not None else functools.partial(_persist_unit, embedder=embedder)
     stamp = now or datetime.now(UTC)
     job = store.read_import_job(job_id)
     if job is None or job.state == "done":

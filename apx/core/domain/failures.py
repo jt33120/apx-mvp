@@ -35,6 +35,12 @@ class ErrorClass(StrEnum):
     QUARANTINED = "quarantined"                  # repeatedly killed the worker; quarantined
     # ── the AD-38 container class (Story 2.4): ONE entry of cardinality `unknown` ──
     CONTAINER_UNOPENABLE = "container-unopenable"
+    # ── the embedder failures (FR-9/AD-11, Story 2.8): the embedder fails loudly, never degrades ──
+    EMBEDDER_UNAVAILABLE = "embedder-unavailable"
+    EMBEDDER_RATE_LIMITED = "embedder-rate-limited"
+    EMBEDDER_TIMEOUT = "embedder-timeout"
+    EMBEDDER_DIMENSION_MISMATCH = "embedder-dimension-mismatch"
+    EMBEDDER_AUTH_FAILED = "embedder-auth-failed"
     # ── the catch-all: never dropped, always recorded with a redacted diagnostic (FR-5) ──
     UNKNOWN = "unknown"
 

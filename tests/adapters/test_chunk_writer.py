@@ -21,7 +21,7 @@ from apx.adapters.store_postgres.chunk_writer import (
     UnauthorizedScope,
     VersionMismatch,
 )
-from apx.adapters.store_postgres.models import Base, Chunk, MatterScope, Piece
+from apx.adapters.store_postgres.models import EMBEDDING_DIM, Base, Chunk, MatterScope, Piece
 from apx.core.domain.identity import chunk_id, piece_id
 from apx.core.domain.payload import IncompletePayload, PayloadRecord
 
@@ -68,6 +68,16 @@ def _store(sf: sessionmaker[Session]) -> ChunkStore:
     return ChunkStore(sf, schema_version=_SCHEMA, chunking_config_version=_CFG)
 
 
+# a valid embedding trio (story 2.8) — the write-time addition every real chunk carries (AD-11)
+_VEC = [0.1] * EMBEDDING_DIM
+_MID, _MVER = "bge-m3", "v1"
+
+
+def _wc(store: ChunkStore, payload: PayloadRecord, *, rbac_scope: str = _SCOPE) -> str:
+    return store.write_chunk(
+        payload, rbac_scope=rbac_scope, vector=_VEC, model_id=_MID, model_version=_MVER)
+
+
 def _chunk_count(sf: sessionmaker[Session]) -> int:
     with sf() as s:
         return s.scalar(select(func.count()).select_from(Chunk)) or 0
@@ -75,7 +85,7 @@ def _chunk_count(sf: sessionmaker[Session]) -> int:
 
 def test_writes_a_chunk_under_the_authorised_scope(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
-    cid = _store(sf).write_chunk(_payload(pid), rbac_scope=_SCOPE)
+    cid = _wc(_store(sf),_payload(pid), rbac_scope=_SCOPE)
     assert cid == chunk_id(pid, "tv", 0, _CFG)
     with sf() as s:
         row = s.get(Chunk, cid)
@@ -89,7 +99,7 @@ def test_writes_a_chunk_under_the_authorised_scope(sf: sessionmaker[Session]) ->
 def test_rejects_an_incomplete_payload_and_writes_nothing(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
     with pytest.raises(IncompletePayload):
-        _store(sf).write_chunk(_payload(pid, custodian=""), rbac_scope=_SCOPE)
+        _wc(_store(sf),_payload(pid, custodian=""), rbac_scope=_SCOPE)
     assert _chunk_count(sf) == 0
 
 
@@ -97,7 +107,7 @@ def test_rejects_a_broken_date_invariant(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
     with pytest.raises(IncompletePayload):
         # a date with an 'undetermined' status is never written (AC1)
-        _store(sf).write_chunk(
+        _wc(_store(sf),
             _payload(pid, piece_date=datetime(2020, 1, 1).date(), piece_date_status="undetermined"),
             rbac_scope=_SCOPE,
         )
@@ -107,14 +117,14 @@ def test_rejects_a_broken_date_invariant(sf: sessionmaker[Session]) -> None:
 def test_rejects_an_unauthorised_scope_and_writes_nothing(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
     with pytest.raises(UnauthorizedScope):
-        _store(sf).write_chunk(_payload(pid), rbac_scope="wall-civil")
+        _wc(_store(sf),_payload(pid), rbac_scope="wall-civil")
     assert _chunk_count(sf) == 0
 
 
 def test_rejects_an_empty_scope(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
     with pytest.raises(UnauthorizedScope):
-        _store(sf).write_chunk(_payload(pid), rbac_scope="")
+        _wc(_store(sf),_payload(pid), rbac_scope="")
     assert _chunk_count(sf) == 0
 
 
@@ -124,7 +134,7 @@ def test_rejects_a_source_piece_id_not_matching_its_provenance(sf: sessionmaker[
     # chunk carrying it would cross the Chinese wall. The single seam refuses it.
     foreign_pid = piece_id("cabinet", "h", "pole-assurance")
     with pytest.raises(PieceIdentityMismatch):
-        _store(sf).write_chunk(_payload(foreign_pid), rbac_scope=_SCOPE)
+        _wc(_store(sf),_payload(foreign_pid), rbac_scope=_SCOPE)
     assert _chunk_count(sf) == 0
 
 
@@ -135,23 +145,23 @@ def test_rejects_a_scope_from_another_tenant(sf: sessionmaker[Session]) -> None:
     # (tenant-first, fail closed — AD-12).
     foreign = _payload(piece_id("autre-cabinet", "h", "pole-penal"), tenant="autre-cabinet")
     with pytest.raises(UnauthorizedScope):
-        _store(sf).write_chunk(foreign, rbac_scope=_SCOPE)
+        _wc(_store(sf),foreign, rbac_scope=_SCOPE)
     assert _chunk_count(sf) == 0
 
 
 def test_rejects_a_version_mismatch_and_writes_nothing(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
     with pytest.raises(VersionMismatch):
-        _store(sf).write_chunk(_payload(pid, schema_version="2"), rbac_scope=_SCOPE)
+        _wc(_store(sf),_payload(pid, schema_version="2"), rbac_scope=_SCOPE)
     with pytest.raises(VersionMismatch):
-        _store(sf).write_chunk(_payload(pid, chunking_config_version="c2"), rbac_scope=_SCOPE)
+        _wc(_store(sf),_payload(pid, chunking_config_version="c2"), rbac_scope=_SCOPE)
     assert _chunk_count(sf) == 0
 
 
 def test_a_rewrite_is_idempotent_not_a_duplicate(sf: sessionmaker[Session]) -> None:
     pid = _seed(sf)
     store = _store(sf)
-    first = store.write_chunk(_payload(pid), rbac_scope=_SCOPE)
-    second = store.write_chunk(_payload(pid), rbac_scope=_SCOPE)
+    first = _wc(store, _payload(pid))
+    second = _wc(store, _payload(pid))
     assert first == second
     assert _chunk_count(sf) == 1

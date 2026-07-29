@@ -20,7 +20,7 @@ from __future__ import annotations
 
 from sqlalchemy.orm import Session, sessionmaker
 
-from apx.adapters.store_postgres.models import Chunk, MatterScope
+from apx.adapters.store_postgres.models import EMBEDDING_DIM, Chunk, MatterScope
 from apx.core.domain.identity import chunk_id, piece_id
 from apx.core.domain.payload import PayloadRecord
 
@@ -69,9 +69,22 @@ class ChunkStore:
         self._schema_version = schema_version
         self._chunking_config_version = chunking_config_version
 
-    def write_chunk(self, payload: PayloadRecord, *, rbac_scope: str) -> str:
+    def write_chunk(
+        self, payload: PayloadRecord, *, rbac_scope: str,
+        vector: list[float], model_id: str, model_version: str,
+    ) -> str:
+        """Write one embedded *chunk* (story 2.8). The embedding trio (``vector`` +
+        ``model_id``/``model_version``, AD-11) is a write-time argument, NOT part of the frozen
+        ``PayloadRecord`` (1.3's non-embedding provenance). A vector whose width ≠ the column
+        dimension **halts** and writes nothing (AC4 — a dimension mismatch never self-deletes)."""
         # 1. Completeness — reject at the boundary (raises IncompletePayload).
         payload.validate()
+        # 1a. Dimension guard (AD-11/FR-10): a wrong-width vector halts here, before any write —
+        #     it never truncates or recreates the index (the v1 self-wipe defect).
+        if len(vector) != EMBEDDING_DIM or not model_id.strip() or not model_version.strip():
+            raise VersionMismatch(
+                f"embedding is {len(vector)}-dim (expected {EMBEDDING_DIM}) or its model identity "
+                "is blank — the unit halts, the corpus is untouched")
 
         # 1b. The referenced pièce must be the one this payload describes. piece_id encodes
         #     (content, matter) (AD-40), so a mismatch means the chunk would point at another
@@ -134,6 +147,9 @@ class ChunkStore:
                     chunking_config_version=payload.chunking_config_version,
                     schema_version=payload.schema_version,
                     external_ref=None,
+                    model_id=model_id,
+                    model_version=model_version,
+                    vector=vector,
                 )
             )
         return cid

@@ -414,7 +414,7 @@ could contain is an inflated claim about what the suite proves).
 | `extract-msg-sealed` | FR-3 | AD-28 | structural | no_extract_msg_import_outside_worker | extract_msg imports in the runtime tree (excl. adapters/extraction/msg_worker.py) |
 | `subprocess-only-in-extraction` | FR-3 | AD-28 | structural | no_subprocess_call_outside_extraction | subprocess imports in the runtime tree (excl. adapters/extraction) |
 | `extraction-captures-stderr` | FR-3 | AD-28 | structural | extraction_subprocess_captures_stderr | subprocess call sites in adapters/extraction (capture_output / stderr=PIPE or DEVNULL) |
-| `no-fallback-embedder` | FR-9 | AD-11 | structural | embedder_has_one_implementation | embed/encode-method classes + except-handlers in the runtime tree (vacuous until 2.8) |
+| `no-fallback-embedder` | FR-9 | AD-11 | structural | embedder_has_one_implementation | embed/encode-method classes + except-handlers in the runtime tree (live as of 2.8) |
 | `destructive-index-one-entry` | FR-10 | AD-7 | structural | destructive_index_ops_single_entry | index drop/truncate call sites (vacuous until 2.8) |
 | `no-post-filter-retrieval` | FR-14 | AD-14 | structural | no_post_filter_in_retrieval | functions taking a result set + a scope (vacuous until 3.x) |
 | `no-nl-translation-key` | FR-34 | conventions | structural | no_natural_language_translation_key | t()/gettext() call args (vacuous until 6.3) |

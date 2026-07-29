@@ -27,6 +27,9 @@ from sqlalchemy import (
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from apx.adapters.store_postgres.crypto_types import EncryptedText
+from apx.adapters.store_postgres.vector_types import Halfvec
+
+EMBEDDING_DIM = 1024  # the halfvec width (AD-11); must match the Embedder port's `dimensions`
 
 
 class Base(DeclarativeBase):
@@ -130,7 +133,8 @@ class Chunk(Base):
     ``matter_scope`` at query time (AD-13/AD-40) — and **no** ``custodian`` column —
     custodianship is a SET on the *pièce* (:class:`PieceCustodian`, the CUSTODIAN_LINK;
     Story 2.5). The embedding trio (the ``halfvec`` vector and its
-    ``model_id``/``model_version``) is added by the embedder story (2.8); 1.3 freezes the
+    ``model_id``/``model_version``) is present as of the embedder story (2.8), so a
+    mixed-provenance *corpus* is detectable rather than suspected (AD-11); 1.3 froze the
     non-embedding provenance. No cascade FK (AD-7): a *pièce* is retired, never
     hard-deleted out from under its chunks.
     """
@@ -163,6 +167,13 @@ class Chunk(Base):
     # the reserved external-authority reference (AD-9) — nullable, unused until a court
     # or bâtonnier reference is attached; present so its later use is not a migration.
     external_ref: Mapped[str | None] = mapped_column(String, nullable=True)
+    # ── the embedding trio (AD-11, story 2.8) — the embedder's identity + its output ──
+    # model_id/model_version make a mixed-provenance corpus DETECTABLE (AD-11); the vector is
+    # 1024-dim halfvec on PG (volume-encrypted, AD-31 — never app-encrypted, a randomised column
+    # could not be HNSW-indexed). All NOT NULL: a chunk exists only once it has been embedded.
+    model_id: Mapped[str] = mapped_column(String, nullable=False)
+    model_version: Mapped[str] = mapped_column(String, nullable=False)
+    vector: Mapped[list[float]] = mapped_column(Halfvec(EMBEDDING_DIM), nullable=False)
 
 
 class Failure(Base):

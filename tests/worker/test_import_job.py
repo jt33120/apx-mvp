@@ -23,8 +23,10 @@ from apx.adapters.store_postgres.models import Base, Failure, ImportUnit, Matter
 from apx.adapters.store_postgres.queue import _persist_unit, _run_import
 from apx.adapters.store_postgres.store import SqlStore
 from apx.core.app.ingest import IngestionResult
+from tests.embedding_fakes import FakeEmbedder
 
 _NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
+_FAKE = FakeEmbedder()  # story 2.8: the embedder injected at the port boundary (never the real one)
 
 
 @pytest.fixture
@@ -58,7 +60,7 @@ def _classes(store: SqlStore) -> set[str]:
 
 def test_import_processes_units_finishes_and_writes_one_audit_entry(tmp_path, store) -> None:
     job_id = _job(store, tmp_path, {"a.txt": b"lettre", "sub/b.txt": b"note", "empty.txt": b""})
-    _run_import(store, job_id, now=_NOW)
+    _run_import(store, job_id, embedder=_FAKE, now=_NOW)
     inv = store.inventory("m", "t", {"w"})
     assert inv.in_corpus == 2 and inv.open_register_entries == 1  # a, b are pieces; empty → failure
     prog = store.import_progress(job_id)
@@ -88,7 +90,7 @@ def test_resume_processes_only_pending_units_and_never_duplicates(tmp_path, stor
         if len(seen) >= 2:
             raise RuntimeError("worker killed mid-job")   # a crash after two committed units
         seen.append(prov)
-        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now)
+        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now, embedder=_FAKE)
 
     with pytest.raises(RuntimeError):
         _run_import(store, job_id, work=flaky, now=_NOW)     # dies after 2 units
@@ -101,7 +103,7 @@ def test_resume_processes_only_pending_units_and_never_duplicates(tmp_path, stor
 
     def spy(st, job, uid, prov, *, max_bytes, now):  # noqa: ANN001, ANN202
         resumed.append(prov)
-        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now)
+        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now, embedder=_FAKE)
 
     _run_import(store, job_id, work=spy, now=_NOW)
     assert set(resumed).isdisjoint(committed_first)         # committed units are NOT re-processed
@@ -132,7 +134,7 @@ def test_a_poison_unit_is_quarantined_and_the_job_completes(tmp_path, store) -> 
     def work(st, job, uid, prov, *, max_bytes, now):  # noqa: ANN001, ANN202
         if "poison" in prov:
             raise RuntimeError("this unit keeps killing the worker")
-        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now)
+        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now, embedder=_FAKE)
 
     for _ in range(10):                                      # simulate re-dispatch after each kill
         try:
@@ -150,7 +152,7 @@ def test_a_poison_unit_is_quarantined_and_the_job_completes(tmp_path, store) -> 
 def test_an_oversized_unit_is_resource_exhausted_not_an_outage(tmp_path, store) -> None:
     store.set_config("t", "admin", "import_unit_max_bytes", 10)   # a tiny per-unit ceiling
     job_id = _job(store, tmp_path, {"big.txt": b"x" * 100, "small.txt": b"ok"})
-    _run_import(store, job_id, now=_NOW)
+    _run_import(store, job_id, embedder=_FAKE, now=_NOW)
     assert "resource-exhausted" in _classes(store)          # big → a register entry, not a crash
     assert store.inventory("m", "t", {"w"}).in_corpus == 1  # small still committed; worker survived
     assert store.import_progress(job_id).state == "done"
@@ -159,7 +161,7 @@ def test_an_oversized_unit_is_resource_exhausted_not_an_outage(tmp_path, store) 
 def test_progress_is_read_from_the_ledger(tmp_path, store) -> None:
     job_id = _job(store, tmp_path, {"a.txt": b"1", "b.txt": b"2"})
     assert store.import_progress(job_id).state == "enumerating"   # provisional before the run
-    _run_import(store, job_id, now=_NOW)
+    _run_import(store, job_id, embedder=_FAKE, now=_NOW)
     p = store.import_progress(job_id)
     assert p.submitted == 2 and p.processed == 2 and p.pending == 0 and not p.provisional
 
@@ -167,7 +169,7 @@ def test_progress_is_read_from_the_ledger(tmp_path, store) -> None:
 def test_one_open_import_job_per_matter(tmp_path, store) -> None:
     job_id = _job(store, tmp_path, {"a.txt": b"1"})
     assert store.open_import_job("t", "m") == job_id         # open while running (FR-7)
-    _run_import(store, job_id, now=_NOW)
+    _run_import(store, job_id, embedder=_FAKE, now=_NOW)
     assert store.open_import_job("t", "m") is None            # closed once done
 
 
@@ -175,10 +177,10 @@ def test_re_dispatching_a_done_job_is_a_no_op(tmp_path, store) -> None:
     # AD-17: a re-dispatch of a completed job (its owned spool already consumed) must NOT re-derive
     # submitted to 0 nor append a second job-level audit entry — the sole authority stays correct.
     job_id = _job(store, tmp_path, {"a.txt": b"1", "b.txt": b"2"})
-    _run_import(store, job_id, now=_NOW)                      # done; the owned spool is now gone
+    _run_import(store, job_id, embedder=_FAKE, now=_NOW)          # done; the owned spool is gone
     before = store.import_progress(job_id)
     n_audit = len(store.read_audit("m", "t", {"w"}).entries)
-    _run_import(store, job_id, now=_NOW)                      # a redelivery of the same job
+    _run_import(store, job_id, embedder=_FAKE, now=_NOW)          # a redelivery of the same job
     after = store.import_progress(job_id)
     assert after.submitted == before.submitted == 2 and after.processed == 2   # not reset to 0
     assert len(store.read_audit("m", "t", {"w"}).entries) == n_audit == 1       # no 2nd entry
@@ -192,7 +194,7 @@ def test_a_missing_owned_spool_fails_closed(tmp_path, store) -> None:
     job_id = _job(store, tmp_path, {"a.txt": b"1"})
     shutil.rmtree(tmp_path / "spool-m")                       # the owned spool vanishes
     with pytest.raises(RuntimeError):
-        _run_import(store, job_id, now=_NOW)
+        _run_import(store, job_id, embedder=_FAKE, now=_NOW)
     assert store.import_progress(job_id).state != "done"     # never falsely completed
 
 
@@ -219,6 +221,8 @@ def test_worker_runs_the_job_via_the_inmemory_connector(tmp_path, monkeypatch) -
 
     from apx.adapters.store_postgres.queue import app as queue_app
     from apx.adapters.store_postgres.queue import run_import
+    # inject the fake embedder at the composition-root seam (the real task builds its own) — AD-11
+    monkeypatch.setattr("apx.adapters.store_postgres.queue._build_embedder", lambda: _FAKE)
     queue_app.connector.reset()
     run_import.defer(job_id=job_id)                          # enqueue (sync — no running loop here)
     queue_app.run_worker(wait=False, listen_notify=False, install_signal_handlers=False)

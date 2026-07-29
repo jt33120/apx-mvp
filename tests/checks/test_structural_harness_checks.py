@@ -51,9 +51,13 @@ def test_check_fires_on_its_fixture(check, fixture) -> None:  # noqa: ANN001
 
 
 def test_forward_looking_checks_name_their_deferral() -> None:
-    # AC5: a forward-looking check says (in its green detail) that it is vacuous until its subject
-    # lands, so 'green' is never mistaken for 'guarding live code today'.
-    assert "vacuous until" in fl.embedder_has_one_implementation().detail
+    # A forward-looking check says (in its green detail) that it is vacuous until its subject lands,
+    # so 'green' is never mistaken for 'guarding live code today'. Story 2.8 LANDED the embedder →
+    # that check is now non-vacuous and NAMES its one live implementation (green and guarding); the
+    # index check stays vacuous (the vector write path is INSERT-only — no destructive op).
+    embedder = fl.embedder_has_one_implementation()
+    assert embedder.ok and "vacuous until" not in embedder.detail
+    assert "apx/adapters/embedder_bgem3" in embedder.detail   # the one real embedder (2.8)
     assert "vacuous until" in fl.destructive_index_ops_single_entry().detail
 
 
