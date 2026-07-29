@@ -421,6 +421,7 @@ could contain is an inflated claim about what the suite proves).
 | `no-hardcoded-locale` | FR-35 | AD-24 | structural | no_hardcoded_locale | locale= / setlocale / Locale literals (vacuous until 6.4) |
 | `no-model-reported-confidence` | FR-42 | AD-19 | structural | no_model_reported_confidence | confidence fields read off a model response (vacuous until 4.x) |
 | `no-banned-confidence-phrasing` | FR-23 | FR-23 | structural | no_banned_confidence_phrasing | banned phrases in string literals / locale resources (vacuous until 5.4/6.x) |
+| `gold-set-merge-gate` | FR-54 | AD-34 | structural | ranking_code_requires_the_gold_gate | ranking/triage sites in apx/** + eval/harness.py recall gate (vacuous until Epic 4) |
 | `register-state-written-once` | FR-5 | AD-37 | structural | register_state_written_once | Failure.resolution_state writes across apx/** |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |

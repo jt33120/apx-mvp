@@ -82,12 +82,20 @@ class FileExtractor:
     def _pdf(self, path: Path) -> ExtractOutcome:
         from pypdf import PdfReader
         from pypdf.errors import (
+            FileNotDecryptedError,  # raised ONLY when a real user password is required
             PyPdfError,  # the base pypdf error; `PdfError` does not exist (6.14)
         )
 
         try:
             reader = PdfReader(str(path))
             text = "\n".join((page.extract_text() or "") for page in reader.pages)
+        except FileNotDecryptedError:
+            # Genuinely gated — a non-empty USER password is required (FR-5/FR-54): the lawyer must
+            # supply the credential. NOT the merely permission-encrypted PDF (empty user password +
+            # owner restrictions), which pypdf reads with no credential and which stays in the
+            # corpus — recall over precision, a readable document is never withheld. (Subclass of
+            # PyPdfError, so this handler must precede the generic one below.)
+            return ExtractOutcome("", "pypdf", self.version, ErrorClass.PASSWORD_PROTECTED)
         except (PyPdfError, OSError, ValueError):
             return ExtractOutcome("", "pypdf", self.version, ErrorClass.UNREADABLE)
         if not text.strip():

@@ -1,0 +1,30 @@
+{
+  "corpus_id": "apx-fr-employment-mock-v1",
+  "title": "Synthetic French employment-law firm dump (2-lawyer, ~6 months)",
+  "specialite": "Droit du travail / droit social",
+  "origin": {
+    "source": "APX v1 build (apx-platform)",
+    "generator": "scripts/generate_firm_corpus.py",
+    "deterministic_seed": 42,
+    "lifted_on": "2026-07-29",
+    "note": "Lifted as-is per the retrospective rank-1 salvage (WORK-BREAKDOWN U3). The generator is NOT ported; the data is copied and versioned so recall is reproducible."
+  },
+  "licence": {
+    "status": "self-authored-synthetic",
+    "third_party_encumbrance": "none",
+    "summary": "Fully synthetic, procedurally generated, anonymised data. No third-party corpus, no external distribution, no licence to clear. The recorded verification step (FR-54) is this record itself: the specific distribution is self-authored and unencumbered."
+  },
+  "privacy": {
+    "contains_real_client_data": false,
+    "residency": "EU-only",
+    "retention": "zero-retention — synthetic evaluation data, not client material",
+    "note": "Names, addresses, RG numbers and email bodies are procedurally generated. 'Never place real client data here' (v1 generator docstring)."
+  },
+  "distribution": {
+    "n_files": 140,
+    "n_manifest_items": 139,
+    "n_dossiers": 8,
+    "digest_algorithm": "sha256 over each file's relpath (posix, sorted) concatenated with its bytes; see eval.corpus_source.corpus_digest",
+    "distribution_sha256": "f0ab82ba81dd4b206e67a21e5c7ca4858d02ffa335f6d710f44ea938aca5f495"
+  }
+}

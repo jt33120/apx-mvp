@@ -75,13 +75,24 @@ def test_extractor_worker_failure_is_unreadable(
     assert not out.ok and out.error_class is ErrorClass.UNREADABLE
 
 
+def test_a_missing_msg_is_unreadable_not_corrupt_file(tmp_path: Path) -> None:
+    pytest.importorskip("extract_msg")
+    # a .msg that vanished between enumeration and processing (FileNotFoundError in the worker) is
+    # `unreadable`, NOT `corrupt-file` — a missing file is not a damaged one (review MED); only an
+    # invalid compound file (InvalidFileFormatError) is corrupt-file.
+    out = MsgExtractor().extract(tmp_path / "gone.msg")
+    assert not out.ok and out.error_class is ErrorClass.UNREADABLE
+
+
 # ── layer 3: a REAL subprocess on a malformed .msg — crash isolation + no leak ────────────────
 def test_a_malformed_msg_is_a_failure_not_a_worker_death(tmp_path: Path) -> None:
     pytest.importorskip("extract_msg")               # the parser-failure path needs the parser
     p = tmp_path / "casse.msg"
     p.write_bytes(b"this is not an OLE compound file at all")
     out = MsgExtractor().extract(p)                  # spawns the real out-of-process worker
-    assert not out.ok and out.error_class is ErrorClass.UNREADABLE   # mapped cleanly, no raise
+    # a file that is not a valid compound file at all is `corrupt-file`, not merely `unreadable`
+    # (Story 2.12/FR-54 sharpened the class); still mapped cleanly out-of-process, never a raise
+    assert not out.ok and out.error_class is ErrorClass.CORRUPT_FILE
 
 
 def test_a_malformed_msg_never_leaks_its_bytes_out_of_the_boundary(tmp_path: Path) -> None:
@@ -109,7 +120,7 @@ def test_a_malformed_msg_leaks_no_seeded_token_into_the_register_or_a_log(
                                expander=expander)
     assert result.inventory.open_register_entries == 1 and result.inventory.in_corpus == 0  # kept
     failure = result.failures[0]
-    assert failure.error_class is ErrorClass.UNREADABLE
+    assert failure.error_class is ErrorClass.CORRUPT_FILE   # an unopenable compound file (2.12)
     assert seed not in (failure.detail or "")            # no document byte in the register detail
     assert seed not in caplog.text                       # nor in any emitted log
 

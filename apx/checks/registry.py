@@ -18,6 +18,7 @@ from apx.checks import (
     credential_storage,
     encryption,
     forward_looking,
+    gold_gate,
     import_contracts,
     inventory_record,
     isolation_harness,
@@ -84,6 +85,7 @@ CHECKS: list[Callable[[], CheckResult]] = [
     forward_looking.no_hardcoded_locale,
     forward_looking.no_model_reported_confidence,
     forward_looking.no_banned_confidence_phrasing,
+    gold_gate.ranking_code_requires_the_gold_gate,
     # story 2.6 — the failure register: one owning module per state transition (AD-37).
     register_ownership.register_state_written_once,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.

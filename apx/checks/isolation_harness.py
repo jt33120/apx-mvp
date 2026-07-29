@@ -87,8 +87,11 @@ def _import_modules(node: ast.AST) -> list[str]:
 
 
 def _is_test_tree_module(module: str) -> bool:
+    # The test tree AND the eval corpus (Story 2.12) are both non-product DATA sources the runtime
+    # must never import: a corpus is a configured source ingested through the real path, never a
+    # module the product depends on (FR-33). `eval` imports `apx`; `apx` never imports `eval`.
     parts = module.split(".")
-    return parts[0] == "tests" or "conftest" in parts or "_fixtures" in parts
+    return parts[0] in ("tests", "eval") or "conftest" in parts or "_fixtures" in parts
 
 
 def no_runtime_import_from_tests(roots: Iterable[Path] | None = None) -> CheckResult:
@@ -106,8 +109,9 @@ def no_runtime_import_from_tests(roots: Iterable[Path] | None = None) -> CheckRe
                 if _is_test_tree_module(module):
                     return CheckResult(
                         name, ad, False,
-                        f"{_where(path)}:{node.lineno} imports the test tree ({module!r}) — a "
-                        "runtime module may never reach the test suite or a fixture (FR-33/AD-16)")
+                        f"{_where(path)}:{node.lineno} imports a non-product data source "
+                        f"({module!r}) — a runtime module may never reach the test suite, a "
+                        "fixture or the eval corpus (FR-33/AD-16)")
     return CheckResult(name, ad, True,
                        f"no runtime module imports the test tree ({len(trees)} file(s))")
 

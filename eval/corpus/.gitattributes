@@ -1,0 +1,4 @@
+# The gold corpus is byte-pinned (Story 2.12, FR-54): its files feed a sha256 distribution digest
+# for licence verification, so NO line-ending or text conversion may rewrite them on any checkout
+# (a Windows autocrlf checkout would otherwise drift the digest). `-text` = never convert.
+* -text

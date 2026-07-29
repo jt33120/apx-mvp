@@ -31,6 +31,8 @@ _EVASIONS = [
      "T = ['a', 'b']\ndef r(tenant):\n    return 1 if tenant in T else 0\n"),
     ("relative-import-of-fixtures", ih.no_runtime_import_from_tests,
      "from ._fixtures import demo\nhandler = demo\n"),
+    ("runtime-import-of-eval-corpus", ih.no_runtime_import_from_tests,
+     "from eval.corpus_source import load_manifest\nhandler = load_manifest\n"),  # FR-33 (2.12)
     ("embedder-by-encode-method", fl.embedder_has_one_implementation,
      "class AEmbedder:\n    def encode(self, t): return []\n"
      "class BEmbedder:\n    def encode(self, t): return []\n"),

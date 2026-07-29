@@ -35,6 +35,7 @@ from apx.checks import (
     credential_storage,
     encryption,
     forward_looking,
+    gold_gate,
     import_contracts,
     inventory_record,
     isolation_harness,
@@ -382,6 +383,11 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("no-banned-confidence-phrasing", "FR-23", "FR-23", "no banned confidence-bound phrasing",
        forward_looking.no_banned_confidence_phrasing,
        "banned phrases in string literals / locale resources (vacuous until 5.4/6.x)"),
+    # ── story 2.12: the gold-set merge gate — ranking code cannot merge before recall runs ──────
+    _p("gold-set-merge-gate", "FR-54", "AD-34",
+       "ranking code is gated by the gold-set recall harness",
+       gold_gate.ranking_code_requires_the_gold_gate,
+       "ranking/triage sites in apx/** + eval/harness.py recall gate (vacuous until Epic 4)"),
     # ── story 2.6: the failure register — one owning module per state transition (AD-37) ──────
     _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
        register_ownership.register_state_written_once,

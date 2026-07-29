@@ -107,8 +107,16 @@ def run(mode: str, path: str) -> dict[str, Any]:
     (even at import time) goes to stderr — stdout carries ONLY the final JSON the caller reads."""
     with contextlib.redirect_stdout(sys.stderr):
         import extract_msg
+        from extract_msg.exceptions import InvalidFileFormatError
 
-        msg = extract_msg.openMsg(path)
+        try:
+            msg = extract_msg.openMsg(path)
+        except InvalidFileFormatError:
+            # ONLY a genuinely-corrupt compound file (not a valid OLE) is `corrupt-file` (FR-5 /
+            # FR-54). A missing / permission / resource failure is NOT damage — it propagates
+            # (→ exit 1 → `unreadable`), truthful to what the register asserts. Emitted as a
+            # structured result (exit 0), never a raise, so the class is decided here.
+            return {"ok": False, "error_class": "corrupt-file"}
         try:
             if mode == "text":
                 return _text(msg)

@@ -1,0 +1,1210 @@
+{
+  "use_case": "Cabinet Marchand & Lefèvre — Avocats Associés",
+  "specialite": "Droit du travail / droit social",
+  "periode": {
+    "debut": "2025-12-01",
+    "fin": "2026-05-31"
+  },
+  "avocats": {
+    "CM": {
+      "name": "Maître Claire Marchand",
+      "role": "Associée — défense des salariés"
+    },
+    "TL": {
+      "name": "Maître Thomas Lefèvre",
+      "role": "Associé — conseil employeurs / TPE-PME"
+    },
+    "SB": {
+      "name": "Sophie Bertrand",
+      "role": "Secrétaire juridique"
+    }
+  },
+  "dossiers": [
+    {
+      "id": "DOS-2025-014",
+      "client": "M. Julien Dupuis",
+      "adverse": "TechnoSys SAS",
+      "objet": "Licenciement sans cause réelle et sérieuse (insuffisance professionnelle)",
+      "avocat": "CM",
+      "rg": "RG F 25/01847",
+      "statut": "Bureau de jugement — audience fixée au 14/04/2026"
+    },
+    {
+      "id": "DOS-2025-018",
+      "client": "Mme Sandrine Moreau",
+      "adverse": "Atelier Bois Moderne SARL",
+      "objet": "Contestation d'un licenciement économique (motif et ordre des licenciements)",
+      "avocat": "CM",
+      "rg": "RG F 26/00214",
+      "statut": "Mise en état — conclusions en cours"
+    },
+    {
+      "id": "DOS-2025-021",
+      "client": "M. Antonio Silva",
+      "adverse": "Événementiel Prestige SAS",
+      "objet": "Requalification d'une succession de CDD d'usage en CDI",
+      "avocat": "CM",
+      "rg": "RG F 26/00389",
+      "statut": "Bureau de jugement — audience fixée au 06/05/2026"
+    },
+    {
+      "id": "DOS-2026-002",
+      "client": "Mme Léa Bénichou",
+      "adverse": "Clinique des Cèdres SA",
+      "objet": "Harcèlement moral et prise d'acte de la rupture aux torts de l'employeur",
+      "avocat": "CM",
+      "rg": "RG F 26/00512",
+      "statut": "Mise en état — expertise médicale en cours"
+    },
+    {
+      "id": "DOS-2026-005",
+      "client": "M. Karim Nader",
+      "adverse": "SARL Le Gourmet Lyonnais",
+      "objet": "Rappel d'heures supplémentaires et indemnité pour travail dissimulé",
+      "avocat": "CM",
+      "rg": "RG F 26/00641",
+      "statut": "Mise en état — communication des plannings demandée"
+    },
+    {
+      "id": "DOS-2026-009",
+      "client": "M. Pascal Garnier",
+      "adverse": "LogiTrans SA",
+      "objet": "Discrimination syndicale et inégalité de traitement",
+      "avocat": "CM",
+      "rg": "RG F 26/00798",
+      "statut": "Phase d'instruction — méthode de comparaison (panel) en cours"
+    },
+    {
+      "id": "DOS-2026-007",
+      "client": "PharmaDistrib SAS",
+      "adverse": "M. Vincent Roussel (ancien salarié)",
+      "objet": "Conseil employeur — validité et mise en œuvre d'une clause de non-concurrence",
+      "avocat": "TL",
+      "rg": "—",
+      "statut": "Conseil — note d'analyse rendue, suivi"
+    },
+    {
+      "id": "DOS-2025-019",
+      "client": "Vitalpro SAS",
+      "adverse": "—",
+      "objet": "Conseil RH récurrent — contrats, procédure disciplinaire, rupture conventionnelle",
+      "avocat": "TL",
+      "rg": "—",
+      "statut": "Abonnement conseil — prestations ponctuelles"
+    }
+  ],
+  "items": [
+    {
+      "id": "e001",
+      "rel": "raw/emails/e001.eml",
+      "kind": "client",
+      "date": "2025-12-08",
+      "gold_dossier": "DOS-2025-014",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e002",
+      "rel": "raw/emails/e002.eml",
+      "kind": "client",
+      "date": "2025-12-09",
+      "gold_dossier": "DOS-2025-014",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e003",
+      "rel": "raw/emails/e003.eml",
+      "kind": "greffe",
+      "date": "2026-01-16",
+      "gold_dossier": "DOS-2025-014",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e004",
+      "rel": "raw/emails/e004.eml",
+      "kind": "adverse",
+      "date": "2026-02-25",
+      "gold_dossier": "DOS-2025-014",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e005",
+      "rel": "raw/emails/e005.eml",
+      "kind": "client",
+      "date": "2025-12-18",
+      "gold_dossier": "DOS-2025-018",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e006",
+      "rel": "raw/emails/e006.eml",
+      "kind": "client",
+      "date": "2026-02-06",
+      "gold_dossier": "DOS-2025-018",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e007",
+      "rel": "raw/emails/e007.eml",
+      "kind": "client",
+      "date": "2026-01-09",
+      "gold_dossier": "DOS-2025-021",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e008",
+      "rel": "raw/emails/e008.eml",
+      "kind": "greffe",
+      "date": "2026-03-13",
+      "gold_dossier": "DOS-2025-021",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e009",
+      "rel": "raw/emails/e009.eml",
+      "kind": "client",
+      "date": "2026-02-03",
+      "gold_dossier": "DOS-2026-002",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e010",
+      "rel": "raw/emails/e010.eml",
+      "kind": "greffe",
+      "date": "2026-04-29",
+      "gold_dossier": "DOS-2026-002",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e011",
+      "rel": "raw/emails/e011.eml",
+      "kind": "client",
+      "date": "2026-02-17",
+      "gold_dossier": "DOS-2026-005",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e012",
+      "rel": "raw/emails/e012.eml",
+      "kind": "adverse",
+      "date": "2026-03-20",
+      "gold_dossier": "DOS-2026-005",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e013",
+      "rel": "raw/emails/e013.eml",
+      "kind": "client",
+      "date": "2026-03-24",
+      "gold_dossier": "DOS-2026-009",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e014",
+      "rel": "raw/emails/e014.eml",
+      "kind": "client",
+      "date": "2026-03-05",
+      "gold_dossier": "DOS-2026-007",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e015",
+      "rel": "raw/emails/e015.eml",
+      "kind": "client",
+      "date": "2026-03-18",
+      "gold_dossier": "DOS-2026-007",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e016",
+      "rel": "raw/emails/e016.eml",
+      "kind": "client",
+      "date": "2025-12-03",
+      "gold_dossier": "DOS-2025-019",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e017",
+      "rel": "raw/emails/e017.eml",
+      "kind": "client",
+      "date": "2026-03-15",
+      "gold_dossier": "DOS-2025-019",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "e018",
+      "rel": "raw/emails/e018.eml",
+      "kind": "interne",
+      "date": "2026-02-18",
+      "gold_dossier": null,
+      "gold_pertinence": "borderline"
+    },
+    {
+      "id": "e019",
+      "rel": "raw/emails/e019.eml",
+      "kind": "interne",
+      "date": "2026-02-18",
+      "gold_dossier": null,
+      "gold_pertinence": "borderline"
+    },
+    {
+      "id": "n001",
+      "rel": "raw/emails/n001.eml",
+      "kind": "noise",
+      "date": "2025-12-05",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n002",
+      "rel": "raw/emails/n002.eml",
+      "kind": "noise",
+      "date": "2025-12-11",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n003",
+      "rel": "raw/emails/n003.eml",
+      "kind": "noise",
+      "date": "2025-12-15",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n004",
+      "rel": "raw/emails/n004.eml",
+      "kind": "noise",
+      "date": "2026-01-07",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n005",
+      "rel": "raw/emails/n005.eml",
+      "kind": "noise",
+      "date": "2026-01-19",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n006",
+      "rel": "raw/emails/n006.eml",
+      "kind": "noise",
+      "date": "2026-01-22",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n007",
+      "rel": "raw/emails/n007.eml",
+      "kind": "noise",
+      "date": "2026-02-02",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n008",
+      "rel": "raw/emails/n008.eml",
+      "kind": "noise",
+      "date": "2026-02-09",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n009",
+      "rel": "raw/emails/n009.eml",
+      "kind": "noise",
+      "date": "2026-02-21",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n010",
+      "rel": "raw/emails/n010.eml",
+      "kind": "noise",
+      "date": "2026-03-02",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n011",
+      "rel": "raw/emails/n011.eml",
+      "kind": "noise",
+      "date": "2026-03-11",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n012",
+      "rel": "raw/emails/n012.eml",
+      "kind": "noise",
+      "date": "2026-03-28",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "n013",
+      "rel": "raw/emails/n013.eml",
+      "kind": "noise",
+      "date": "2026-04-03",
+      "gold_dossier": null,
+      "gold_pertinence": "borderline"
+    },
+    {
+      "id": "n014",
+      "rel": "raw/emails/n014.eml",
+      "kind": "noise",
+      "date": "2026-04-18",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x100",
+      "rel": "raw/emails/x100.eml",
+      "kind": "noise",
+      "date": "2026-05-13",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x101",
+      "rel": "raw/emails/x101.eml",
+      "kind": "noise",
+      "date": "2025-12-29",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x102",
+      "rel": "raw/emails/x102.eml",
+      "kind": "noise",
+      "date": "2025-12-07",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x103",
+      "rel": "raw/emails/x103.eml",
+      "kind": "noise",
+      "date": "2026-02-09",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x104",
+      "rel": "raw/emails/x104.eml",
+      "kind": "noise",
+      "date": "2026-02-01",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x105",
+      "rel": "raw/emails/x105.eml",
+      "kind": "noise",
+      "date": "2026-01-27",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x106",
+      "rel": "raw/emails/x106.eml",
+      "kind": "noise",
+      "date": "2026-01-05",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x107",
+      "rel": "raw/emails/x107.eml",
+      "kind": "noise",
+      "date": "2025-12-27",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x108",
+      "rel": "raw/emails/x108.eml",
+      "kind": "noise",
+      "date": "2026-05-23",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x109",
+      "rel": "raw/emails/x109.eml",
+      "kind": "noise",
+      "date": "2026-04-19",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x110",
+      "rel": "raw/emails/x110.eml",
+      "kind": "noise",
+      "date": "2025-12-23",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x111",
+      "rel": "raw/emails/x111.eml",
+      "kind": "noise",
+      "date": "2026-05-01",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x112",
+      "rel": "raw/emails/x112.eml",
+      "kind": "noise",
+      "date": "2026-03-19",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x113",
+      "rel": "raw/emails/x113.eml",
+      "kind": "noise",
+      "date": "2025-12-09",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x114",
+      "rel": "raw/emails/x114.eml",
+      "kind": "noise",
+      "date": "2025-12-08",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x115",
+      "rel": "raw/emails/x115.eml",
+      "kind": "noise",
+      "date": "2025-12-24",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x116",
+      "rel": "raw/emails/x116.eml",
+      "kind": "noise",
+      "date": "2026-01-25",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x117",
+      "rel": "raw/emails/x117.eml",
+      "kind": "noise",
+      "date": "2026-01-29",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x118",
+      "rel": "raw/emails/x118.eml",
+      "kind": "noise",
+      "date": "2026-04-09",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x119",
+      "rel": "raw/emails/x119.eml",
+      "kind": "noise",
+      "date": "2026-05-04",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x120",
+      "rel": "raw/emails/x120.eml",
+      "kind": "noise",
+      "date": "2025-12-07",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x121",
+      "rel": "raw/emails/x121.eml",
+      "kind": "noise",
+      "date": "2026-04-23",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x122",
+      "rel": "raw/emails/x122.eml",
+      "kind": "noise",
+      "date": "2026-01-20",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x123",
+      "rel": "raw/emails/x123.eml",
+      "kind": "noise",
+      "date": "2026-05-16",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x124",
+      "rel": "raw/emails/x124.eml",
+      "kind": "noise",
+      "date": "2026-05-29",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x125",
+      "rel": "raw/emails/x125.eml",
+      "kind": "noise",
+      "date": "2026-04-19",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x126",
+      "rel": "raw/emails/x126.eml",
+      "kind": "noise",
+      "date": "2026-03-18",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x127",
+      "rel": "raw/emails/x127.eml",
+      "kind": "noise",
+      "date": "2026-01-26",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x128",
+      "rel": "raw/emails/x128.eml",
+      "kind": "noise",
+      "date": "2026-03-25",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x129",
+      "rel": "raw/emails/x129.eml",
+      "kind": "noise",
+      "date": "2026-04-30",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x130",
+      "rel": "raw/emails/x130.eml",
+      "kind": "noise",
+      "date": "2026-02-10",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x131",
+      "rel": "raw/emails/x131.eml",
+      "kind": "noise",
+      "date": "2025-12-02",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x132",
+      "rel": "raw/emails/x132.eml",
+      "kind": "noise",
+      "date": "2026-01-10",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x133",
+      "rel": "raw/emails/x133.eml",
+      "kind": "noise",
+      "date": "2026-05-28",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x134",
+      "rel": "raw/emails/x134.eml",
+      "kind": "noise",
+      "date": "2026-03-19",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x135",
+      "rel": "raw/emails/x135.eml",
+      "kind": "noise",
+      "date": "2026-02-26",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x136",
+      "rel": "raw/emails/x136.eml",
+      "kind": "noise",
+      "date": "2026-02-10",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x137",
+      "rel": "raw/emails/x137.eml",
+      "kind": "noise",
+      "date": "2026-01-09",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x138",
+      "rel": "raw/emails/x138.eml",
+      "kind": "noise",
+      "date": "2026-01-25",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x139",
+      "rel": "raw/emails/x139.eml",
+      "kind": "noise",
+      "date": "2026-02-25",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x140",
+      "rel": "raw/emails/x140.eml",
+      "kind": "noise",
+      "date": "2025-12-27",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x141",
+      "rel": "raw/emails/x141.eml",
+      "kind": "noise",
+      "date": "2025-12-24",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x142",
+      "rel": "raw/emails/x142.eml",
+      "kind": "noise",
+      "date": "2026-03-08",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x143",
+      "rel": "raw/emails/x143.eml",
+      "kind": "noise",
+      "date": "2025-12-25",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x144",
+      "rel": "raw/emails/x144.eml",
+      "kind": "noise",
+      "date": "2026-03-02",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x145",
+      "rel": "raw/emails/x145.eml",
+      "kind": "noise",
+      "date": "2026-02-27",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x146",
+      "rel": "raw/emails/x146.eml",
+      "kind": "noise",
+      "date": "2026-05-04",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x147",
+      "rel": "raw/emails/x147.eml",
+      "kind": "noise",
+      "date": "2026-02-06",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x148",
+      "rel": "raw/emails/x148.eml",
+      "kind": "noise",
+      "date": "2025-12-12",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x149",
+      "rel": "raw/emails/x149.eml",
+      "kind": "noise",
+      "date": "2026-03-28",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x150",
+      "rel": "raw/emails/x150.eml",
+      "kind": "noise",
+      "date": "2026-04-17",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x151",
+      "rel": "raw/emails/x151.eml",
+      "kind": "noise",
+      "date": "2026-01-01",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x152",
+      "rel": "raw/emails/x152.eml",
+      "kind": "noise",
+      "date": "2026-03-07",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x153",
+      "rel": "raw/emails/x153.eml",
+      "kind": "noise",
+      "date": "2025-12-21",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x154",
+      "rel": "raw/emails/x154.eml",
+      "kind": "noise",
+      "date": "2026-04-21",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x155",
+      "rel": "raw/emails/x155.eml",
+      "kind": "noise",
+      "date": "2026-02-14",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x156",
+      "rel": "raw/emails/x156.eml",
+      "kind": "noise",
+      "date": "2026-05-10",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x157",
+      "rel": "raw/emails/x157.eml",
+      "kind": "noise",
+      "date": "2026-05-08",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x158",
+      "rel": "raw/emails/x158.eml",
+      "kind": "noise",
+      "date": "2026-03-03",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x159",
+      "rel": "raw/emails/x159.eml",
+      "kind": "noise",
+      "date": "2026-04-27",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x160",
+      "rel": "raw/emails/x160.eml",
+      "kind": "noise",
+      "date": "2026-01-19",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x161",
+      "rel": "raw/emails/x161.eml",
+      "kind": "noise",
+      "date": "2026-05-30",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x162",
+      "rel": "raw/emails/x162.eml",
+      "kind": "noise",
+      "date": "2025-12-18",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x163",
+      "rel": "raw/emails/x163.eml",
+      "kind": "noise",
+      "date": "2025-12-12",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x164",
+      "rel": "raw/emails/x164.eml",
+      "kind": "noise",
+      "date": "2026-05-19",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x165",
+      "rel": "raw/emails/x165.eml",
+      "kind": "noise",
+      "date": "2026-01-28",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x166",
+      "rel": "raw/emails/x166.eml",
+      "kind": "noise",
+      "date": "2026-02-13",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x167",
+      "rel": "raw/emails/x167.eml",
+      "kind": "noise",
+      "date": "2025-12-21",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x168",
+      "rel": "raw/emails/x168.eml",
+      "kind": "noise",
+      "date": "2026-01-29",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x169",
+      "rel": "raw/emails/x169.eml",
+      "kind": "noise",
+      "date": "2025-12-26",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x170",
+      "rel": "raw/emails/x170.eml",
+      "kind": "noise",
+      "date": "2026-03-08",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "x171",
+      "rel": "raw/emails/x171.eml",
+      "kind": "noise",
+      "date": "2026-02-10",
+      "gold_dossier": null,
+      "gold_pertinence": "rebut"
+    },
+    {
+      "id": "doc_dupuis_lettre_licenciement",
+      "rel": "raw/documents/doc_dupuis_lettre_licenciement.txt",
+      "kind": "document",
+      "date": "2025-11-28",
+      "gold_dossier": "DOS-2025-014",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_dupuis_contrat",
+      "rel": "raw/documents/doc_dupuis_contrat.txt",
+      "kind": "document",
+      "date": "2019-09-02",
+      "gold_dossier": "DOS-2025-014",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_dupuis_prime_objectif",
+      "rel": "raw/documents/doc_dupuis_prime_objectif.txt",
+      "kind": "document",
+      "date": "2025-06-30",
+      "gold_dossier": "DOS-2025-014",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_dupuis_attestation_collegue",
+      "rel": "raw/documents/doc_dupuis_attestation_collegue.txt",
+      "kind": "document",
+      "date": "2025-12-20",
+      "gold_dossier": "DOS-2025-014",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_moreau_lettre_licenciement",
+      "rel": "raw/documents/doc_moreau_lettre_licenciement.txt",
+      "kind": "document",
+      "date": "2025-12-12",
+      "gold_dossier": "DOS-2025-018",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_moreau_bilan",
+      "rel": "raw/documents/doc_moreau_bilan.txt",
+      "kind": "document",
+      "date": "2025-04-30",
+      "gold_dossier": "DOS-2025-018",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_silva_tableau_cdd",
+      "rel": "raw/documents/doc_silva_tableau_cdd.txt",
+      "kind": "document",
+      "date": "2026-01-12",
+      "gold_dossier": "DOS-2025-021",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_silva_contrat_type",
+      "rel": "raw/documents/doc_silva_contrat_type.txt",
+      "kind": "document",
+      "date": "2025-11-03",
+      "gold_dossier": "DOS-2025-021",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_benichou_certificat_medical",
+      "rel": "raw/documents/doc_benichou_certificat_medical.txt",
+      "kind": "document",
+      "date": "2026-01-10",
+      "gold_dossier": "DOS-2026-002",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_benichou_attestations",
+      "rel": "raw/documents/doc_benichou_attestations.txt",
+      "kind": "document",
+      "date": "2026-02-15",
+      "gold_dossier": "DOS-2026-002",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_benichou_prise_acte",
+      "rel": "raw/documents/doc_benichou_prise_acte.txt",
+      "kind": "document",
+      "date": "2026-01-22",
+      "gold_dossier": "DOS-2026-002",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_nader_decompte_heures",
+      "rel": "raw/documents/doc_nader_decompte_heures.txt",
+      "kind": "document",
+      "date": "2026-02-17",
+      "gold_dossier": "DOS-2026-005",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_nader_bulletins",
+      "rel": "raw/documents/doc_nader_bulletins.txt",
+      "kind": "document",
+      "date": "2025-12-31",
+      "gold_dossier": "DOS-2026-005",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_garnier_panel",
+      "rel": "raw/documents/doc_garnier_panel.txt",
+      "kind": "document",
+      "date": "2026-04-22",
+      "gold_dossier": "DOS-2026-009",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_pharmadistrib_clause",
+      "rel": "raw/documents/doc_pharmadistrib_clause.txt",
+      "kind": "document",
+      "date": "2026-03-05",
+      "gold_dossier": "DOS-2026-007",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_vitalpro_avenant",
+      "rel": "raw/documents/doc_vitalpro_avenant.txt",
+      "kind": "document",
+      "date": "2025-12-03",
+      "gold_dossier": "DOS-2025-019",
+      "gold_pertinence": "pertinent"
+    },
+    {
+      "id": "doc_scan_illisible",
+      "rel": "raw/documents/doc_scan_illisible.txt",
+      "kind": "edge",
+      "date": "2026-02-01",
+      "gold_dossier": null,
+      "gold_pertinence": "edge"
+    },
+    {
+      "id": "doc_note_vide",
+      "rel": "raw/documents/doc_note_vide.txt",
+      "kind": "edge",
+      "date": "2026-02-02",
+      "gold_dossier": null,
+      "gold_pertinence": "edge"
+    },
+    {
+      "id": "doc_post_it",
+      "rel": "raw/documents/doc_post_it.txt",
+      "kind": "edge",
+      "date": "2026-02-03",
+      "gold_dossier": null,
+      "gold_pertinence": "edge"
+    },
+    {
+      "id": "doc_arret_travail_scan",
+      "rel": "raw/documents/doc_arret_travail_scan.pdf",
+      "kind": "edge",
+      "date": "2026-01-12",
+      "gold_dossier": "DOS-2026-002",
+      "gold_pertinence": "edge"
+    },
+    {
+      "id": "doc_dupuis_contrat_DUP",
+      "rel": "raw/documents/doc_dupuis_contrat_DUP.txt",
+      "kind": "edge",
+      "date": "2019-09-02",
+      "gold_dossier": "DOS-2025-014",
+      "gold_pertinence": "edge"
+    },
+    {
+      "id": "note_01",
+      "rel": "raw/notes/note_01.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_02",
+      "rel": "raw/notes/note_02.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_03",
+      "rel": "raw/notes/note_03.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_04",
+      "rel": "raw/notes/note_04.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_05",
+      "rel": "raw/notes/note_05.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_06",
+      "rel": "raw/notes/note_06.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_07",
+      "rel": "raw/notes/note_07.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_08",
+      "rel": "raw/notes/note_08.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_09",
+      "rel": "raw/notes/note_09.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_10",
+      "rel": "raw/notes/note_10.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_11",
+      "rel": "raw/notes/note_11.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_12",
+      "rel": "raw/notes/note_12.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    },
+    {
+      "id": "note_13",
+      "rel": "raw/notes/note_13.md",
+      "kind": "note",
+      "date": "2025-12-01",
+      "gold_dossier": null,
+      "gold_pertinence": "référence"
+    }
+  ]
+}

@@ -35,6 +35,7 @@ _VERSION = "extract-msg/0.56.0"
 _CLASSES = {
     "extracted-empty": ErrorClass.EXTRACTED_EMPTY,
     "unreadable": ErrorClass.UNREADABLE,
+    "corrupt-file": ErrorClass.CORRUPT_FILE,  # an unopenable compound file (FR-5/FR-54)
 }
 
 
