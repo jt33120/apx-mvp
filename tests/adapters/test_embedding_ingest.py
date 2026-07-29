@@ -21,6 +21,8 @@ from apx.adapters.store_postgres.models import EMBEDDING_DIM, Base, Chunk
 from apx.adapters.store_postgres.store import SqlStore
 from apx.core.app.embedding import embed_result
 from apx.core.app.ingest import SCHEMA_VERSION, IngestedPiece, IngestionResult
+from apx.core.domain.chunking import ChunkingConfig, chunk
+from apx.core.domain.failures import ErrorClass
 from apx.core.domain.identity import content_hash, piece_id
 from apx.core.ports.embedding import EmbedderDimensionMismatch, EmbedderTimeout
 from tests.embedding_fakes import FailingEmbedder, FakeEmbedder
@@ -125,7 +127,7 @@ def test_a_retry_that_still_fails_embedding_keeps_the_entry_open_with_its_class(
         reshaped, _ = embed_result(
             IngestionResult(pieces=[_piece("x", prov="x.txt")]),
             FailingEmbedder(EmbedderTimeout("still down")),
-            chunking_config_version="v1", model_id="bge-m3", model_version="v1")
+            chunking_config=ChunkingConfig(), model_id="bge-m3", model_version="v1")
         return reshaped
 
     out = store.retry_failure(entry.id, reingest, TENANT, {WALL}, actor="avocat")
@@ -164,5 +166,51 @@ def test_the_chunk_is_stamped_with_the_embedders_own_identity(store: SqlStore) -
     # AD-11 detectability: the stamp is the embedder that PRODUCED the vector, not a config label.
     _admit(store, FakeEmbedder(), IngestionResult(pieces=[_piece("a", prov="a.txt")]))
     with store._sf() as s:
-        chunk = s.scalars(select(Chunk)).first()
-    assert chunk.model_id == "fake-embedder" and chunk.model_version == "fake-v1"
+        row = s.scalars(select(Chunk)).first()
+    assert row.model_id == "fake-embedder" and row.model_version == "fake-v1"
+
+
+# ── AC2 / AC7 (Story 2.9): real multi-passage chunking; a per-passage failure fails the pièce ──
+
+_MULTI = (
+    "Le contrat de bail est nul. La cour d'appel le confirme aujourd'hui meme. "
+    "L'article premier du code civil s'applique ici pleinement au present litige. "
+    "Les parties ont signe le document devant le notaire la semaine derniere enfin."
+)
+
+
+def test_a_multi_passage_piece_embeds_each_passage_as_its_own_chunk() -> None:
+    # AC2: a pièce whose text spans several passages yields one EmbeddedChunk per passage at
+    # positions 0..N-1, each carrying the passage's OWN vector (not one whole-piece vector).
+    cfg = ChunkingConfig(target_chars=60)
+    passages = chunk(_MULTI, cfg)
+    assert len(passages) > 1  # the text really splits into several passages
+    reshaped, embedded = embed_result(
+        IngestionResult(pieces=[_piece(_MULTI, prov="c.txt")]), FakeEmbedder(),
+        chunking_config=cfg, model_id="m", model_version="v")
+    assert len(reshaped.pieces) == 1 and reshaped.failures == []
+    assert [ec.payload.position for ec in embedded] == list(range(len(passages)))
+
+
+def test_one_passage_embed_failure_fails_the_whole_piece_all_or_nothing() -> None:
+    # AC7: an embedder failure on ONE passage lands the WHOLE pièce in the register with zero
+    # chunks — never a corpus pièce with partial provenance — so the denominator stays honest.
+    cfg = ChunkingConfig(target_chars=60)
+    passages = chunk(_MULTI, cfg)
+    assert len(passages) > 1
+    embedder = FailingEmbedder(EmbedderTimeout("x"), fails_on=lambda t: t == passages[1].text)
+    reshaped, embedded = embed_result(
+        IngestionResult(pieces=[_piece(_MULTI, prov="c.txt")]), embedder,
+        chunking_config=cfg, model_id="m", model_version="v")
+    assert reshaped.pieces == [] and embedded == []
+    assert [f.error_class for f in reshaped.failures] == [ErrorClass.EMBEDDER_TIMEOUT]
+
+
+def test_a_whitespace_only_piece_is_a_register_entry_not_a_corpus_chunk() -> None:
+    # review LOW: whitespace-only extraction has no indexable content → EXTRACTED_EMPTY, never a
+    # corpus chunk with a meaningless vector (the denominator stays honest, one unit in one place).
+    reshaped, embedded = embed_result(
+        IngestionResult(pieces=[_piece("   \n\t  ", prov="blank.txt")]), FakeEmbedder(),
+        chunking_config=ChunkingConfig(), model_id="m", model_version="v")
+    assert reshaped.pieces == [] and embedded == []
+    assert [f.error_class for f in reshaped.failures] == [ErrorClass.EXTRACTED_EMPTY]

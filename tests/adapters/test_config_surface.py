@@ -76,7 +76,7 @@ def test_get_all_config_merges_defaults_with_stored_values(store: SqlStore) -> N
 
 
 def test_retrieval_key_change_flags_staleness_on_the_record(store: SqlStore) -> None:
-    store.set_config(TENANT, "patron", "chunking_config_version", "v2")  # affects_retrieval
+    store.set_config(TENANT, "patron", "chunking_target_chars", 900)  # affects_retrieval
     with store._sf() as s:
         detail = s.scalar(
             select(AuditRecord.detail).where(AuditRecord.action == "config_changed"))

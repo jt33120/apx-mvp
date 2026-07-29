@@ -33,6 +33,7 @@ from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.models import (
     AuditRecord,
     BackupRecord,
+    Chunk,
     Failure,
     ImportJob,
     ImportUnit,
@@ -51,9 +52,17 @@ from apx.adapters.store_postgres.models import (
 )
 from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
 from apx.core.domain.auth import hash_password, verify_and_upgrade, verify_password
+from apx.core.domain.chunking import (
+    PIECE_GONE,
+    FailedResolution,
+    ResolvedPassage,
+    chunking_config,
+    resolve_passage,
+)
 from apx.core.domain.confidence import prevalence_upper_bound
 from apx.core.domain.config import (
     CONFIG_SCHEMA,
+    ConfigError,
     ConfigKey,
     coerce,
     dumps_value,
@@ -1035,6 +1044,38 @@ class SqlStore:
             entries = [self._register_entry(f) for f in rows]
         return sorted(entries, key=lambda e: (e.resolution_state, e.submitted_path, e.id))
 
+    def resolve_chunk(
+        self, chunk_id: str, tenant: str, scopes: set[str], *, expected_text: str | None = None,
+    ) -> ResolvedPassage | FailedResolution:
+        """Resolve a stored chunk to its exact source passage (Story 2.9, FR-11) — scope-checked.
+        Re-chunks the pièce's stored full text under the tenant's current chunking configuration and
+        takes the chunk's ``position`` (provenance by resolution, AD-9/AD-10). Returns a
+        ``FailedResolution`` — never a passage — for a gone pièce, text changed under re-extraction,
+        a superseded config, a lost position, or (with ``expected_text``) a stored extract no longer
+        contained. Fail-closed on scope: an out-of-scope or unknown chunk is refused and its
+        existence never disclosed."""
+        cfg = chunking_config(lambda k: self.get_config(tenant, k))  # resolved before the session
+        with self._sf() as session:
+            ch = session.get(Chunk, chunk_id)
+            if ch is None or ch.tenant != tenant:
+                raise ScopeDenied(chunk_id)  # never disclose whether the chunk exists
+            scope = session.scalar(select(MatterScope.scope).where(
+                MatterScope.matter == ch.matter, MatterScope.tenant == tenant))
+            if scope is None or scope not in scopes:
+                # echo ONLY the caller-supplied chunk_id — never the derived matter — so this branch
+                # is indistinguishable from the unknown-chunk branch above: neither the chunk's
+                # existence nor its matter leaks across the Chinese wall (AD-13; review MED-2).
+                raise ScopeDenied(chunk_id)
+            piece = session.get(Piece, ch.piece_id)
+            if piece is None:  # no hard delete (AD-7), but the resolver stays honest if it dangles
+                return FailedResolution(PIECE_GONE)
+            return resolve_passage(
+                full_text=piece.full_text, piece_text_version=piece.text_version,
+                piece_text_identity=piece.text_identity,
+                chunk_full_text_version=ch.full_text_version, chunk_position=ch.position,
+                chunk_config_version=ch.chunking_config_version, config=cfg,
+                expected_text=expected_text)
+
     def noise_exclusions(
         self, matter: str, tenant: str, scopes: set[str]
     ) -> list[NoiseExclusionEntry]:
@@ -1965,6 +2006,7 @@ class SqlStore:
                     before = _config_value(spec, row)
                     if before == new_value:
                         return ConfigChange(key, before, new_value, changed=False)
+                    self._refuse_immutable_chunking_change(session, tenant, key)
                     self._apply_config_change(session, tenant, actor, spec, before, new_value)
                     session.flush()  # surface a (tenant, seq) collision inside the try
                 return ConfigChange(key, before, new_value, changed=True)
@@ -1972,6 +2014,20 @@ class SqlStore:
                 if attempt == 3:
                     raise
         raise RuntimeError("unreachable")  # the loop returns or raises
+
+    def _refuse_immutable_chunking_change(self, session: Session, tenant: str, key: str) -> None:
+        """AD-40: chunking config is immutable once a *corpus* exists. Changing it would strand
+        every existing chunk as a superseded generation (they resolve ``config-superseded`` and the
+        old params are unrecoverable, only the hash is stored), so it is refused, not silent.
+        Allowed before the first chunk, or via an audited re-chunk (a later story). Review MED-1."""
+        if key != "chunking_target_chars":
+            return
+        has_corpus = session.scalar(
+            select(Chunk.chunk_id).where(Chunk.tenant == tenant).limit(1))
+        if has_corpus is not None:
+            raise ConfigError(
+                "chunking_target_chars is immutable once a corpus exists (AD-40): the change would "
+                "supersede every existing chunk. Re-chunk through an audited migration.")
 
     def _apply_config_change(self, session: Session, tenant: str, actor: str, spec: ConfigKey,
                              before: object, after: object) -> None:

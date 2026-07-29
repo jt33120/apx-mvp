@@ -152,9 +152,17 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         governs="the model the inference endpoint serves (AD-27)",
         affects_retrieval=True,
     ),
+    # No `chunking_config_version` config key (AD-40, and the Story 2.8 lesson for the embedder): a
+    # free-string version a tenant could set independently of the chunking PARAMS can lie — it would
+    # stamp e.g. "v1" on chunks a different configuration actually produced. Instead the chunking
+    # parameters are configuration-as-data and the version is DERIVED from them
+    # (`chunking.ChunkingConfig.version`), so the identity on every chunk cannot diverge from what
+    # produced the chunks. The values themselves await the 2.13 chunk-yield measurement.
     ConfigKey(
-        "chunking_config_version", "str", "v1",
-        governs="the chunking configuration identity carried into every chunk id (AD-9/AD-40)",
+        "chunking_target_chars", "int", 1200,
+        governs="the target passage size in characters the deterministic chunker aims for; its "
+                "content-derived identity is carried into every chunk id (FR-11/AD-40)",
+        valid=lambda v: 100 <= v <= 100_000,  # a real passage size; the value awaits the 2.13 run
         affects_retrieval=True,
     ),
     # No embedder config keys (AD-11: "no configuration-as-data key … selects one"). The ONE

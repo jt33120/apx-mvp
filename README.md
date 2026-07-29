@@ -278,7 +278,7 @@ The configuration keys (each editable as data, no redeploy):
 | `model_provider` | str | `mistral` | which inference provider serves the judgment LLM (AD-27) |
 | `model_endpoint` | str | Mistral EU | the OpenAI-compatible inference endpoint (AD-27) — honoured live by the judge |
 | `model_name` | str | `mistral-small-latest` | the model the endpoint serves (AD-27) |
-| `chunking_config_version` | str | `v1` | the chunking configuration identity (AD-9/AD-40) |
+| `chunking_target_chars` | int | `1200` | the target passage size (characters) the deterministic chunker aims for; its content-derived identity is carried into every chunk id (FR-11/AD-40). The value awaits the 2.13 chunk-yield measurement. |
 | `backup_interval_hours` | int | `24` | the interval before a tenant with no successful backup is flagged overdue (AD-32) |
 | `configured_sources` | list | `[]` | the enumerated data sources a corpus may be drawn from (AD-16) |
 | `exclusion_list` | list | `[.DS_Store, Thumbs.db, desktop.ini, .gitkeep, ~$*, .~lock.*, ._*]` | filesystem-noise filename patterns excluded from ingestion (FR-6). A set value **replaces** the default wholesale — include the OS-noise patterns if you still want them excluded. |
