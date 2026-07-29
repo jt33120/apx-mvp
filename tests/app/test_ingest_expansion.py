@@ -60,7 +60,7 @@ def test_a_transparent_container_is_neither_piece_nor_failure(tmp_path: Path) ->
     with zipfile.ZipFile(d / "box.zip", "w") as zf:
         zf.writestr("only.txt", "x")
     result = _ingest(d)
-    assert result.inventory.in_corpus == 1 and result.inventory.failures == 0
+    assert result.inventory.in_corpus == 1 and result.inventory.open_register_entries == 0
 
 
 def test_a_zip_within_a_zip_is_expanded(tmp_path: Path) -> None:
@@ -81,4 +81,4 @@ def test_without_an_expander_a_zip_stays_an_unexpanded_failure(tmp_path: Path) -
     with zipfile.ZipFile(d / "pieces.zip", "w") as zf:
         zf.writestr("a.txt", "x")
     result = ingest_folder(d, matter="m", tenant="t", extractor=FileExtractor())  # no expander
-    assert result.inventory.in_corpus == 0 and result.inventory.failures == 1
+    assert result.inventory.in_corpus == 0 and result.inventory.open_register_entries == 1

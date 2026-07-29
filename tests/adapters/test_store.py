@@ -43,7 +43,7 @@ def test_save_then_read_durable_inventory(tmp_path: Path, store: SqlStore) -> No
     out = store.save(_ingest(tmp_path, "m"), scope="wall-1")
     assert out.pieces_written == 2 and out.failures_written == 1
     inv = store.inventory("m", "t", {"wall-1"})
-    assert inv.in_corpus == 2 and inv.failures == 1 and inv.is_consistent()
+    assert inv.in_corpus == 2 and inv.open_register_entries == 1 and inv.is_consistent()
 
 
 def test_re_ingesting_does_not_duplicate(tmp_path: Path, store: SqlStore) -> None:
@@ -52,7 +52,7 @@ def test_re_ingesting_does_not_duplicate(tmp_path: Path, store: SqlStore) -> Non
     store.save(r, scope="wall-1")
     store.save(r, scope="wall-1")
     inv = store.inventory("m", "t", {"wall-1"})
-    assert inv.in_corpus == 2 and inv.failures == 1  # not doubled (AD-40)
+    assert inv.in_corpus == 2 and inv.open_register_entries == 1  # not doubled (AD-40)
 
 
 def test_scope_prefilter_hides_matters_outside_the_wall(tmp_path: Path, store: SqlStore) -> None:
@@ -194,7 +194,8 @@ def test_a_zero_piece_result_still_creates_a_durable_matter(store: SqlStore) -> 
     out = store.save(IngestionResult(), scope="wall-1", matter="m", tenant="t")
     assert out.pieces_written == 0 and out.failures_written == 0
     inv = store.inventory("m", "t", {"wall-1"})   # does not raise -> the matter is durable
-    assert inv.submitted == 0 and inv.in_corpus == 0 and inv.failures == 0 and inv.is_consistent()
+    assert inv.submitted_pieces == 0 and inv.in_corpus == 0 and inv.open_register_entries == 0 \
+        and inv.is_consistent()
     # the ingest audit entry is written even at 0 pieces (the full-audit-trail non-negotiable)
     trail = store.read_audit("m", "t", {"wall-1"})
     assert [e.action for e in trail.entries] == ["ingest"] and trail.verified

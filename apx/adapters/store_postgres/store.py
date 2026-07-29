@@ -38,6 +38,7 @@ from apx.adapters.store_postgres.models import (
     ImportUnit,
     LabelRecord,
     MatterScope,
+    NoiseExclusion,
     Piece,
     PieceCustodian,
     PieceProvenance,
@@ -80,7 +81,7 @@ _HEAD_SCHEMA_VERSION = "slice-a"  # the payload schema version (AD-40) stamped o
 # keyed by user_id (tenant-bound via the user) and is handled specially in backup/restore.
 _BACKUP_TABLES = (
     "matter_scope", "user_account", "session", "tenant_setting",
-    "piece", "chunk", "failure", "piece_label", "audit_record", "recall_review",
+    "piece", "chunk", "failure", "noise_exclusion", "piece_label", "audit_record", "recall_review",
     "backup_record", "truncation_marker",
 )
 
@@ -306,6 +307,17 @@ class RegisterExport:
 
 
 @dataclass(frozen=True)
+class NoiseExclusionEntry:
+    """One filesystem-noise exclusion (FR-6), decrypted for reading — the "one click from the list
+    of what was excluded" backend. Its own class, distinct from the failure register (Story 2.7)."""
+
+    matter: str
+    filename: str
+    submitted_path: str
+    timestamp: str
+
+
+@dataclass(frozen=True)
 class AuditEntry:
     seq: int
     actor: str
@@ -410,6 +422,13 @@ def _failure_id(tenant: str, matter: str | None, submitted_path: str) -> str:
 def _unit_id(job_id: str, provenance: str) -> str:
     """A deterministic import-unit id, so enumeration and resume are idempotent (Story 2.2)."""
     return hashlib.sha256(f"{job_id}\x00{provenance}".encode()).hexdigest()
+
+
+def _noise_id(tenant: str, matter: str, submitted_path: str) -> str:
+    """A noise-exclusion row's deterministic id — tenant+matter-qualified, exactly like
+    ``_failure_id``: re-importing the same file is idempotent (insert-if-absent, so it never
+    double-counts, Story 2.5), and two matters/firms never collide on one PK (Story 2.7)."""
+    return hashlib.sha256(f"{tenant}\x00{matter}\x00{submitted_path}".encode()).hexdigest()
 
 
 def _config_value(spec: ConfigKey, row: TenantSetting | None) -> object:
@@ -622,6 +641,20 @@ class SqlStore:
                     session, PieceCustodian, p.id, "custodian", p.custodian)
             for f in result.failures:
                 self._write_failure(session, f, now)
+            if matter is not None and tenant is not None:
+                for prov in result.exclusions:
+                    # Filesystem noise (FR-6): a durable, countable, listable line —
+                    # insert-if-absent by (tenant, matter, path) so a re-import never double-counts
+                    # (Story 2.5). Not a pièce, not a register entry; the path is client data
+                    # (AD-41), encrypted at rest.
+                    nid = _noise_id(tenant, matter, prov)
+                    if session.get(NoiseExclusion, nid) is None:
+                        session.add(NoiseExclusion(
+                            id=nid, tenant=tenant, matter=matter, submitted_path=prov,
+                            filename=prov.replace("\\", "/").rsplit("/", 1)[-1], timestamp=now))
+                # Story 2.7: raise the durable submitted_pieces watermark from the new known
+                # population (counted after this result's pieces + failures are flushed).
+                self._raise_submitted_watermark(session, matter, tenant)
             if matter is not None and tenant is not None and audit:
                 # One `ingest` audit entry per call, appended AFTER the loop so it carries the
                 # recognised-already-present count as its own field (AC2) — a re-import no-op is
@@ -631,9 +664,9 @@ class SqlStore:
                 # summary's job, Story 2.10), so a 100 000-unit import is one audit row, not 100k.
                 inv = result.inventory
                 detail = (
-                    f"submitted={inv.submitted} corpus={inv.in_corpus} "
+                    f"submitted_pieces={inv.submitted_pieces} in_corpus={inv.in_corpus} "
                     f"already_present={pieces_already_present} "
-                    f"failures={inv.failures} exclusions={inv.exclusions}"
+                    f"open_register={inv.open_register_entries} noise={inv.excluded_as_noise}"
                 )
                 self._append_audit(session, tenant, matter, actor, "ingest", detail, now)
         return SaveOutcome(pieces_new, pieces_already_present, len(result.failures))
@@ -825,6 +858,9 @@ class SqlStore:
                 cardinality=cardinality_for(ErrorClass.QUARANTINED), resolution_state="open",
                 detail="repeatedly killed the worker; quarantined after the configured attempts",
                 timestamp=now))
+            # Story 2.7: a quarantined unit is a newly-submitted pièce that failed — raise the
+            # watermark so the inventory invariant holds at completion (open grew by one).
+            self._raise_submitted_watermark(session, matter, tenant)
 
     def finish_import(self, job_id: str, now: datetime) -> None:
         """Mark the job done and write ONE job-level `ingest` audit entry (AD-6 — one entry per
@@ -839,6 +875,10 @@ class SqlStore:
                 ImportUnit.job_id == job_id, ImportUnit.state == "quarantined")) or 0
             detail = (f"submitted={j.submitted or 0} committed={committed} "
                       f"quarantined={quarantined}")
+            # Story 2.7 (SM-3): the inventory guarantee MUST hold at completion — a violation is a
+            # release blocker, raised loudly (and rolls back this tx), never a job silently marked
+            # done over a lost pièce. submitted_pieces == in_corpus + open_register_entries.
+            self._durable_inventory(session, j.matter, j.tenant).require_consistent()
             self._append_audit(session, j.tenant, j.matter, j.actor, "ingest", detail, now)
             j.state = "done"
             j.updated_at = now
@@ -875,6 +915,64 @@ class SqlStore:
         ) or 0
         return in_corpus, failures
 
+    def _raise_submitted_watermark(self, session: Session, matter: str, tenant: str) -> None:
+        """Raise the durable ``submitted_pieces`` high-water mark to the current known population on
+        a SUBMISSION (AD-38 / AD-17). Monotonic — ``max(...)`` so it never shrinks below a submitted
+        pièce; a genuinely new pièce/failure raises it, an idempotent re-import leaves it untouched.
+        It is never recomputed as the sum at READ time — that independence is what lets it catch a
+        pièce lost outside the normal flow. Called by ``save`` and ``quarantine_unit`` (the
+        submission paths). A RESOLVE uses ``_settle_submitted_after_retry`` instead, because a
+        resolution to a content-DUPLICATE legitimately LOWERS the distinct count (a failed duplicate
+        was never a distinct pièce), which a monotonic max would wrongly flag as a lost pièce."""
+        in_corpus, open_failures = self._counts(session, matter, tenant)
+        ms = session.get(MatterScope, {"tenant": tenant, "matter": matter})
+        if ms is not None:
+            ms.submitted_pieces = max(ms.submitted_pieces, in_corpus + open_failures)
+
+    def _settle_submitted_after_retry(self, session: Session, matter: str, tenant: str) -> None:
+        """Settle ``submitted_pieces`` to the reconciled known population after a RETRY (AD-38). A
+        retry resolves an entry to a NEW pièce (in_corpus +1 / open -1, net zero), to a content-
+        DUPLICATE already in the corpus (in_corpus flat / open -1 — the failed entry was never a
+        distinct pièce, so the distinct count legitimately drops by one), or records fresh member
+        failures (open +N). In every case ``in_corpus + open_register_entries`` is the new true
+        distinct-submitted count, so we SET it (not ``max``) — otherwise a dedup-collapse leaves the
+        frozen watermark ABOVE the live sum and falsely trips SM-3 (the retry would crash and the
+        entry could never resolve; a bulk retry would persist a wedged matter). A pièce lost outside
+        the normal flow is still caught: a raw deletion runs no retry, so the next
+        read / ``finish_import`` sees the stale high mark and raises."""
+        in_corpus, open_failures = self._counts(session, matter, tenant)
+        ms = session.get(MatterScope, {"tenant": tenant, "matter": matter})
+        if ms is not None:
+            ms.submitted_pieces = in_corpus + open_failures
+
+    def _durable_inventory(self, session: Session, matter: str, tenant: str) -> Inventory:
+        """The six-field *denominator* (AD-38) from the durable ledger. ``submitted_pieces`` is the
+        FROZEN high-water mark (read, never recomputed as the sum — Story 2.7); ``in_corpus`` and
+        ``open_register_entries`` are counted live (their identity is the SM-3 check);
+        ``excluded_as_noise`` and ``unknown_cardinality_entries`` are counted durably (Story 2.7
+        Task 3/4); ``retired`` is reserved (0 — no retirement transition exists yet, AD-7)."""
+        in_corpus, open_failures = self._counts(session, matter, tenant)
+        submitted = session.scalar(
+            select(MatterScope.submitted_pieces).where(
+                MatterScope.matter == matter, MatterScope.tenant == tenant
+            )
+        ) or 0
+        unknown = session.scalar(
+            select(func.count()).select_from(Failure).where(
+                Failure.matter == matter, Failure.tenant == tenant,
+                Failure.resolution_state == "open", Failure.cardinality == "unknown",
+            )
+        ) or 0
+        excluded = session.scalar(
+            select(func.count()).select_from(NoiseExclusion).where(
+                NoiseExclusion.matter == matter, NoiseExclusion.tenant == tenant
+            )
+        ) or 0
+        return Inventory(
+            submitted_pieces=submitted, in_corpus=in_corpus, open_register_entries=open_failures,
+            excluded_as_noise=excluded, unknown_cardinality_entries=unknown,
+        )
+
     def matters(self, tenant: str, scopes: set[str]) -> list[MatterSummary]:
         """Every matter the caller may see — pre-filtered by scope IN the query."""
         if not scopes:
@@ -885,15 +983,10 @@ class SqlStore:
                     MatterScope.tenant == tenant, MatterScope.scope.in_(scopes)
                 )
             ).all()
-            out = []
-            for matter, scope in rows:
-                in_corpus, failures = self._counts(session, matter, tenant)
-                out.append(
-                    MatterSummary(
-                        matter, scope,
-                        Inventory(in_corpus + failures, in_corpus, failures, 0),
-                    )
-                )
+            out = [
+                MatterSummary(matter, scope, self._durable_inventory(session, matter, tenant))
+                for matter, scope in rows
+            ]
         return sorted(out, key=lambda m: m.matter)
 
     def inventory(self, matter: str, tenant: str, scopes: set[str]) -> Inventory:
@@ -906,8 +999,7 @@ class SqlStore:
             )
             if scope is None or scope not in scopes:
                 raise ScopeDenied(matter)  # fail closed, and never disclose existence
-            in_corpus, failures = self._counts(session, matter, tenant)
-        return Inventory(in_corpus + failures, in_corpus, failures, 0)
+            return self._durable_inventory(session, matter, tenant)
 
     # ── Story 2.6: the failure register (FR-5; AD-37 conditional commits, AD-7 never removed) ──
 
@@ -930,6 +1022,27 @@ class SqlStore:
                 Failure.tenant == tenant, Failure.matter == matter)).all()
             entries = [self._register_entry(f) for f in rows]
         return sorted(entries, key=lambda e: (e.resolution_state, e.submitted_path, e.id))
+
+    def noise_exclusions(
+        self, matter: str, tenant: str, scopes: set[str]
+    ) -> list[NoiseExclusionEntry]:
+        """The durable filesystem-noise list for one matter — scope-checked, decrypted, ordered
+        (FR-6, the "one click from the list of what was excluded" backend). The screen is a UX-pass
+        concern; this is the tested contract behind the ``excluded_as_noise`` denominator line."""
+        with self._sf() as session:
+            scope = session.scalar(select(MatterScope.scope).where(
+                MatterScope.matter == matter, MatterScope.tenant == tenant))
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)  # fail closed, and never disclose existence
+            rows = session.scalars(select(NoiseExclusion).where(
+                NoiseExclusion.tenant == tenant, NoiseExclusion.matter == matter)).all()
+            entries = [
+                NoiseExclusionEntry(
+                    matter=n.matter, filename=n.filename, submitted_path=n.submitted_path,
+                    timestamp=_as_utc(n.timestamp).isoformat())
+                for n in rows
+            ]
+        return sorted(entries, key=lambda e: e.submitted_path)
 
     def register_all(
         self, tenant: str, scopes: set[str], *, is_admin: bool
@@ -1039,6 +1152,12 @@ class SqlStore:
             if f.resolution_state != "open":  # moved during reingest — never clobber (AD-37)
                 return RetryOutcome(entry_id, "precondition-not-met", f.resolution_state)
             outcome = self._reconcile_retry(session, f, result, now)
+            if f.matter is not None:  # an undetermined-matter entry has no matter denominator
+                # Story 2.7 (SM-3): a retry can resolve an entry (possibly collapsing a duplicate)
+                # and/or record fresh member failures — SETTLE submitted_pieces to the reconciled
+                # population, then assert the inventory guarantee holds (fail loud).
+                self._settle_submitted_after_retry(session, f.matter, f.tenant)
+                self._durable_inventory(session, f.matter, f.tenant).require_consistent()
             state = f.resolution_state
             self._append_audit(
                 session, f.tenant, f.matter, actor, "retry",
@@ -1076,6 +1195,12 @@ class SqlStore:
                         skipped += 1
                         continue
                     outcome = self._reconcile_retry(session, f, result, now)
+                    if f.matter is not None:
+                        # Story 2.7 (SM-3): settle submitted_pieces to the reconciled population (a
+                        # resolve may collapse a duplicate) and assert the guarantee holds — parity
+                        # with retry_failure, so a bulk retry can never persist a wedged matter.
+                        self._settle_submitted_after_retry(session, f.matter, f.tenant)
+                        self._durable_inventory(session, f.matter, f.tenant).require_consistent()
                     resolved += outcome == "resolved"
                     still += outcome == "still-failing"
             except Exception:  # noqa: BLE001 — a poison unit is counted, never aborts the whole set

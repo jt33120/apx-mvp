@@ -87,10 +87,11 @@ def _persist_unit(
     (SIGKILL/OOM in reality) escapes, which the resumable loop and quarantine handle."""
     path = Path(job.spool_path) / provenance
     bounds = expansion_bounds(lambda k: store.get_config(job.tenant, k))
+    noise_patterns = store.get_config(job.tenant, "exclusion_list")  # config-as-data (FR-6)
     result = ingest_one_file(
         path, provenance, job.matter, job.tenant, _build_extractor(),
         custodian=job.custodian, expander=_build_expander(bounds), now=now, max_bytes=max_bytes,
-        bounds=bounds)
+        bounds=bounds, noise_patterns=noise_patterns)
     store.save(
         result, scope=job.scope, actor=job.actor, matter=job.matter, tenant=job.tenant,
         audit=False)

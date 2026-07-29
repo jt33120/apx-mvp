@@ -39,7 +39,9 @@ def _piece(pid: str) -> IngestedPiece:
 def _seed(store: SqlStore) -> None:
     store.provision_tenant(TENANT, "admin@x.fr", "pw12345678", "Admin", {"w"}, ["conclusions"])
     for i in range(3):
-        store.save(IngestionResult(pieces=[_piece(f"p{i}")]), "w", actor="admin")
+        excl = ["sub/.DS_Store"] if i == 0 else []   # one filesystem-noise exclusion (Story 2.7)
+        store.save(
+            IngestionResult(pieces=[_piece(f"p{i}")], exclusions=excl), "w", actor="admin")
     store.set_config(TENANT, "admin", "interface_language", "en")
 
 
@@ -70,7 +72,11 @@ def test_backup_restore_reproduces_the_tenant_identically(tmp_path) -> None:  # 
 
     assert not any(r.truncated for r in recs)                 # a clean restore is not a truncation
     dst_inv = dst.inventory("m", TENANT, {"w"})
-    assert (dst_inv.submitted, dst_inv.in_corpus) == (src_inv.submitted, src_inv.in_corpus)  # denom
+    assert (dst_inv.submitted_pieces, dst_inv.in_corpus) == \
+        (src_inv.submitted_pieces, src_inv.in_corpus)  # denominator survives backup/restore
+    # the filesystem-noise ledger survives too — count AND the encrypted list (Story 2.7, AD-41)
+    assert dst_inv.excluded_as_noise == src_inv.excluded_as_noise == 1
+    assert dst.noise_exclusions("m", TENANT, {"w"}) == src.noise_exclusions("m", TENANT, {"w"})
     assert dst.audit_heads()[TENANT][0] == src_head            # audit sequence identical
     assert dst.get_config(TENANT, "interface_language") == "en"   # configuration identical
     assert dst.get_config(TENANT, "taxonomy") == ["conclusions"]

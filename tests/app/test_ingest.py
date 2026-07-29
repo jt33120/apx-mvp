@@ -24,10 +24,10 @@ def test_inventory_accounts_for_every_file(tmp_path: Path) -> None:
     r = ingest_folder(tmp_path, matter="m", tenant="t", extractor=FileExtractor())
     inv = r.inventory
     assert inv.is_consistent()
-    assert inv.submitted == 6
+    assert inv.submitted_pieces == 4  # corpus (2) + open register (2); noise is NOT a pièce (AD-38)
     assert inv.in_corpus == 2  # letter.txt, note.md
-    assert inv.failures == 2  # empty.txt (extracted-empty), photo.jpg (unsupported-format)
-    assert inv.exclusions == 2  # .DS_Store, .gitkeep
+    assert inv.open_register_entries == 2  # empty.txt (extracted-empty), photo.jpg (unsupported)
+    assert inv.excluded_as_noise == 2  # .DS_Store, .gitkeep — its own line, outside the identity
 
 
 def test_failures_are_classified_and_listed(tmp_path: Path) -> None:
@@ -51,4 +51,4 @@ def test_extracted_empty_is_not_counted_in_corpus(tmp_path: Path) -> None:
     (tmp_path / "blank.txt").write_text("", encoding="utf-8")
     r = ingest_folder(tmp_path, matter="m", tenant="t", extractor=FileExtractor())
     assert r.inventory.in_corpus == 0
-    assert r.inventory.failures == 1  # an absence claim must never assert it was searched
+    assert r.inventory.open_register_entries == 1  # an absence claim never asserts it was searched

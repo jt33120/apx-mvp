@@ -19,6 +19,7 @@ from apx.checks import (
     encryption,
     forward_looking,
     import_contracts,
+    inventory_record,
     isolation_harness,
     manifest,
     payload_schema,
@@ -85,6 +86,9 @@ CHECKS: list[Callable[[], CheckResult]] = [
     forward_looking.no_banned_confidence_phrasing,
     # story 2.6 — the failure register: one owning module per state transition (AD-37).
     register_ownership.register_state_written_once,
+    # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
+    inventory_record.inventory_record_fields_enumerated,
+    inventory_record.unknown_cardinality_never_summed,
     # story 1.12 — the manifest meta-checks: the harness checks ITSELF (AD-33/FR-56).
     manifest.every_structural_property_has_a_registered_check,
     manifest.every_registered_check_is_in_the_manifest,

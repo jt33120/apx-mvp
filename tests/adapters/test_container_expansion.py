@@ -195,7 +195,7 @@ def test_a_container_nested_past_the_depth_limit_is_container_unopenable(tmp_pat
 def test_an_empty_archive_is_extracted_empty_not_vanished(tmp_path: Path) -> None:
     (tmp_path / "vide.zip").write_bytes(_zip_bytes({}))
     result = _ingest(tmp_path)
-    assert result.inventory.submitted == 1 and result.inventory.in_corpus == 0
+    assert result.inventory.submitted_pieces == 1 and result.inventory.in_corpus == 0
     assert [f.error_class for f in result.failures] == [ErrorClass.EXTRACTED_EMPTY]
     assert result.inventory.is_consistent()             # accounted, not a silent 0/0
 
@@ -204,7 +204,7 @@ def test_an_empty_mbox_is_extracted_empty_not_vanished(tmp_path: Path) -> None:
     (tmp_path / "vide.mbox").write_bytes(b"")           # a valid but empty mailbox
     result = ingest_folder(tmp_path, matter="m", tenant="t", extractor=FileExtractor(),
                            custodian="C", expander=CompositeExpander([MboxExpander()]))
-    assert result.inventory.submitted == 1
+    assert result.inventory.submitted_pieces == 1
     assert [f.error_class for f in result.failures] == [ErrorClass.EXTRACTED_EMPTY]
 
 

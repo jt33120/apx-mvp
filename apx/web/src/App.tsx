@@ -610,7 +610,7 @@ function MatterRow({ m }: { m: MatterSummary }) {
           {m.matter}
         </div>
         <div className="apx-hint">
-          {m.inventory.in_corpus} indexées · {m.inventory.failures} à revoir · tri &amp; journal
+          {m.inventory.in_corpus} indexées · {m.inventory.open_register_entries} à revoir · tri &amp; journal
         </div>
       </div>
       {open && (

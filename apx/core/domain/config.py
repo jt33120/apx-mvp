@@ -115,6 +115,17 @@ def _keys(*keys: ConfigKey) -> dict[str, ConfigKey]:
     return {k.name: k for k in keys}
 
 
+# The default filesystem-noise exclusion patterns (FR-6, Story 2.7): OS/editor detritus that is
+# never a pièce — matched against a file's basename with fnmatch (globs allowed). This is the
+# authoritative default for the `exclusion_list` config key AND the fallback for direct ingestion
+# callers; a tenant may replace it wholesale via `set_config` (configuration-as-data, AD-24).
+DEFAULT_EXCLUSION_LIST = [
+    ".DS_Store", "Thumbs.db", "desktop.ini", ".gitkeep",  # classic OS / VCS-placeholder noise
+    "~$*", ".~lock.*",                                     # Office / LibreOffice lock files
+    "._*",                                                 # AppleDouble forks (incl. __MACOSX/)
+]
+
+
 # ── The schema (AD-24's bind list). Ordered as the surface presents it. ────────────────────────
 CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
     ConfigKey(
@@ -157,8 +168,8 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         governs="the enumerated data sources a corpus may be drawn from (AD-16)",
     ),
     ConfigKey(
-        "exclusion_list", "str_list", [],
-        governs="filename/path patterns excluded from ingestion",
+        "exclusion_list", "str_list", DEFAULT_EXCLUSION_LIST,
+        governs="filesystem-noise filename patterns excluded from ingestion (FR-6)",
     ),
     ConfigKey(
         "taxonomy", "str_list", [],

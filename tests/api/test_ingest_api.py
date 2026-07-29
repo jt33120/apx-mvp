@@ -180,7 +180,8 @@ def test_ingest_persists_and_reads_back(tmp_path: Path, monkeypatch) -> None:
                    json={"folder": str(matter_dir), "matter": "m", "scope": "wall-A"})
         assert r.json()["persisted"] is True
         back = c.get("/api/matters/m/inventory").json()
-    assert back["in_corpus"] == 1 and back["failures"] == 2 and back["consistent"] is True
+    assert back["in_corpus"] == 1 and back["open_register_entries"] == 2 \
+        and back["consistent"] is True
 
 
 def test_cannot_ingest_into_a_wall_you_do_not_hold(tmp_path: Path, monkeypatch) -> None:
@@ -212,7 +213,7 @@ def test_ingest_upload_reconstructs_the_tree_and_counts(tmp_path: Path, monkeypa
         )
         _run_upload(store, r)                         # async now: the worker fills the corpus
         inv = c.get("/api/matters/m/inventory").json()
-    assert inv["consistent"] and inv["in_corpus"] == 1 and inv["failures"] == 2
+    assert inv["consistent"] and inv["in_corpus"] == 1 and inv["open_register_entries"] == 2
 
 
 def test_chinese_wall_over_http(tmp_path: Path, monkeypatch) -> None:
@@ -524,8 +525,14 @@ def test_a_folder_of_zero_readable_files_is_a_completed_0_0_matter(
                    data={"matter": "vide", "scope": "wall-A", "custodian": "M. Martin"})
         _run_upload(store, r)
         back = c.get("/api/matters/vide/inventory")           # durable 0/0, reads back
-        assert back.status_code == 200 and back.json()["submitted"] == 0
+        assert back.status_code == 200 and back.json()["submitted_pieces"] == 0
         assert back.json()["in_corpus"] == 0 and back.json()["consistent"] is True
+        # AC3: the denominator carries every AD-38 named count + the unknown-cardinality words.
+        body = back.json()
+        assert set(body) >= {
+            "submitted_pieces", "in_corpus", "open_register_entries", "excluded_as_noise",
+            "retired", "unknown_cardinality_entries", "unknown_cardinality_phrase", "consistent"}
+        assert body["unknown_cardinality_phrase"] == ""  # no unopened container here
         audit = c.get("/api/matters/vide/audit").json()       # one job-level ingest audit entry
         assert [e["action"] for e in audit["entries"]] == ["ingest"] and audit["verified"] is True
 

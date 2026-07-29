@@ -2,8 +2,9 @@
 
 Pure orchestration in the Application layer: it depends on the Domain and on the
 ``Extractor`` and ``Expander`` ports, never on an adapter (AD-4). It produces an
-``IngestionResult`` whose inventory holds the guarantee — ``submitted = in corpus +
-failures + exclusions`` — with nothing lost silently.
+``IngestionResult`` whose inventory holds the guarantee (AD-38) — over KNOWN pièces,
+``submitted_pieces == in_corpus + open_register_entries``, with filesystem noise a
+separate named line and nothing lost silently.
 
 Containers are expanded, not treated as opaque pieces: a .zip is unpacked and its
 members ingested individually (recursively — a zip within a zip works), an email is
@@ -17,11 +18,13 @@ never fakes a count.
 from __future__ import annotations
 
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from fnmatch import fnmatchcase
 from pathlib import Path
 
-from apx.core.domain.config import ExpansionBounds
+from apx.core.domain.config import DEFAULT_EXCLUSION_LIST, ExpansionBounds
 from apx.core.domain.dedup import text_key
 from apx.core.domain.extraction import ExtractOutcome
 from apx.core.domain.failures import ErrorClass, redacted_diagnostic
@@ -32,8 +35,10 @@ from apx.core.ports.extraction import Extractor
 
 SCHEMA_VERSION = "slice-a"
 
-# Filesystem noise: a declared, countable exclusion class, not a silent drop (FR-6).
-NOISE_NAMES = frozenset({".DS_Store", "Thumbs.db", "desktop.ini", ".gitkeep"})
+# Filesystem noise (FR-6): a declared, configured, countable exclusion class — never a silent drop
+# and never a pièce. The patterns are configuration-as-data (the ``exclusion_list`` config key,
+# resolved in the adapter and passed in as ``noise_patterns``); ``DEFAULT_EXCLUSION_LIST`` is the
+# fallback for direct callers. Story 2.7 persists each excluded file as its own countable line.
 
 # Expansion bounds are configuration-as-data (AD-17): the numbers come from ``ExpansionBounds``
 # (per-tenant config, or its defaults), never a hard-coded constant. A breach is a
@@ -76,20 +81,23 @@ class IngestionResult:
 
     @property
     def inventory(self) -> Inventory:
-        submitted = len(self.pieces) + len(self.failures) + len(self.exclusions)
+        # submitted_pieces counts pièces only (noise is never a pièce → its own line, AD-38):
+        # submitted_pieces == in_corpus + open_register_entries, exactly.
         unknown = sum(
             1 for f in self.failures if f.error_class is ErrorClass.CONTAINER_UNOPENABLE)
         return Inventory(
-            submitted=submitted,
+            submitted_pieces=len(self.pieces) + len(self.failures),
             in_corpus=len(self.pieces),
-            failures=len(self.failures),
-            exclusions=len(self.exclusions),
+            open_register_entries=len(self.failures),
+            excluded_as_noise=len(self.exclusions),
             unknown_cardinality_entries=unknown,
         )
 
 
-def _is_noise(name: str) -> bool:
-    return name in NOISE_NAMES
+def _is_noise(name: str, patterns: Sequence[str]) -> bool:
+    """True if a file's basename matches any declared noise pattern (fnmatch globs; case-sensitive
+    for deterministic behaviour across platforms) — e.g. ``.DS_Store``, ``~$doc.docx``, ``._x``."""
+    return any(fnmatchcase(name, p) for p in patterns)
 
 
 def enumerate_units(folder: Path) -> list[str]:
@@ -116,11 +124,12 @@ def _ingest_one(
     counter: list[int],
     max_bytes: int | None,
     bounds: ExpansionBounds,
+    noise_patterns: Sequence[str],
 ) -> None:
     """Route one file into exactly one of pieces / failures / exclusions (containers expanded to
     their members, recursively). Shared by ``ingest_folder`` (the whole-folder path) and
     ``ingest_one_file`` (the resumable per-unit worker path)."""
-    if _is_noise(path.name):
+    if _is_noise(path.name, noise_patterns):
         result.exclusions.append(prov)
         return
 
@@ -190,7 +199,8 @@ def _ingest_one(
                 _ingest_one(
                     member_path, f"{prov}/{name}", depth + 1, result=result, matter=matter,
                     tenant=tenant, custodian=custodian, extractor=extractor, expander=expander,
-                    now=now, tmpdir=tmpdir, counter=counter, max_bytes=max_bytes, bounds=bounds)
+                    now=now, tmpdir=tmpdir, counter=counter, max_bytes=max_bytes, bounds=bounds,
+                    noise_patterns=noise_patterns)
         elif members is not None:
             # A recognised but EMPTY container (members == []). It is NOT transparent: fall through
             # to the extractor so it is accounted — an empty archive lands `extracted-empty`, an
@@ -248,18 +258,21 @@ def ingest_one_file(
     now: datetime | None = None,
     max_bytes: int | None = None,
     bounds: ExpansionBounds | None = None,
+    noise_patterns: Sequence[str] | None = None,
 ) -> IngestionResult:
     """Ingest exactly one submitted file — a *unit* of work (AD-17). It lands as pieces, a
     failure, or a noise exclusion; a container expands atomically within this one result. The
-    resumable worker (Story 2.2) commits one of these per unit."""
+    resumable worker (Story 2.2) commits one of these per unit. ``noise_patterns`` is the resolved
+    ``exclusion_list`` config (FR-6); when absent, the packaged defaults apply."""
     result = IngestionResult()
     stamp = now or datetime.now(UTC)
     resolved = bounds or ExpansionBounds.defaults()
+    patterns = DEFAULT_EXCLUSION_LIST if noise_patterns is None else noise_patterns
     with tempfile.TemporaryDirectory(prefix="apx-expand-") as tmp:
         _ingest_one(
             path, prov, 0, result=result, matter=matter, tenant=tenant, custodian=custodian,
             extractor=extractor, expander=expander, now=stamp, tmpdir=Path(tmp), counter=[0],
-            max_bytes=max_bytes, bounds=resolved)
+            max_bytes=max_bytes, bounds=resolved, noise_patterns=patterns)
     return result
 
 
@@ -273,14 +286,17 @@ def ingest_folder(
     expander: Expander | None = None,
     max_bytes: int | None = None,
     bounds: ExpansionBounds | None = None,
+    noise_patterns: Sequence[str] | None = None,
 ) -> IngestionResult:
     """Walk ``folder`` recursively; every file lands in exactly one of three places (containers
     expanded to their members). The synchronous whole-folder path (Story 2.1 and tests); the
     resumable worker (Story 2.2) drives ``ingest_one_file`` per unit instead. ``expander`` is
-    optional — without it, containers are ingested as ordinary files (contents unexpanded)."""
+    optional — without it, containers are ingested as ordinary files (contents unexpanded).
+    ``noise_patterns`` is the resolved ``exclusion_list`` config (FR-6); defaults apply if None."""
     result = IngestionResult()
     now = datetime.now(UTC)
     resolved = bounds or ExpansionBounds.defaults()
+    patterns = DEFAULT_EXCLUSION_LIST if noise_patterns is None else noise_patterns
     with tempfile.TemporaryDirectory(prefix="apx-expand-") as tmp:
         tmpdir = Path(tmp)
         for path in sorted(p for p in folder.rglob("*") if p.is_file()):
@@ -290,7 +306,8 @@ def ingest_folder(
             _ingest_one(
                 path, str(path.relative_to(folder)), 0, result=result, matter=matter,
                 tenant=tenant, custodian=custodian, extractor=extractor, expander=expander,
-                now=now, tmpdir=tmpdir, counter=[0], max_bytes=max_bytes, bounds=resolved)
+                now=now, tmpdir=tmpdir, counter=[0], max_bytes=max_bytes, bounds=resolved,
+                noise_patterns=patterns)
     # The guarantee must hold on every result (FR-6 / SM-3 shape).
     result.inventory.require_consistent()
     return result

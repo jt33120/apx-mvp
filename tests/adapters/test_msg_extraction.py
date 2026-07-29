@@ -107,7 +107,7 @@ def test_a_malformed_msg_leaks_no_seeded_token_into_the_register_or_a_log(
     with caplog.at_level(logging.DEBUG):
         result = ingest_folder(tmp_path, matter="m", tenant="t", extractor=extractor,
                                expander=expander)
-    assert result.inventory.failures == 1 and result.inventory.in_corpus == 0   # never vanished
+    assert result.inventory.open_register_entries == 1 and result.inventory.in_corpus == 0  # kept
     failure = result.failures[0]
     assert failure.error_class is ErrorClass.UNREADABLE
     assert seed not in (failure.detail or "")            # no document byte in the register detail

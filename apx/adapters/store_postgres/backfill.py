@@ -34,6 +34,8 @@ ENCRYPTED_COLUMNS = [
     ("failure", "id", "submitted_path", "failure.submitted_path"),
     ("failure", "id", "custodian", "failure.custodian"),
     ("failure", "id", "detail", "failure.detail"),
+    ("noise_exclusion", "id", "submitted_path", "noise_exclusion.submitted_path"),
+    ("noise_exclusion", "id", "filename", "noise_exclusion.filename"),
     ("audit_record", "id", "actor", "audit_record.actor"),
     ("audit_record", "id", "detail", "audit_record.detail"),
     ("piece_label", "piece_id", "rationale", "piece_label.rationale"),
@@ -208,6 +210,22 @@ def backfill_failure_cardinality(conn: Connection) -> int:
     one = conn.execute(text(
         "UPDATE failure SET cardinality = 'one' WHERE cardinality IS NULL")).rowcount or 0
     return unknown + one
+
+
+def backfill_submitted_pieces(conn: Connection) -> int:
+    """Freeze each existing matter's ``submitted_pieces`` watermark from its current known
+    population (Story 2.7, AD-38): ``in_corpus + open_register_entries``. A safe post-hoc initial
+    value — on a healthy store the watermark equals this sum, and thereafter it is only raised by
+    ingestion (never recomputed at read time). Run ONCE, after the column is added. Returns the
+    number of matter rows set."""
+    return conn.execute(text(
+        "UPDATE matter_scope SET submitted_pieces = ("
+        "  (SELECT count(*) FROM piece"
+        "     WHERE piece.tenant = matter_scope.tenant AND piece.matter = matter_scope.matter)"
+        "  + (SELECT count(*) FROM failure"
+        "       WHERE failure.tenant = matter_scope.tenant"
+        "         AND failure.matter = matter_scope.matter"
+        "         AND failure.resolution_state = 'open'))")).rowcount or 0
 
 
 def _cipher_if(needed: bool) -> Cipher | None:

@@ -65,9 +65,9 @@ def test_mixed_folder_lands_the_right_counts(
     # pieces: .msg body + note.txt member + .xlsx + .docx = 4
     assert result.inventory.in_corpus == 4
     # failures: photo.png + inconnu.xyz, both unsupported-format, both counted in the denominator
-    assert result.inventory.failures == 2
+    assert result.inventory.open_register_entries == 2
     classes = {f.error_class for f in result.failures}
     assert classes == {ErrorClass.UNSUPPORTED_FORMAT}
     assert all(pc.custodian == "M. Dupont" for pc in result.pieces)      # inherited everywhere
     assert "courriel.msg/note.txt" in {pc.provenance_path for pc in result.pieces}  # member prov
-    assert result.inventory.is_consistent()   # submitted = corpus + failures + exclusions
+    assert result.inventory.is_consistent()   # submitted_pieces == in_corpus + open_register

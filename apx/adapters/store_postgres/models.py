@@ -199,6 +199,29 @@ class Failure(Base):
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
+class NoiseExclusion(Base):
+    """Filesystem noise (FR-6, Story 2.7): a file excluded at enumeration as declared noise
+    (`.DS_Store`, lock files, resource forks). It is NOT a *pièce* and NOT a *failure register*
+    entry — its own durable, countable, listable class, so `excluded_as_noise` is a permanent
+    *denominator* line and the excluded set is one click away (neither silently dropped nor
+    dominating the register). Keyed idempotently by (tenant, matter, submitted_path) so re-importing
+    the same folder never double-counts (Story 2.5 idempotency). Its path is client data — the path
+    is frequently the privileged fact (AD-41) — so path and filename are encrypted at rest
+    (AD-31/AD-28). No cascade FK (AD-7)."""
+
+    __tablename__ = "noise_exclusion"
+
+    # sha256(tenant \0 matter \0 submitted_path) — the set key (a ciphertext column can't be a PK).
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)  # always known (the ingest matter)
+    submitted_path: Mapped[str] = mapped_column(
+        EncryptedText("noise_exclusion.submitted_path"), nullable=False)
+    filename: Mapped[str] = mapped_column(
+        EncryptedText("noise_exclusion.filename"), nullable=False)
+    timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class MatterScope(Base):
     """The authoritative matter -> scope mapping (AD-13). Scope is resolved from
     here at query time and pre-filters every read — it is NEVER denormalised onto
@@ -215,6 +238,14 @@ class MatterScope(Base):
     tenant: Mapped[str] = mapped_column(String, primary_key=True)
     matter: Mapped[str] = mapped_column(String, primary_key=True)
     scope: Mapped[str] = mapped_column(String, nullable=False)
+    # Story 2.7: the durable, monotonic `submitted_pieces` high-water mark — the *denominator*'s
+    # frozen count of the known pièce population (AD-38 / the AD-17 application-owned ledger). It is
+    # NOT recomputed as `in_corpus + open_register_entries` (that tautology can never catch a
+    # miscount, defeating SM-3); it is raised to `max(stored, in_corpus + open)` at each ingest and
+    # retry so it never shrinks. A later loss of a corpus pièce or a register entry then makes it
+    # EXCEED the live sum and fails the invariant — the machine form of "nothing silently lost".
+    submitted_pieces: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
     # The optional case theory (FR-37): free text, in the lawyer's own language, stated at
     # import or later. Confidential legal strategy, not a query key → encrypted at rest
     # (AD-31), nullable when skipped. A single current value here; the versioned/audited/

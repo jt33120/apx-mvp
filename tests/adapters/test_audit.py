@@ -37,7 +37,7 @@ def test_ingestion_is_recorded_with_actor_and_denominator(tmp_path: Path, store:
     trail = store.read_audit("m", "t", {"w"})
     assert len(trail.entries) == 1
     e = trail.entries[0]
-    assert e.action == "ingest" and e.actor == "me.durupt" and "submitted=1" in e.detail
+    assert e.action == "ingest" and e.actor == "me.durupt" and "submitted_pieces=1" in e.detail
     assert trail.verified
 
 

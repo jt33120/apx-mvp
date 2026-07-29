@@ -19,7 +19,7 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
-from apx.adapters.store_postgres.models import Base, Failure, ImportUnit
+from apx.adapters.store_postgres.models import Base, Failure, ImportUnit, MatterScope
 from apx.adapters.store_postgres.queue import _persist_unit, _run_import
 from apx.adapters.store_postgres.store import SqlStore
 from apx.core.app.ingest import IngestionResult
@@ -60,13 +60,24 @@ def test_import_processes_units_finishes_and_writes_one_audit_entry(tmp_path, st
     job_id = _job(store, tmp_path, {"a.txt": b"lettre", "sub/b.txt": b"note", "empty.txt": b""})
     _run_import(store, job_id, now=_NOW)
     inv = store.inventory("m", "t", {"w"})
-    assert inv.in_corpus == 2 and inv.failures == 1          # a, b are pieces; empty → a failure
+    assert inv.in_corpus == 2 and inv.open_register_entries == 1  # a, b are pieces; empty → failure
     prog = store.import_progress(job_id)
     assert prog.state == "done" and prog.submitted == 3 and prog.processed == 3
     assert prog.pending == 0 and not prog.provisional
     trail = store.read_audit("m", "t", {"w"})
     assert [e.action for e in trail.entries] == ["ingest"]   # ONE job-level entry, not one per unit
     assert not (tmp_path / "spool-m").exists()               # the owned spool is consumed on finish
+
+
+def test_finish_import_is_a_release_blocker_on_an_inventory_miscount(tmp_path, store) -> None:
+    # Story 2.7 (SM-3): finish_import asserts the inventory guarantee — a job is NEVER marked done
+    # over a lost pièce. Induce a miscount (the frozen watermark exceeds the known population) and
+    # assert completion fails loudly rather than silently closing the job.
+    job_id = _job(store, tmp_path, {"a.txt": b"lettre"})     # matter 'm', watermark 0, job not done
+    with store._sf() as s, s.begin():
+        s.get(MatterScope, {"tenant": "t", "matter": "m"}).submitted_pieces = 3  # inflate → 3 != 0
+    with pytest.raises(ValueError, match="inventory invariant violated"):
+        store.finish_import(job_id, _NOW)
 
 
 def test_resume_processes_only_pending_units_and_never_duplicates(tmp_path, store) -> None:

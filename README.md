@@ -281,7 +281,7 @@ The configuration keys (each editable as data, no redeploy):
 | `chunking_config_version` | str | `v1` | the chunking configuration identity (AD-9/AD-40) |
 | `backup_interval_hours` | int | `24` | the interval before a tenant with no successful backup is flagged overdue (AD-32) |
 | `configured_sources` | list | `[]` | the enumerated data sources a corpus may be drawn from (AD-16) |
-| `exclusion_list` | list | `[]` | filename/path patterns excluded from ingestion |
+| `exclusion_list` | list | `[.DS_Store, Thumbs.db, desktop.ini, .gitkeep, ~$*, .~lock.*, ._*]` | filesystem-noise filename patterns excluded from ingestion (FR-6). A set value **replaces** the default wholesale — include the OS-noise patterns if you still want them excluded. |
 | `taxonomy` | list | `[]` | the tenant's classification taxonomy (seeded at provisioning) |
 | `off_corpus_refusal_enabled` | bool | `true` | the honest "not in the corpus" refusal (AD-20) — **on by default** |
 | `cascade_stage3_max_share` | float | `0.5` | the ceiling on the share of a matter reaching the LLM (AD-18) |
@@ -422,6 +422,8 @@ could contain is an inflated claim about what the suite proves).
 | `no-model-reported-confidence` | FR-42 | AD-19 | structural | no_model_reported_confidence | confidence fields read off a model response (vacuous until 4.x) |
 | `no-banned-confidence-phrasing` | FR-23 | FR-23 | structural | no_banned_confidence_phrasing | banned phrases in string literals / locale resources (vacuous until 5.4/6.x) |
 | `register-state-written-once` | FR-5 | AD-37 | structural | register_state_written_once | Failure.resolution_state writes across apx/** |
+| `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
+| `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |
 | `meta-property-has-check` | FR-56 | AD-33 | structural | every_structural_property_has_a_registered_check | this manifest vs CHECKS |
 | `meta-check-in-manifest` | FR-56 | AD-33 | structural | every_registered_check_is_in_the_manifest | CHECKS vs this manifest |
 | `meta-verbs-not-conflated` | FR-56 | AD-33 | structural | verbs_are_not_conflated | this manifest's verbs |

@@ -49,7 +49,13 @@ from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.triage import triage_pieces
 from apx.core.domain import capacity
-from apx.core.domain.config import ConfigError, ExpansionBounds, default_of, expansion_bounds
+from apx.core.domain.config import (
+    DEFAULT_EXCLUSION_LIST,
+    ConfigError,
+    ExpansionBounds,
+    default_of,
+    expansion_bounds,
+)
 from apx.core.domain.head_journal import open_journal
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
@@ -293,10 +299,18 @@ class RegisterOut(BaseModel):
 
 
 class InventoryOut(BaseModel):
-    submitted: int
+    """The permanent *denominator* (AD-38): the six disjoint named counts, the words for
+    unknown-cardinality containers (never a number folded into a total), and the consistency flag
+    (FR-6). ``submitted_pieces == in_corpus + open_register_entries`` over known pièces; noise and
+    retired are their own lines, outside the identity."""
+
+    submitted_pieces: int
     in_corpus: int
-    failures: int
-    exclusions: int
+    open_register_entries: int
+    excluded_as_noise: int
+    retired: int
+    unknown_cardinality_entries: int
+    unknown_cardinality_phrase: str
     consistent: bool
 
 
@@ -434,8 +448,11 @@ class MatterOut(BaseModel):
 
 def _inventory_out(inv) -> InventoryOut:  # noqa: ANN001
     return InventoryOut(
-        submitted=inv.submitted, in_corpus=inv.in_corpus, failures=inv.failures,
-        exclusions=inv.exclusions, consistent=inv.is_consistent(),
+        submitted_pieces=inv.submitted_pieces, in_corpus=inv.in_corpus,
+        open_register_entries=inv.open_register_entries, excluded_as_noise=inv.excluded_as_noise,
+        retired=inv.retired, unknown_cardinality_entries=inv.unknown_cardinality_entries,
+        unknown_cardinality_phrase=inv.unknown_cardinality_phrase(),
+        consistent=inv.is_consistent(),
     )
 
 
@@ -938,9 +955,12 @@ def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> I
     store = _store()
     bounds = (expansion_bounds(lambda k: store.get_config(ident.tenant, k))
               if store is not None else ExpansionBounds.defaults())
+    noise_patterns = (store.get_config(ident.tenant, "exclusion_list")  # config-as-data (FR-6)
+                      if store is not None else DEFAULT_EXCLUSION_LIST)
     result = ingest_folder(
         folder, matter=req.matter, tenant=ident.tenant,
         extractor=_extractor(), custodian=custodian, expander=_expander(bounds), bounds=bounds,
+        noise_patterns=noise_patterns,
     )
     persisted = _persist(
         result, wall, ident.actor,

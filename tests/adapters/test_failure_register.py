@@ -79,7 +79,7 @@ def test_a_container_entry_has_cardinality_unknown(store: SqlStore) -> None:
 def test_retry_resolves_on_success_keeps_history_and_drops_the_open_count(store: SqlStore) -> None:
     _seed(store, _fail("/a.pdf"))
     entry_id = store.register("m", TENANT, {WALL})[0].id
-    before = store.inventory("m", TENANT, {WALL}).failures
+    before = store.inventory("m", TENANT, {WALL}).open_register_entries
 
     out = store.retry_failure(
         entry_id, lambda: IngestionResult(pieces=[_piece("recovered", prov="/a.pdf")]),
@@ -89,7 +89,7 @@ def test_retry_resolves_on_success_keeps_history_and_drops_the_open_count(store:
     reg = store.register("m", TENANT, {WALL})
     assert len(reg) == 1 and reg[0].resolution_state == "resolved"   # KEPT — never removed (AD-7)
     inv = store.inventory("m", TENANT, {WALL})
-    assert inv.failures == before - 1 and inv.in_corpus == 1         # open-only; pièce recovered
+    assert inv.open_register_entries == before - 1 and inv.in_corpus == 1  # open-only; recovered
 
 
 def test_retry_that_still_fails_keeps_open_and_refreshes_the_class(store: SqlStore) -> None:

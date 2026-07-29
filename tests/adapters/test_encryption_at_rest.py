@@ -113,7 +113,7 @@ def test_the_orm_decrypts_transparently_and_search_still_works(seeded) -> None: 
     _engine, store = seeded
     # read back through the ORM: the encrypted columns decrypt to their plaintext
     inv = store.inventory(MATTER, TENANT, {SCOPE})
-    assert inv.in_corpus == 1 and inv.failures == 1
+    assert inv.in_corpus == 1 and inv.open_register_entries == 1
     labels = store.labels(MATTER, TENANT, {SCOPE})
     assert labels.pieces[0].rationale == f"écarté car {TOKEN}"
     assert store.mfa_status(TENANT, store.list_users(TENANT)[0].id)[1] == f"TOTPSEED{TOKEN}"

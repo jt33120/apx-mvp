@@ -36,6 +36,7 @@ from apx.checks import (
     encryption,
     forward_looking,
     import_contracts,
+    inventory_record,
     isolation_harness,
     payload_schema,
     projection,
@@ -385,6 +386,11 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
        register_ownership.register_state_written_once,
        "Failure.resolution_state writes across apx/**"),
+    # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
+    _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
+       inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),
+    _p("unknown-cardinality-never-summed", "FR-6", "AD-38", "unknown cardinality never summed",
+       inventory_record.unknown_cardinality_never_summed, "'+' operands across apx/**"),
     # ── story 1.12: the harness checks ITSELF (the meta-checks) ───────────────────────────────
     _p("meta-property-has-check", "FR-56", "AD-33", "every property has a registered check",
        every_structural_property_has_a_registered_check, "this manifest vs CHECKS"),

@@ -1,5 +1,7 @@
 export type Inventory = {
-  submitted: number; in_corpus: number; failures: number; exclusions: number; consistent: boolean;
+  submitted_pieces: number; in_corpus: number; open_register_entries: number;
+  excluded_as_noise: number; retired: number; unknown_cardinality_entries: number;
+  unknown_cardinality_phrase: string; consistent: boolean;
 };
 export type Failure = { filename: string; path: string; error_class: string };
 export type IngestResponse = {
