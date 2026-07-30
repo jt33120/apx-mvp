@@ -33,6 +33,7 @@ from apx.checks import (
     secrets,
     tenant_isolation,
     truth_status,
+    truth_status_surface,
 )
 from apx.checks.import_contracts import CheckResult
 
@@ -102,6 +103,10 @@ CHECKS: list[Callable[[], CheckResult]] = [
     read_path.tenant_reads_have_one_entry_point,
     read_path.scoped_read_puts_scope_in_the_query,
     read_path.corpus_read_takes_no_admin_bypass,
+    # story 3.4 — the truth-status SURFACE gate: a result-set response serialises its status, and
+    # the two engines are never combined into one list (FR-15).
+    truth_status_surface.result_set_response_serialises_truth_status,
+    truth_status_surface.no_response_merges_the_two_engines,
     # story 2.6 — the failure register: one owning module per state transition (AD-37).
     register_ownership.register_state_written_once,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.

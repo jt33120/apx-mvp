@@ -15,8 +15,23 @@ export type Triage = { submitted: number; distinct: number; duplicates: number; 
 export type LabelledPiece = { provenance: string; label: string; rationale: string };
 export type Labels = { relevant: number; uncertain: number; discarded: number; judged: number; pieces: LabelledPiece[] };
 export type JudgeResult = { judged: number; relevant: number; uncertain: number; discarded: number; judge: string };
-export type SearchHit = { matter: string; provenance: string; snippet: string };
-export type SearchResults = { query: string; total: number; returned: number; hits: SearchHit[] };
+// Story 3.4 — the two engines each carry their truth status; the client never combines them.
+export type SemanticResult = { piece_id: string; chunk_id: string; similarity: number };
+export type SuggestiveResult = {
+  truth_status: "suggestive"; query: string; k: number; similarity_threshold: number;
+  wording: string; results: SemanticResult[]; header?: string;
+};
+export type Denominator = {
+  submitted_pieces: number; in_corpus: number; open_register_entries: number;
+  excluded_as_noise: number; retired: number; unknown_cardinality_entries: number;
+};
+export type RegisterHit = { matter: string; filename: string; error_class: string };
+export type DeterministicResult = { matter: string; piece_id: string; snippet: string };
+export type ExhaustiveResult = {
+  truth_status: "exhaustive"; query: string; denominator: Denominator; ocr_share: number;
+  below_quality_share: number; register_hits: RegisterHit[]; normalization: string;
+  results: DeterministicResult[]; header?: string;
+};
 export type Identity = { actor: string; tenant: string; scopes: string[]; is_admin: boolean };
 export type AdminUser = {
   id: string; email: string; display_name: string; is_admin: boolean; scopes: string[];
@@ -31,6 +46,20 @@ export type RecallBound = {
 // The session cookie (owned auth) carries tenant + scopes; the client never sends them.
 async function detail(res: Response): Promise<string> {
   return (await res.json().catch(() => ({}))).detail ?? `échec (${res.status})`;
+}
+
+// An error that keeps the HTTP status, so the UI can branch on it — e.g. a 409 is the
+// moving-population refusal (an honest "wait"), never a red error (Story 3.4).
+export class ApiError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+    this.name = "ApiError";
+  }
+}
+async function fail(res: Response): Promise<never> {
+  throw new ApiError(res.status, await detail(res));
 }
 
 export async function me(): Promise<Identity | null> {
@@ -170,11 +199,27 @@ export async function readAudit(matter: string): Promise<AuditTrail> {
   return res.json();
 }
 
-// Deterministic exhaustive search, scope-constrained server-side (the wall pre-filters it).
-export async function searchCorpus(q: string): Promise<SearchResults> {
-  const res = await fetch(`/api/search?${new URLSearchParams({ q })}`);
-  if (!res.ok) throw new Error(await detail(res));
+// The SUGGESTIVE engine (semantic): ranked, never a completeness claim (FR-12/FR-15).
+export async function searchSuggestive(q: string, k = 20): Promise<SuggestiveResult> {
+  const res = await fetch(`/api/search/suggestive?${new URLSearchParams({ q, k: String(k) })}`);
+  if (!res.ok) return fail(res);
   return res.json();
+}
+
+// The EXHAUSTIVE engine (deterministic): the complete match set + its denominator (FR-13/FR-15).
+// A 409 is the moving-population refusal (never a partial proof) — carried on ApiError.status.
+export async function searchExhaustive(q: string): Promise<ExhaustiveResult> {
+  const res = await fetch(`/api/search/exhaustive?${new URLSearchParams({ q })}`);
+  if (!res.ok) return fail(res);
+  return res.json();
+}
+
+// The export URLs — the truth status survives onto a court-readable page (opened in a new tab).
+export function suggestiveExportUrl(q: string, k = 20): string {
+  return `/api/search/suggestive/export?${new URLSearchParams({ q, k: String(k) })}`;
+}
+export function exhaustiveExportUrl(q: string): string {
+  return `/api/search/exhaustive/export?${new URLSearchParams({ q })}`;
 }
 
 // Draw a random sample of a matter's discard pile to review (the recall guarantee).

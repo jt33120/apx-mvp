@@ -1311,6 +1311,22 @@ class SqlStore:
                 f"lines={len(entries)} scopes={len(scopes)}", now or datetime.now(UTC))
         return RegisterExport(tuple(entries), len(scopes))
 
+    def audit_query(
+        self, tenant: str, actor: str, *, term: str, engine: str, scopes: set[str],
+        denominator: Inventory | None = None, action: str = "search",
+        now: datetime | None = None,
+    ) -> None:
+        """Record a search as an audited READ (AD-14/FR-15): ONE entry naming the term, the engine
+        (its *truth status*), the scope, and — for an exhaustive query — the denominator at that
+        moment. A corpus search is scope-wide, so it audits on the tenant chain (``matter=None``),
+        like a scope grant. ``action`` is ``search`` for a run, ``export-search`` for an export."""
+        denom = (f" denominator={denominator.in_corpus}/{denominator.submitted_pieces}"
+                 if denominator is not None else "")
+        detail = f"engine={engine} scopes={len(scopes)} term={term!r}{denom}"
+        with self._sf() as session, session.begin():
+            self._append_audit(session, tenant, None, actor, action, detail,
+                               now or datetime.now(UTC))
+
     def deduplicate(self, matter: str, tenant: str, scopes: set[str]) -> DedupSummary:
         """The deterministic tier of the judgment cascade for a matter — scope-checked.
         Groups the corpus by the near-duplicate key so copies (same text modulo

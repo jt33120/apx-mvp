@@ -49,6 +49,7 @@ from apx.checks import (
     secrets,
     tenant_isolation,
     truth_status,
+    truth_status_surface,
 )
 from apx.checks.import_contracts import CheckResult
 
@@ -419,6 +420,14 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("corpus-read-no-admin-bypass", "FR-14", "AD-12", "a corpus read takes no admin bypass",
        read_path.corpus_read_takes_no_admin_bypass,
        "Piece/Chunk-reading functions that take an is_admin/super-user bypass parameter"),
+    # ── story 3.4: the truth-status SURFACE gate — serialised, never combined (FR-15) ─────────────
+    _p("result-response-serialises-truth-status", "FR-15", "AD-20",
+       "a result-set response serialises its truth status",
+       truth_status_surface.result_set_response_serialises_truth_status,
+       "response/export models in apx/api/ carrying engine result items (need truth_status)"),
+    _p("no-response-merges-engines", "FR-15", "AD-20", "no response merges the two engines",
+       truth_status_surface.no_response_merges_the_two_engines,
+       "response/export models in apx/api/ carrying a semantic AND a deterministic result item"),
     # ── story 2.6: the failure register — one owning module per state transition (AD-37) ──────
     _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
        register_ownership.register_state_written_once,

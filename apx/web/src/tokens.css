@@ -251,3 +251,34 @@ button:focus-visible { box-shadow: var(--apx-ring); }
 .apx-seal--bad { color: var(--apx-danger); }
 .apx-inline-list { margin: 0; padding-left: 1.2rem; }
 .apx-inline-list li { margin-bottom: 0.2rem; }
+
+/* ── Story 3.4: the truth-status vocabulary (a different axis from the triage tier) ────────── */
+.apx-search-mode { display: inline-flex; background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: 999px; padding: 3px; box-shadow: var(--apx-shadow-sm); }
+.apx-search-mode button { border: 0; background: transparent; border-radius: 999px; padding: 0.4rem 0.85rem; font-size: 0.86rem; color: var(--apx-ink-2); }
+.apx-search-mode button[aria-pressed="true"] { background: var(--apx-ink); color: #fff; font-weight: 560; }
+.apx-ts { display: inline-flex; align-items: center; gap: 0.45rem; border-radius: 999px; padding: 0.12rem 0.7rem; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; font-weight: 600; }
+.apx-ts .g { font-family: var(--apx-serif); font-size: 1rem; font-weight: 600; letter-spacing: 0; }
+.apx-ts--sug { color: var(--apx-ink-3); background: var(--apx-line-2); }
+.apx-ts--exh { color: var(--apx-kept); background: var(--apx-kept-bg); }
+/* the OPEN (dashed) suggestive frame vs the CLOSED (solid) exhaustive frame */
+.apx-rset { border-radius: var(--apx-radius); background: var(--apx-surface); margin-top: 0.7rem; overflow: hidden; }
+.apx-rset--sug { border: 1px solid var(--apx-line); border-left: 2px dashed var(--apx-line); }
+.apx-rset--exh { border: 1px solid var(--apx-line); box-shadow: var(--apx-shadow); }
+.apx-rset-head { display: flex; align-items: center; gap: 0.7rem; flex-wrap: wrap; padding: 0.85rem 1rem; border-bottom: 1px solid var(--apx-line-2); }
+.apx-rset-head .count { margin-left: auto; font-size: 0.85rem; color: var(--apx-muted); }
+.apx-rset-head .count b { font-family: var(--apx-serif); color: var(--apx-ink-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+.apx-hit { padding: 0.8rem 1rem; border-top: 1px solid var(--apx-line-2); }
+.apx-hit .name { font-weight: 560; color: var(--apx-ink); }
+.apx-hit .snip { color: var(--apx-ink-2); font-size: 0.92rem; border-left: 2px solid var(--apx-line); padding-left: 0.7rem; margin-top: 0.25rem; }
+.apx-hit .meta { display: flex; gap: 0.5rem; align-items: center; font-size: 0.78rem; color: var(--apx-muted); margin-top: 0.15rem; }
+.apx-prox { display: inline-flex; gap: 3px; align-items: center; }
+.apx-prox i { width: 6px; height: 6px; border-radius: 999px; background: var(--apx-line-2); display: inline-block; }
+.apx-prox i.on { background: var(--apx-ink-3); }
+/* the absence-statement seal — the products most dangerous output, shown with its four qualifications */
+.apx-absence { margin: 0.3rem 1rem 1.1rem; border-radius: var(--apx-radius); padding: 0.9rem 1.05rem; font-size: 0.96rem; line-height: 1.5; }
+.apx-absence--ok { color: #234b39; background: var(--apx-kept-bg); border: 1px solid #cfe3d6; }
+.apx-absence--qual { color: #6a4211; background: var(--apx-review-bg); border: 1px solid #ecdcc0; }
+.apx-absence .lead { font-family: var(--apx-serif); font-size: 1.05rem; font-weight: 600; display: block; margin-bottom: 0.2rem; }
+.apx-regblock { margin: 0 1rem 1rem; border: 1px solid var(--apx-line); border-radius: var(--apx-radius); overflow: hidden; }
+.apx-regblock .rh { padding: 0.55rem 0.9rem; background: var(--apx-surface-2); border-bottom: 1px solid var(--apx-line-2); font-size: 0.82rem; color: var(--apx-review); }
+.apx-refuse { margin-top: 0.7rem; border: 1px solid #ecdcc0; background: var(--apx-review-bg); border-radius: var(--apx-radius); padding: 1rem 1.15rem; color: #6a4211; }

@@ -11,6 +11,7 @@ audit trail is the session user. No fixtures, no demo override (FR-33).
 
 from __future__ import annotations
 
+import html
 import os
 import shutil
 import threading
@@ -27,6 +28,7 @@ from uuid import uuid4
 
 import pyotp
 from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
@@ -49,6 +51,8 @@ from apx.adapters.store_postgres.store import ScopeConflict, ScopeDenied, SqlSto
 from apx.api.logging import install_secret_redaction
 from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
+from apx.core.app.read.deterministic import MovingPopulation, search_exhaustive
+from apx.core.app.read.semantic import search_semantic
 from apx.core.app.triage import triage_pieces
 from apx.core.domain import capacity
 from apx.core.domain.config import (
@@ -59,6 +63,7 @@ from apx.core.domain.config import (
     expansion_bounds,
 )
 from apx.core.domain.head_journal import open_journal
+from apx.core.domain.inventory import Inventory
 from apx.core.ports.embedding import Embedder
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
@@ -411,6 +416,65 @@ class SearchResultsOut(BaseModel):
     total: int               # true number of matching pieces, even if `hits` is capped
     returned: int            # how many hits are in this response
     hits: list[SearchHitOut]
+
+
+# ── Story 3.4: the two engines each SERIALISE their truth status (FR-15) — never combined. ──
+class SemanticResultOut(BaseModel):
+    piece_id: str
+    chunk_id: str            # the openable handle (resolved to the passage on demand — Story 3.5)
+    similarity: float
+
+
+class SuggestiveOut(BaseModel):
+    """A semantic (SUGGESTIVE) result set, on the wire. It carries its truth status and a wording
+    that can never read as completeness; it has NO total/denominator (an exhaustive-only idea)."""
+
+    truth_status: str        # the constant "suggestive" (Story 3.1) — serialised, never dropped
+    query: str
+    k: int
+    similarity_threshold: float
+    wording: str             # "top N of the corpus by similarity" — never a completeness total
+    results: list[SemanticResultOut]
+
+
+class DenominatorOut(BaseModel):
+    """The AD-38 six-field scoped denominator, on the wire. ``unknown_cardinality_entries`` is a
+    SUBSET of ``open_register_entries``, rendered in words by the surface, never summed."""
+
+    submitted_pieces: int
+    in_corpus: int
+    open_register_entries: int
+    excluded_as_noise: int
+    retired: int
+    unknown_cardinality_entries: int
+
+
+class RegisterHitOut(BaseModel):
+    matter: str
+    filename: str
+    error_class: str
+
+
+class DeterministicResultOut(BaseModel):
+    matter: str
+    piece_id: str
+    snippet: str
+
+
+class ExhaustiveOut(BaseModel):
+    """A deterministic (EXHAUSTIVE) result set, on the wire (Story 3.2 / AD-20). It carries its
+    truth status, its scoped ``denominator`` (AD-38), the OCR/quality shares and the register
+    name-matches (searched separately, AD-21) — the four AD-42 qualifications, as data. No limit."""
+
+    truth_status: str        # the constant "exhaustive" (Story 3.2) — serialised, never dropped
+    query: str
+    denominator: DenominatorOut
+    ocr_share: float
+    below_quality_share: float
+    register_hits: list[RegisterHitOut]   # separate from `results` (AD-21), never counted within
+    normalization: str
+    results: list[DeterministicResultOut]
+
 
 
 class SampledDiscardOut(BaseModel):
@@ -1123,9 +1187,10 @@ def list_matters(ident: Identity = Depends(current_identity)) -> list[MatterOut]
 def search_corpus(
     q: str, limit: int = 100, ident: Identity = Depends(current_identity)
 ) -> SearchResultsOut:
-    """Deterministic exhaustive search over the caller's scope (FR-13) — every piece
-    whose stored text contains `q` (case-insensitive), scope-constrained (the wall
-    pre-filters search too). `total` is honest even when the hits are capped."""
+    """A **bounded normalised PREVIEW** over the caller's scope (FR-13) — pieces whose stored text
+    contains `q` (`fr-fold-v1`), scope-constrained. It is NOT a truth-status-carrying result set and
+    it TRUNCATES at `limit` (`total` stays honest): a quick look, never a proof. For the two engines
+    that declare their truth status, use `/api/search/suggestive` and `/api/search/exhaustive`."""
     store = _require_store()
     results = store.search(ident.tenant, ident.scopes, q, limit=max(1, min(limit, 500)))
     return SearchResultsOut(
@@ -1137,6 +1202,188 @@ def search_corpus(
             for h in results.hits
         ],
     )
+
+
+def _suggestive_payload(store: SqlStore, ident: Identity, q: str, k: int) -> SuggestiveOut:
+    """Run the semantic (suggestive) engine and serialise it — the truth status and a wording that
+    can never read as completeness. Composes the ONE embedder (AD-11) at the edge, like ingest."""
+    rs = search_semantic(
+        tenant=ident.tenant, scopes=ident.scopes, query=q, embedder=_embedder(),
+        reader=store, k=max(1, min(k, 100)),
+        config_get=lambda key: store.get_config(ident.tenant, key))
+    return SuggestiveOut(
+        truth_status=rs.truth_status.value, query=q, k=rs.k,
+        similarity_threshold=rs.similarity_threshold, wording=rs.wording,
+        results=[SemanticResultOut(piece_id=r.piece_id, chunk_id=r.chunk_id,
+                                   similarity=r.similarity) for r in rs.results])
+
+
+def _exhaustive_payload(store: SqlStore, ident: Identity, q: str) -> ExhaustiveOut:
+    """Run the deterministic (exhaustive) engine and serialise it — the truth status + the scoped
+    denominator (AD-38) + the four AD-42 qualifications. Refuses over a moving population (409)."""
+    try:
+        rs = search_exhaustive(tenant=ident.tenant, scopes=ident.scopes, query=q, reader=store)
+    except MovingPopulation as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    d = rs.denominator
+    return ExhaustiveOut(
+        truth_status=rs.truth_status.value, query=q,
+        denominator=DenominatorOut(
+            submitted_pieces=d.submitted_pieces, in_corpus=d.in_corpus,
+            open_register_entries=d.open_register_entries, excluded_as_noise=d.excluded_as_noise,
+            retired=d.retired, unknown_cardinality_entries=d.unknown_cardinality_entries),
+        ocr_share=rs.ocr_share, below_quality_share=rs.below_quality_share,
+        register_hits=[RegisterHitOut(matter=h.matter, filename=h.filename,
+                                      error_class=h.error_class) for h in rs.register_hits],
+        normalization=rs.normalization,
+        results=[DeterministicResultOut(matter=r.matter, piece_id=r.piece_id, snippet=r.snippet)
+                 for r in rs.results])
+
+
+def _inventory_of(d: DenominatorOut) -> Inventory:
+    """The domain denominator behind the wire model — so a query audit records the six-field
+    record (AD-38), never a re-implemented number."""
+    return Inventory(
+        submitted_pieces=d.submitted_pieces, in_corpus=d.in_corpus,
+        open_register_entries=d.open_register_entries, excluded_as_noise=d.excluded_as_noise,
+        retired=d.retired, unknown_cardinality_entries=d.unknown_cardinality_entries)
+
+
+def _exhaustive_header(out: ExhaustiveOut) -> str:
+    """The truth-status FACE of an exhaustive export — the scoped denominator + the AD-42
+    qualifications + the presence/absence claim, in the lawyer's language. Never a bare
+    'introuvable'; never the FR-23 banned phrasing."""
+    d = out.denominator
+    # DeterministicResult is per-PIÈCE (matter, piece_id, snippet), so a pièce is the unit here.
+    claim = (f"{len(out.results)} pièce(s) contenant « {out.query} » — ensemble complet"
+             if out.results else f"Aucune occurrence de « {out.query} ».")
+    quals = (f"Recherché dans tout l'indexé de ce périmètre "
+             f"({d.in_corpus} sur {d.submitted_pieces}). "
+             f"Le registre liste {d.open_register_entries} pièce(s) au registre")
+    if d.unknown_cardinality_entries:
+        quals += f", dont {d.unknown_cardinality_entries} au contenu inconnu"
+    quals += f" ; {round(out.ocr_share * 100)} % du corpus recherché provient d'un OCR"
+    if out.below_quality_share > 0:
+        quals += f", {round(out.below_quality_share * 100)} % sous le seuil de qualité"
+    return f"RECHERCHE EXHAUSTIVE — {claim} {quals}."
+
+
+_SUGGESTIVE_HEADER = ("SUGGESTIONS — liste non exhaustive, classée par proximité ; "
+                      "ne constitue pas une preuve d'absence.")
+
+# A court-readable EXPORT is a self-contained, print-ready HTML document — no system needed to read
+# it (FR-15). System fonts only (the offline constraint reaches the export too, AD-29).
+_EXPORT_CSS = (
+    "body{font-family:Georgia,'Times New Roman',serif;color:#0b1f3a;max-width:46rem;"
+    "margin:2rem auto;padding:0 1.5rem;line-height:1.5}"
+    ".stamp{font-family:system-ui,sans-serif;font-size:.7rem;letter-spacing:.1em;"
+    "text-transform:uppercase;font-weight:700;padding:.45rem .9rem;border-radius:6px;"
+    "display:inline-block}.exh{color:#2f6f4f;background:#e8f1eb}.sug{color:#5b6678;"
+    "background:#efeae0}h1{font-size:1.25rem;margin:.8rem 0 .2rem}.meta{color:#6b7280;"
+    "font-size:.85rem}table{border-collapse:collapse;width:100%;font-family:system-ui,"
+    "sans-serif;font-size:.9rem;margin-top:.8rem}td,th{border-bottom:1px solid #e6e0d5;"
+    "padding:.4rem .5rem;text-align:left;vertical-align:top}.num{font-variant-numeric:"
+    "tabular-nums}.disc{margin-top:1rem;padding:.8rem 1rem;border:1px solid #e6e0d5;"
+    "border-radius:8px;font-size:.92rem;background:#faf8f3}@media print{body{margin:0}}"
+)
+
+
+def _export_doc(title: str, body: str) -> str:
+    return (f"<!doctype html><html lang=\"fr\"><head><meta charset=\"utf-8\">"
+            f"<title>{html.escape(title)}</title><style>{_EXPORT_CSS}</style></head>"
+            f"<body>{body}</body></html>")
+
+
+def _exhaustive_export_html(out: ExhaustiveOut) -> str:
+    d = out.denominator
+    rows = "".join(
+        f"<tr><td>{html.escape(r.piece_id)}</td><td>{html.escape(r.matter)}</td>"
+        f"<td>{html.escape(r.snippet)}</td></tr>" for r in out.results)
+    reg = "".join(
+        f"<tr><td>{html.escape(h.filename)}</td><td>{html.escape(h.error_class)}</td></tr>"
+        for h in out.register_hits)
+    body = (
+        f"<span class=\"stamp exh\">= Recherche exhaustive — preuve</span>"
+        f"<h1>« {html.escape(out.query)} »</h1>"
+        f"<div class=\"disc\">{html.escape(_exhaustive_header(out))}</div>"
+        f"<table><thead><tr><th>Pièce</th><th>Dossier</th><th>Passage</th></tr></thead>"
+        f"<tbody>{rows or '<tr><td colspan=3>Aucune occurrence.</td></tr>'}</tbody></table>"
+        + (f"<h1>Correspondances au registre (hors ensemble recherché)</h1>"
+           f"<table><tbody>{reg}</tbody></table>" if reg else "")
+        + f"<p class=\"meta\">Périmètre recherché : {d.in_corpus} indexé sur "
+          f"{d.submitted_pieces} — normalisation {html.escape(out.normalization)}.</p>")
+    return _export_doc(f"Recherche exhaustive — {out.query}", body)
+
+
+def _suggestive_export_html(out: SuggestiveOut) -> str:
+    rows = "".join(
+        f"<tr><td>{i + 1}</td><td>{html.escape(r.piece_id)}</td></tr>"
+        for i, r in enumerate(out.results))
+    body = (
+        f"<span class=\"stamp sug\">≈ Suggestions — liste non exhaustive</span>"
+        f"<h1>« {html.escape(out.query)} »</h1>"
+        f"<div class=\"disc\">{html.escape(_SUGGESTIVE_HEADER)}</div>"
+        f"<table><thead><tr><th>Rang</th><th>Pièce</th></tr></thead>"
+        f"<tbody>{rows or '<tr><td colspan=2>Aucune suggestion.</td></tr>'}</tbody></table>"
+        f"<p class=\"meta\">Les {len(out.results)} pièces les plus proches par similarité.</p>")
+    return _export_doc(f"Suggestions — {out.query}", body)
+
+
+@app.get("/api/search/suggestive", response_model=SuggestiveOut)
+def search_suggestive(
+    q: str, k: int = 20, ident: Identity = Depends(current_identity)
+) -> SuggestiveOut:
+    """The semantic SUGGESTIVE engine (FR-12/AD-20): the top-k by similarity, carrying its truth
+    status and a wording that can never read as completeness. NOT a proof of absence. Audited."""
+    store = _require_store()
+    out = _suggestive_payload(store, ident, q, k)
+    store.audit_query(ident.tenant, ident.actor, term=q, engine=out.truth_status,
+                      scopes=ident.scopes)
+    return out
+
+
+@app.get("/api/search/exhaustive", response_model=ExhaustiveOut)
+def search_exhaustive_api(
+    q: str, ident: Identity = Depends(current_identity)
+) -> ExhaustiveOut:
+    """The deterministic EXHAUSTIVE engine (FR-13/AD-20): the complete match set within scope,
+    carrying its truth status, the scoped denominator (AD-38) and the AD-42 qualifications. Refuses
+    over a moving population (409 — never a partial proof). Audited with its denominator."""
+    store = _require_store()
+    out = _exhaustive_payload(store, ident, q)
+    store.audit_query(ident.tenant, ident.actor, term=q, engine=out.truth_status,
+                      scopes=ident.scopes, denominator=_inventory_of(out.denominator))
+    return out
+
+
+@app.get("/api/search/suggestive/export", response_class=HTMLResponse)
+def export_suggestive(
+    q: str, k: int = 20, ident: Identity = Depends(current_identity)
+) -> HTMLResponse:
+    """Export a suggestive set as a self-contained, print-ready HTML document — its head carries the
+    non-completeness wording, so the distinction survives onto a court-readable page read WITHOUT
+    the system (FR-15). One `export-search` audit entry."""
+    store = _require_store()
+    out = _suggestive_payload(store, ident, q, k)
+    store.audit_query(ident.tenant, ident.actor, term=q, engine=out.truth_status,
+                      scopes=ident.scopes, action="export-search")
+    return HTMLResponse(_suggestive_export_html(out))
+
+
+@app.get("/api/search/exhaustive/export", response_class=HTMLResponse)
+def export_exhaustive(
+    q: str, ident: Identity = Depends(current_identity)
+) -> HTMLResponse:
+    """Export an exhaustive set as a self-contained, print-ready HTML document — its head carries
+    the scoped denominator + the four AD-42 qualifications + the presence/absence claim, defensible
+    document read WITHOUT the system (FR-15/AD-42). One `export-search` audit entry with the
+    denominator."""
+    store = _require_store()
+    out = _exhaustive_payload(store, ident, q)
+    store.audit_query(ident.tenant, ident.actor, term=q, engine=out.truth_status,
+                      scopes=ident.scopes, denominator=_inventory_of(out.denominator),
+                      action="export-search")
+    return HTMLResponse(_exhaustive_export_html(out))
 
 
 @app.get("/api/matters/{matter}/audit", response_model=AuditTrailOut)

@@ -429,6 +429,8 @@ could contain is an inflated claim about what the suite proves).
 | `tenant-reads-one-entry-point` | FR-14 | AD-14 | structural | tenant_reads_have_one_entry_point | select/query/join over a tenant-content model outside core/app/read/ + the store read modules (a surface cannot hand-roll a scoped read) |
 | `scoped-read-scope-in-query` | FR-14 | AD-14 | structural | scoped_read_puts_scope_in_the_query | scopes-taking functions that select a scoped content table filtered by tenant alone (the register_all fetch-then-post-filter shape) |
 | `corpus-read-no-admin-bypass` | FR-14 | AD-12 | structural | corpus_read_takes_no_admin_bypass | Piece/Chunk-reading functions that take an is_admin/super-user bypass parameter (no super-user corpus read) |
+| `result-response-serialises-truth-status` | FR-15 | AD-20 | structural | result_set_response_serialises_truth_status | response/export models in apx/api/ carrying engine result items (must declare truth_status — never dropped on the wire) |
+| `no-response-merges-engines` | FR-15 | AD-20 | structural | no_response_merges_the_two_engines | response/export models in apx/api/ carrying both a semantic and a deterministic result item (the two engines are never combined) |
 | `register-state-written-once` | FR-5 | AD-37 | structural | register_state_written_once | Failure.resolution_state writes across apx/** |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |

@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  changePassword, createUser, grantScope, importStatus, ingestUpload, judgeMatter, listMatters,
-  listUsers, login, logout, me, readAudit, readLabels, readTriage, recallReview, recallSample,
-  revokeScope, searchCorpus,
-  type AdminUser, type AuditTrail, type Identity, type ImportProgress, type ImportStarted,
-  type Labels, type MatterSummary, type RecallBound, type RecallSample, type SearchResults,
-  type Triage,
+  ApiError, changePassword, createUser, exhaustiveExportUrl, grantScope, importStatus, ingestUpload,
+  judgeMatter, listMatters, listUsers, login, logout, me, readAudit, readLabels, readTriage,
+  recallReview, recallSample, revokeScope, searchExhaustive, searchSuggestive, suggestiveExportUrl,
+  type AdminUser, type AuditTrail, type ExhaustiveResult, type Identity, type ImportProgress,
+  type ImportStarted, type Labels, type MatterSummary, type RecallBound, type RecallSample,
+  type SuggestiveResult, type Triage,
 } from "./api";
 
 /** Owned auth gate (AD-15): the session — not the request — carries the tenant and
@@ -288,7 +288,7 @@ function Console({ identity, onLogout, onCockpit }: {
         </div>
       )}
 
-      <CorpusSearch />
+      <CorpusSearch scopes={identity.scopes} />
 
       {matters.length > 0 && (
         <section className="apx-panel">
@@ -493,24 +493,34 @@ function Cockpit({ onBack, onLogout }: { onBack: () => void; onLogout: () => voi
   );
 }
 
-/** The safety net beneath triage: type a term, find every piece that contains it
- *  within your scope, whatever its label. Deterministic, exhaustive, scope-constrained. */
-function CorpusSearch() {
+/** Story 3.4 — the two engines, each DECLARING its truth status, never combined in one list
+ *  (FR-15). One field, an EXPLICIT mode: Suggestions (≈ suggestif, by topic — never a proof) or
+ *  Preuve (= exhaustif, exact term — the complete set + its denominator, the defensible answer). */
+function CorpusSearch({ scopes }: { scopes: string[] }) {
   const [q, setQ] = useState("");
-  const [res, setRes] = useState<SearchResults | null>(null);
+  const [mode, setMode] = useState<"suggestive" | "exhaustive">("exhaustive");
+  const [sug, setSug] = useState<SuggestiveResult | null>(null);
+  const [exh, setExh] = useState<ExhaustiveResult | null>(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+  const [refused, setRefused] = useState(false);
 
   async function runSearch(e: React.FormEvent) {
     e.preventDefault();
     if (!q.trim()) return;
     setBusy(true);
     setErr(null);
+    setRefused(false);
+    setSug(null);
+    setExh(null);
     try {
-      setRes(await searchCorpus(q));
+      if (mode === "suggestive") setSug(await searchSuggestive(q));
+      else setExh(await searchExhaustive(q));
     } catch (e2) {
-      setErr(e2 instanceof Error ? e2.message : String(e2));
-      setRes(null);
+      // the moving-population refusal is a 409 (an honest "wait"), branched on the STATUS — never a
+      // regex on an English message, and the raw exception text is never shown to the lawyer.
+      if (e2 instanceof ApiError && e2.status === 409) setRefused(true);
+      else setErr(e2 instanceof Error ? e2.message : String(e2));
     } finally {
       setBusy(false);
     }
@@ -519,39 +529,186 @@ function CorpusSearch() {
   return (
     <section className="apx-panel">
       <h2>Recherche — dans votre périmètre</h2>
-      <p className="apx-hint" style={{ margin: "0 0 .7rem", maxWidth: "62ch" }}>
-        Un nom, une partie, une référence : toute pièce qui le contient, où qu'elle soit dans
-        votre périmètre, quel que soit son tri. Déterministe et exhaustif — rien n'est caché.
+      <p className="apx-hint" style={{ margin: "0 0 .5rem", maxWidth: "64ch" }}>
+        Deux moteurs, deux vérités distinctes. <b>Suggestions</b> trouve les pièces les plus proches
+        d'un sujet — jamais une preuve. <b>Preuve</b> renvoie l'ensemble complet d'un terme exact,
+        avec son dénominateur — la seule réponse défendable devant un tribunal.
+      </p>
+      <p className="apx-hint" style={{ margin: "0 0 .7rem" }}>
+        Recherché dans{" "}
+        {scopes.length > 0
+          ? scopes.map((s) => <span key={s} className="apx-chip apx-chip--scope">{s}</span>)
+          : <span className="apx-chip apx-chip--scope">aucun périmètre</span>}
+        {" "}— résultats et dénominateur calculés dans ce seul périmètre.
       </p>
       <form onSubmit={runSearch} className="apx-controls">
+        <div className="apx-search-mode" role="group" aria-label="Mode de recherche">
+          <button type="button" aria-pressed={mode === "suggestive"}
+            onClick={() => setMode("suggestive")}>≈ Suggestions</button>
+          <button type="button" aria-pressed={mode === "exhaustive"}
+            onClick={() => setMode("exhaustive")}>= Preuve</button>
+        </div>
         <input value={q} onChange={(e) => setQ(e.target.value)}
-          placeholder="nom de pièce, partie, référence…" aria-label="Recherche"
-          style={{ flex: "1 1 20rem" }} />
+          placeholder={mode === "suggestive" ? "un sujet…" : "un terme exact…"}
+          aria-label="Recherche" style={{ flex: "1 1 18rem" }} />
         <button type="submit" disabled={busy || !q.trim()}>{busy ? "Recherche…" : "Chercher"}</button>
       </form>
       {err && <p className="apx-error" role="alert">{err}</p>}
-      {res && (
-        <div style={{ marginTop: ".9rem" }}>
-          <p className="apx-hint" style={{ margin: "0 0 .5rem" }}>
-            <strong className="apx-num">{res.total}</strong> pièce{res.total > 1 ? "s" : ""} pour «&nbsp;{res.query}&nbsp;»
-            {res.returned < res.total && <> · {res.returned} affichées</>}
-          </p>
-          {res.hits.length > 0 && (
-            <div className="apx-list">
-              {res.hits.map((h) => (
-                <div key={`${h.matter}/${h.provenance}`} className="apx-item" style={{ gridTemplateColumns: "1fr" }}>
-                  <div>
-                    <div className="apx-hint">{h.matter} · <span className="apx-mono">{h.provenance}</span></div>
-                    <div style={{ marginTop: ".15rem" }}>{h.snippet}</div>
-                  </div>
-                </div>
+      {refused && (
+        <div className="apx-refuse" role="status">
+          <b>La recherche exhaustive attend un corpus stable.</b> Un import est en cours sur ce
+          dossier — une preuve d'absence ne peut être faite sur une population qui bouge. Terminez
+          l'import, puis relancez. (Le mode <b>Suggestions</b> reste disponible.)
+        </div>
+      )}
+      {sug && <SuggestivePanel q={q} res={sug} />}
+      {exh && <ExhaustivePanel q={q} res={exh} />}
+    </section>
+  );
+}
+
+/** A ranked, non-complete SUGGESTION set: the ≈ badge, the dashed-open frame, "les N plus proches"
+ *  (never "N résultats"), a relative proximity meter — never a false-precise percentage. */
+function SuggestivePanel({ q, res }: { q: string; res: SuggestiveResult }) {
+  return (
+    <div className="apx-rset apx-rset--sug" aria-label="Suggestions, non exhaustives">
+      <div className="apx-rset-head">
+        <span className="apx-ts apx-ts--sug"><span className="g">≈</span> Suggestif</span>
+        <span className="apx-hint">classé par proximité · ne prouve pas l'absence</span>
+        <span className="count">les <b>{res.results.length}</b> plus proches</span>
+      </div>
+      {res.results.length === 0 && (
+        <div className="apx-hit"><div className="apx-hint">
+          Aucune suggestion au-dessus du seuil de proximité. Ce n'est pas une preuve d'absence —
+          utilisez le mode <b>Preuve</b>.
+        </div></div>
+      )}
+      {res.results.map((r, i) => (
+        <div key={r.chunk_id} className="apx-hit">
+          <div className="name">
+            <span className="apx-num" style={{ color: "var(--apx-ink-3)" }}>{i + 1}ᵉ</span>{" "}
+            {r.piece_id}
+            <span className="apx-hint" title="Le viewer ouvre au passage — Story 3.5"
+              style={{ marginLeft: ".5rem" }}>ouvrir au passage →</span>
+          </div>
+          <div className="meta">
+            <span className="apx-prox" title="proximité relative">
+              {[0, 1, 2, 3].map((p) => (
+                <i key={p} className={p < _pips(i, res.results.length) ? "on" : ""} />
               ))}
+            </span>
+            <span className="apx-mono">chunk {r.chunk_id.slice(0, 8)}</span>
+          </div>
+        </div>
+      ))}
+      <div style={{ padding: ".55rem 1rem", fontSize: ".84rem" }}>
+        <a href={suggestiveExportUrl(q)} target="_blank" rel="noreferrer">
+          Exporter (liste non exhaustive)…
+        </a>
+      </div>
+    </div>
+  );
+}
+
+/** The EXHAUSTIVE set: the = badge, the solid-closed frame, the scoped denominator, the
+ *  absence-statement seal (its four qualifications, in words), register-hits SEPARATE (AD-21). */
+function ExhaustivePanel({ q, res }: { q: string; res: ExhaustiveResult }) {
+  const d = res.denominator;
+  // fail-closed: no scope → a 0/0 denominator. This is NOT a searched-and-empty absence — it is
+  // "nothing was searched" (never a green proof of absence over an empty corpus). (Story 3.4 M1.)
+  const nothingSearched = d.submitted_pieces === 0;
+  const clean =
+    d.open_register_entries === 0 && d.unknown_cardinality_entries === 0 && res.ocr_share === 0;
+  const claim = res.results.length > 0
+    ? `${res.results.length} pièce(s) contenant « ${q} » — ensemble complet`
+    : `Aucune occurrence de « ${q} ».`;
+  if (nothingSearched) {
+    return (
+      <div className="apx-rset apx-rset--exh" aria-label="Aucun périmètre, rien recherché">
+        <div className="apx-rset-head">
+          <span className="apx-ts apx-ts--exh"><span className="g">=</span> Exhaustif</span>
+        </div>
+        <div className="apx-absence apx-absence--qual">
+          <span className="lead">Aucun périmètre — rien n'a été recherché.</span>
+          Vous ne détenez aucun périmètre sur ce dossier ; aucune recherche n'a été exécutée. Ce
+          n'est pas une preuve d'absence.
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="apx-rset apx-rset--exh" aria-label="Recherche exhaustive, ensemble complet">
+      <div className="apx-rset-head">
+        <span className="apx-ts apx-ts--exh"><span className="g">=</span> Exhaustif</span>
+        <span className="apx-hint">ensemble complet sur ce périmètre · une capture</span>
+      </div>
+      <div className="apx-equation" style={{ padding: "1.1rem 1.3rem .4rem" }}>
+        <div className="apx-eq-total">
+          <div className="n">{d.submitted_pieces}</div><div className="l">recherché</div>
+        </div>
+        <div className="apx-eq-rows">
+          <div className="apx-eq-row">
+            <div className="n">{d.in_corpus}</div><div className="c">indexé — texte recherchable</div>
+          </div>
+          <div className="apx-eq-row">
+            <div className="n">{d.open_register_entries}</div>
+            <div className="c">au registre — illisibles / non indexées</div>
+          </div>
+          {d.unknown_cardinality_entries > 0 && (
+            <div className="apx-eq-row">
+              <div className="n">{d.unknown_cardinality_entries}</div>
+              <div className="c">au contenu inconnu (cardinalité inconnue)</div>
             </div>
           )}
         </div>
+      </div>
+      <div className={`apx-absence ${clean ? "apx-absence--ok" : "apx-absence--qual"}`}>
+        <span className="lead">{claim}</span>
+        Recherché dans tout l'indexé de ce périmètre ({d.in_corpus} sur {d.submitted_pieces}).
+        Le registre liste {d.open_register_entries} pièce(s)
+        {d.unknown_cardinality_entries > 0
+          ? `, dont ${d.unknown_cardinality_entries} au contenu inconnu`
+          : ""}
+        {" "}; {Math.round(res.ocr_share * 100)} % du corpus recherché provient d'un OCR
+        {res.below_quality_share > 0
+          ? `, ${Math.round(res.below_quality_share * 100)} % sous le seuil de qualité`
+          : ""}.
+      </div>
+      {res.register_hits.length > 0 && (
+        <div className="apx-regblock">
+          <div className="rh">
+            ⚑ Correspondances dans le registre — pièces non indexées, hors de l'ensemble recherché
+          </div>
+          {res.register_hits.map((h) => (
+            <div key={h.filename} className="apx-hit">
+              <div className="apx-hint">{h.filename} · {h.error_class}</div>
+            </div>
+          ))}
+        </div>
       )}
-    </section>
+      {res.results.map((r) => (
+        <div key={r.piece_id} className="apx-hit">
+          <div className="name">
+            {r.piece_id} <span className="apx-hint">· {r.matter}</span>
+            <span className="apx-hint" title="Le viewer ouvre au passage — Story 3.5"
+              style={{ marginLeft: ".5rem" }}>ouvrir au passage →</span>
+          </div>
+          <div className="snip">{r.snippet}</div>
+        </div>
+      ))}
+      <div style={{ padding: ".55rem 1rem", fontSize: ".84rem" }}>
+        <a href={exhaustiveExportUrl(q)} target="_blank" rel="noreferrer">
+          Exporter (preuve défendable)…
+        </a>
+      </div>
+    </div>
   );
+}
+
+/** A RELATIVE proximity read (4 pips for the top, fewer as the rank falls) — an ordering, never a
+ *  false-precise percentage (the voice bars an invented number where a range is the truth). */
+function _pips(rank: number, total: number): number {
+  return Math.max(1, 4 - Math.floor((rank / Math.max(1, total)) * 4));
 }
 
 /** A matter, expandable to its deterministic triage, the judgment-by-criteria, and
