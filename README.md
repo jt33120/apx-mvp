@@ -417,7 +417,7 @@ could contain is an inflated claim about what the suite proves).
 | `extraction-captures-stderr` | FR-3 | AD-28 | structural | extraction_subprocess_captures_stderr | subprocess call sites in adapters/extraction (capture_output / stderr=PIPE or DEVNULL) |
 | `no-fallback-embedder` | FR-9 | AD-11 | structural | embedder_has_one_implementation | embed/encode-method classes + except-handlers in the runtime tree (live as of 2.8) |
 | `destructive-index-one-entry` | FR-10 | AD-7 | structural | destructive_index_ops_single_entry | index drop/truncate call sites (vacuous until 2.8) |
-| `no-post-filter-retrieval` | FR-14 | AD-14 | structural | no_post_filter_in_retrieval | functions taking a result set + a scope (vacuous until 3.x) |
+| `no-post-filter-retrieval` | FR-14 | AD-14 | structural | no_post_filter_in_retrieval | functions taking a result set + a scope (retrieval landed 3.x — live, no offender) |
 | `no-nl-translation-key` | FR-34 | conventions | structural | no_natural_language_translation_key | t()/gettext() call args (vacuous until 6.3) |
 | `no-hardcoded-locale` | FR-35 | AD-24 | structural | no_hardcoded_locale | locale= / setlocale / Locale literals (vacuous until 6.4) |
 | `no-model-reported-confidence` | FR-42 | AD-19 | structural | no_model_reported_confidence | confidence fields read off a model response (vacuous until 4.x) |
@@ -426,6 +426,9 @@ could contain is an inflated claim about what the suite proves).
 | `no-perf-ceiling-before-measurement` | NFR-2 | AD-32 | structural | no_perf_ceiling_before_measurement | module-level latency/throughput/wall-clock ceiling constants in apx/** vs the pending measurement record (vacuous until a ceiling is declared) |
 | `truth-status-constant-per-engine` | FR-12 | AD-20 | structural | truth_status_is_constant_per_engine | truth_status fields on result-set types in apx/** (a constant, non-overridable TruthStatus member — no config can forge exhaustive) |
 | `exhaustive-engine-no-limit` | FR-13 | AD-20 | structural | exhaustive_engine_takes_no_limit | params of functions returning an exhaustive result set in apx/** (no limit/top-k/page-size — an exhaustive set is never truncated) |
+| `tenant-reads-one-entry-point` | FR-14 | AD-14 | structural | tenant_reads_have_one_entry_point | select/query/join over a tenant-content model outside core/app/read/ + the store read modules (a surface cannot hand-roll a scoped read) |
+| `scoped-read-scope-in-query` | FR-14 | AD-14 | structural | scoped_read_puts_scope_in_the_query | scopes-taking functions that select a scoped content table filtered by tenant alone (the register_all fetch-then-post-filter shape) |
+| `corpus-read-no-admin-bypass` | FR-14 | AD-12 | structural | corpus_read_takes_no_admin_bypass | Piece/Chunk-reading functions that take an is_admin/super-user bypass parameter (no super-user corpus read) |
 | `register-state-written-once` | FR-5 | AD-37 | structural | register_state_written_once | Failure.resolution_state writes across apx/** |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |

@@ -27,6 +27,7 @@ from apx.checks import (
     payload_schema,
     perf_gate,
     projection,
+    read_path,
     register_ownership,
     scope_admin,
     secrets,
@@ -96,6 +97,11 @@ CHECKS: list[Callable[[], CheckResult]] = [
     truth_status.truth_status_is_constant_per_engine,
     # story 3.2 — the no-truncation gate: an exhaustive set is never truncated (AD-20).
     no_truncation.exhaustive_engine_takes_no_limit,
+    # story 3.3 — the single-read-path gate: scope is a query pre-filter, never a post-filter, and
+    # tenant-content queries are constructed only in the one read path (AD-13/AD-14).
+    read_path.tenant_reads_have_one_entry_point,
+    read_path.scoped_read_puts_scope_in_the_query,
+    read_path.corpus_read_takes_no_admin_bypass,
     # story 2.6 — the failure register: one owning module per state transition (AD-37).
     register_ownership.register_state_written_once,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.

@@ -1124,16 +1124,26 @@ class SqlStore:
         self, tenant: str, scopes: set[str], *, is_admin: bool
     ) -> list[RegisterEntry]:
         """The tenant-wide register: entries whose matter's scope is held, PLUS — only for the
-        tenant-wide admin — the undetermined-matter entries (matter IS NULL). A non-admin never
-        sees an undetermined entry (AD-12/FR-49, fail closed)."""
+        tenant-wide admin — the undetermined-matter entries (``matter IS NULL``). A non-admin never
+        sees an undetermined entry (AD-12/FR-49, fail closed).
+
+        Scope is a query PRE-FILTER (AD-13/AD-14): a ``Failure`` is visible iff its matter's scope
+        is held (a ``matter_scope`` sub-query) OR — admin only — it has no matter. No out-of-scope
+        row is ever fetched; there is no Python post-filter over a tenant-wide fetch (Story 3.3)."""
+        if not scopes and not is_admin:
+            return []  # fail closed (AD-12): no scope and not admin → an empty register
+        held_matters = select(MatterScope.matter).where(
+            MatterScope.tenant == tenant, MatterScope.scope.in_(sorted(scopes)))
         with self._sf() as session:
-            held = set(session.scalars(select(MatterScope.matter).where(
-                MatterScope.tenant == tenant, MatterScope.scope.in_(scopes)))) if scopes else set()
-            rows = session.scalars(select(Failure).where(Failure.tenant == tenant)).all()
-            out = [
-                self._register_entry(f) for f in rows
-                if (f.matter in held) or (f.matter is None and is_admin)
-            ]
+            rows = session.scalars(
+                select(Failure).where(
+                    Failure.tenant == tenant,
+                    or_(Failure.matter.in_(held_matters), Failure.matter.is_(None))
+                    if is_admin
+                    else Failure.matter.in_(held_matters),
+                )
+            ).all()
+            out = [self._register_entry(f) for f in rows]
         return sorted(
             out, key=lambda e: (e.matter or "", e.resolution_state, e.submitted_path, e.id))
 
