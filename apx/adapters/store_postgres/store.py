@@ -50,6 +50,7 @@ from apx.adapters.store_postgres.models import (
     User,
     UserScope,
 )
+from apx.adapters.store_postgres.semantic_query import results_from_rows, semantic_search_stmt
 from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
 from apx.core.domain.auth import hash_password, verify_and_upgrade, verify_password
 from apx.core.domain.chunking import (
@@ -74,6 +75,7 @@ from apx.core.domain.dedup import cluster
 from apx.core.domain.failures import ErrorClass, cardinality_for
 from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
 from apx.core.domain.inventory import Inventory
+from apx.core.domain.retrieval import SemanticResult
 from apx.core.domain.search import snippet
 from apx.core.domain.triage import TriageOutcome
 from apx.core.projection import Snapshot
@@ -1043,6 +1045,24 @@ class SqlStore:
                 Failure.tenant == tenant, Failure.matter == matter)).all()
             entries = [self._register_entry(f) for f in rows]
         return sorted(entries, key=lambda e: (e.resolution_state, e.submitted_path, e.id))
+
+    def search_semantic(
+        self, *, tenant: str, scopes: set[str], query_vector: list[float], k: int,
+        min_similarity: float,
+    ) -> list[SemanticResult]:
+        """The scoped semantic nearest-neighbour search (Story 3.1, the ``SemanticReader`` port). Up
+        to ``k`` chunks ranked by descending cosine similarity, scope joined from ``matter_scope``
+        as a query PRE-filter (AD-13). An empty scope reads nothing and runs no query (fail-closed,
+        AD-12). The ``<=>`` cosine operator is PostgreSQL-native (halfvec)."""
+        if not scopes:
+            return []
+        stmt = semantic_search_stmt(
+            tenant=tenant, scopes=scopes, query_vector=query_vector, k=k,
+            min_similarity=min_similarity,
+        )
+        with self._sf() as session:
+            rows = session.execute(stmt).all()
+        return results_from_rows(rows)
 
     def resolve_chunk(
         self, chunk_id: str, tenant: str, scopes: set[str], *, expected_text: str | None = None,

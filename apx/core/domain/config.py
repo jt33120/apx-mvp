@@ -247,6 +247,18 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         preserves_guarantee=lambda v: 0.0 < v < 1.0,
         affects_retrieval=True,
     ),
+    ConfigKey(
+        "similarity_threshold", "float", 0.3,
+        governs="the minimum cosine similarity a semantic (suggestive) result must meet; recorded "
+                "on every result set (FR-12/AD-20). Semantic retrieval NEVER proves absence.",
+        # WRITE domain: a cosine similarity lives in [-1, 1].
+        valid=lambda v: -1.0 <= v <= 1.0,
+        # DEFAULT must keep retrieval ON: a threshold of 1.0 admits only vectors identical to the
+        # query — i.e. nothing — which is the v1 off-corpus-gate-disabled shape (addendum §4). The
+        # value itself awaits the Story 2.13 measurement + Epic 4 gold-set tuning.
+        preserves_guarantee=lambda v: v < 1.0,
+        affects_retrieval=True,
+    ),
 )
 
 # Keys provisioning may seed as part of establishing a tenant (AD-25 names the taxonomy).

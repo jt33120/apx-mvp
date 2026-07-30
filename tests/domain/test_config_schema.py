@@ -42,6 +42,20 @@ def test_a_governing_default_that_is_switched_off_is_caught() -> None:
     assert off.default_preserves_guarantee() is False  # what the build check would fail on
 
 
+def test_similarity_threshold_is_a_guarantee_preserving_float_in_the_cosine_range() -> None:
+    # Story 3.1 / AD-24: the semantic similarity floor is config-as-data; its default must NOT
+    # disable retrieval (a threshold of 1.0 admits ~nothing — the v1 off-corpus-gate shape).
+    from dataclasses import replace
+
+    spec = CONFIG_SCHEMA["similarity_threshold"]
+    assert spec.kind == "float"
+    assert spec.default_preserves_guarantee()                    # default admits results (< 1.0)
+    assert replace(spec, default=1.0).default_preserves_guarantee() is False   # disabling → defect
+    assert coerce("similarity_threshold", 0.5) == 0.5
+    with pytest.raises(ConfigError):
+        coerce("similarity_threshold", 2.0)                      # outside the cosine [-1, 1] range
+
+
 def test_bool_key_rejects_a_non_bool() -> None:
     with pytest.raises(ConfigError):
         coerce("mfa_required", "true")  # a string is not a bool — no silent coercion

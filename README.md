@@ -285,6 +285,7 @@ The configuration keys (each editable as data, no redeploy):
 | `taxonomy` | list | `[]` | the tenant's classification taxonomy (seeded at provisioning) |
 | `off_corpus_refusal_enabled` | bool | `true` | the honest "not in the corpus" refusal (AD-20) — **on by default** |
 | `cascade_stage3_max_share` | float | `0.5` | the ceiling on the share of a matter reaching the LLM (AD-18) |
+| `similarity_threshold` | float | `0.3` | the minimum cosine similarity a semantic (suggestive) result must meet, recorded on every result set (FR-12/AD-20); a default of `1.0` would disable retrieval |
 | `import_unit_max_bytes` | int | `209715200` | the per-unit size ceiling above which an import unit is `resource-exhausted` rather than read whole into memory (AD-17) |
 | `import_max_attempts` | int | `3` | attempts after which a unit that keeps killing the worker is quarantined and the job proceeds (AD-17) |
 | `container_max_depth` | int | `6` | maximum container nesting depth; deeper is a `container-unopenable` entry, never recursed (AD-17) |
@@ -423,6 +424,7 @@ could contain is an inflated claim about what the suite proves).
 | `no-banned-confidence-phrasing` | FR-23 | FR-23 | structural | no_banned_confidence_phrasing | banned phrases in string literals / locale resources (vacuous until 5.4/6.x) |
 | `gold-set-merge-gate` | FR-54 | AD-34 | structural | ranking_code_requires_the_gold_gate | ranking/triage sites in apx/** + eval/harness.py recall gate (vacuous until Epic 4) |
 | `no-perf-ceiling-before-measurement` | NFR-2 | AD-32 | structural | no_perf_ceiling_before_measurement | module-level latency/throughput/wall-clock ceiling constants in apx/** vs the pending measurement record (vacuous until a ceiling is declared) |
+| `truth-status-constant-per-engine` | FR-12 | AD-20 | structural | truth_status_is_constant_per_engine | truth_status fields on result-set types in apx/** (a constant, non-overridable TruthStatus member — no config can forge exhaustive) |
 | `register-state-written-once` | FR-5 | AD-37 | structural | register_state_written_once | Failure.resolution_state writes across apx/** |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |

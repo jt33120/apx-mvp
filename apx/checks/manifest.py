@@ -46,6 +46,7 @@ from apx.checks import (
     scope_admin,
     secrets,
     tenant_isolation,
+    truth_status,
 )
 from apx.checks.import_contracts import CheckResult
 
@@ -395,6 +396,11 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        perf_gate.no_perf_ceiling_before_measurement,
        "module-level latency/throughput/wall-clock ceiling constants in apx/** vs the pending "
        "measurement record (vacuous until a ceiling is declared)"),
+    # ── story 3.1: the constant-truth-status gate — no config can forge an exhaustive label ──────
+    _p("truth-status-constant-per-engine", "FR-12", "AD-20",
+       "truth status is a constant construction site per engine",
+       truth_status.truth_status_is_constant_per_engine,
+       "truth_status fields on result-set types in apx/** (constant, non-overridable member)"),
     # ── story 2.6: the failure register — one owning module per state transition (AD-37) ──────
     _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
        register_ownership.register_state_written_once,

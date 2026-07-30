@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-07-30  # story 2-13 done (timed-run gate; real numbers pending hardware). Epic 2 code-complete; 2-10/2-11 remain UX-deferred
+last_updated: 2026-07-30  # story 3-1 done (semantic retrieval, suggestive). Epic 3 in-progress
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -61,8 +61,8 @@ development_status:
   2-12-the-corpus-and-gold-set-evaluation-pipeline: done
   2-13-the-timed-5-000-pi-ce-concurrent-run-the-gate: done
   epic-2-retrospective: optional
-  epic-3: backlog
-  3-1-semantic-retrieval-marked-suggestive: backlog
+  epic-3: in-progress
+  3-1-semantic-retrieval-marked-suggestive: done
   3-2-deterministic-exhaustive-search-the-one-thing-that-can-prove-absence: backlog
   3-3-rbac-scope-as-a-query-pre-filter-never-a-post-filter: backlog
   3-4-every-result-set-declares-its-truth-status: backlog
