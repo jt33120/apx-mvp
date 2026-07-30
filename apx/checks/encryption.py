@@ -32,7 +32,7 @@ _ENCRYPTED = "EncryptedText"
 _STRING_TYPES = {"String", "Text", _ENCRYPTED}
 # The AD-31 named exception — MUST NOT be application-encrypted (a searchable surface protected
 # by volume encryption; encrypting it would break exhaustive search / the index).
-_FORBIDDEN_ENCRYPTED = {("Piece", "full_text")}
+_FORBIDDEN_ENCRYPTED = {("Piece", "full_text"), ("Piece", "full_text_normalized")}
 # The ONLY string columns allowed to stay plaintext: routing/identity/categorical keys, the
 # one-way password hash, operator-identity login fields, and the AD-31 exempt text index. Any
 # other string column must be EncryptedText. Keep this list conscious and small — adding to it
@@ -47,6 +47,7 @@ _PLAINTEXT_ALLOWLIST = {
     "outcome",
     "email", "password_hash", "display_name",
     "full_text",  # the AD-31 exempt deterministic text index (also asserted un-encrypted below)
+    "full_text_normalized",  # the fr-fold-v1 search index (Story 3.2) — same AD-31 exemption
 }
 # Table-qualified plaintext columns — used where the bare name is too generic to allow globally.
 # ``tenant_setting.key``/``value`` are configuration-as-data metadata (a language code, an

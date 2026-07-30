@@ -23,6 +23,7 @@ from apx.checks import (
     inventory_record,
     isolation_harness,
     manifest,
+    no_truncation,
     payload_schema,
     perf_gate,
     projection,
@@ -93,6 +94,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     perf_gate.no_perf_ceiling_before_measurement,
     # story 3.1 — the constant-truth-status gate: no config can forge an exhaustive label (AD-20).
     truth_status.truth_status_is_constant_per_engine,
+    # story 3.2 — the no-truncation gate: an exhaustive set is never truncated (AD-20).
+    no_truncation.exhaustive_engine_takes_no_limit,
     # story 2.6 — the failure register: one owning module per state transition (AD-37).
     register_ownership.register_state_written_once,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.

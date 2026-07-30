@@ -425,6 +425,7 @@ could contain is an inflated claim about what the suite proves).
 | `gold-set-merge-gate` | FR-54 | AD-34 | structural | ranking_code_requires_the_gold_gate | ranking/triage sites in apx/** + eval/harness.py recall gate (vacuous until Epic 4) |
 | `no-perf-ceiling-before-measurement` | NFR-2 | AD-32 | structural | no_perf_ceiling_before_measurement | module-level latency/throughput/wall-clock ceiling constants in apx/** vs the pending measurement record (vacuous until a ceiling is declared) |
 | `truth-status-constant-per-engine` | FR-12 | AD-20 | structural | truth_status_is_constant_per_engine | truth_status fields on result-set types in apx/** (a constant, non-overridable TruthStatus member — no config can forge exhaustive) |
+| `exhaustive-engine-no-limit` | FR-13 | AD-20 | structural | exhaustive_engine_takes_no_limit | params of functions returning an exhaustive result set in apx/** (no limit/top-k/page-size — an exhaustive set is never truncated) |
 | `register-state-written-once` | FR-5 | AD-37 | structural | register_state_written_once | Failure.resolution_state writes across apx/** |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |

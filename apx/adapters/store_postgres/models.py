@@ -22,12 +22,14 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 
 from apx.adapters.store_postgres.crypto_types import EncryptedText
 from apx.adapters.store_postgres.vector_types import Halfvec
+from apx.core.domain.normalization import normalize
 
 EMBEDDING_DIM = 1024  # the halfvec width (AD-11); must match the Embedder port's `dimensions`
 
@@ -79,12 +81,27 @@ class Piece(Base):
     # gate instead. Left plaintext ON PURPOSE — a structural check (AD-33) forbids encrypting
     # it (it would break exhaustive search) and the seeded-token test excludes it by name.
     full_text: Mapped[str] = mapped_column(Text, nullable=False)  # FR-13's target, stored once
+    # The deterministic engine's searchable surface (Story 3.2, AD-21): the ONE `normalize()`
+    # (fr-fold-v1) rule applied to the full text at write time, so the corpus is folded the SAME way
+    # the query is — the query and the index share one implementation, so a normalisation divergence
+    # cannot cause a false absence. A plain LIKE over this column needs no `unaccent`. Derived from
+    # `full_text`, kept in sync by the ``_normalise_full_text`` event; the same AD-31 exemption as
+    # `full_text` applies (a searchable index cannot be application-encrypted).
+    full_text_normalized: Mapped[str] = mapped_column(Text, nullable=False)
     # AD-10: the full text is a first-class artefact with its OWN identity and version,
     # separate from the raw-content identity (content_hash) — two scans of one page can
     # share a text_identity though their content_hash differs. `text_version` records
     # how it was produced; `text_identity` records what it IS (a hash of the text).
     text_identity: Mapped[str] = mapped_column(String(64), nullable=False)
     text_version: Mapped[str] = mapped_column(String, nullable=False)
+
+
+@event.listens_for(Piece, "before_insert")
+@event.listens_for(Piece, "before_update")
+def _normalise_full_text(_mapper: object, _conn: object, target: Piece) -> None:
+    """Keep ``full_text_normalized`` = ``normalize(full_text)`` on every write, so the search index
+    is folded by the SAME rule as the query (Story 3.2, AD-21) — no caller can forget it."""
+    target.full_text_normalized = normalize(target.full_text)
 
 
 class PieceProvenance(Base):

@@ -30,6 +30,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from apx.adapters.store_postgres.backfill import link_id
 from apx.adapters.store_postgres.chunk_writer import UnauthorizedScope
 from apx.adapters.store_postgres.crypto_types import cipher
+from apx.adapters.store_postgres.deterministic_query import exact_search_stmt
 from apx.adapters.store_postgres.models import (
     AuditRecord,
     BackupRecord,
@@ -75,9 +76,11 @@ from apx.core.domain.dedup import cluster
 from apx.core.domain.failures import ErrorClass, cardinality_for
 from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
 from apx.core.domain.inventory import Inventory
-from apx.core.domain.retrieval import SemanticResult
+from apx.core.domain.normalization import normalize
+from apx.core.domain.retrieval import DeterministicResult, SemanticResult
 from apx.core.domain.search import snippet
 from apx.core.domain.triage import TriageOutcome
+from apx.core.ports.read import ExactSearch
 from apx.core.projection import Snapshot
 
 _log = logging.getLogger("apx.store")
@@ -1485,20 +1488,23 @@ class SqlStore:
     def search(
         self, tenant: str, scopes: set[str], query: str, *, limit: int = 100
     ) -> SearchResults:
-        """Deterministic exhaustive search over the caller's scope (FR-13): every piece
-        whose stored text contains ``query`` (case-insensitive substring), constrained
-        to matters the held scopes cover — the Chinese wall pre-filters search too, so
-        it cannot leak across the wall. ``total`` is the true match count even when the
-        returned ``hits`` are capped at ``limit`` (no silent truncation)."""
+        """A **bounded normalised preview** over the caller's scope (FR-13): pieces whose stored
+        text contains ``query`` under the ``fr-fold-v1`` rule (so ``etat`` finds ``État``), scope
+        pre-filtered so it cannot leak across the wall. ``total`` is the true match count even when
+        ``hits`` are capped at ``limit``. This is NOT the exhaustive engine — it carries no
+        *truth status* and it truncates; the AD-20 exhaustive set (complete, EXHAUSTIVE, with its
+        denominator, no limit) is ``search_exhaustive`` / ``exact_search``. A future surface points
+        here for a quick preview and there for a defensible absence claim."""
         q = query.strip()
-        if not scopes or not q:
+        nq = normalize(q)
+        if not scopes or not nq:
             return SearchResults(q, 0, ())  # fail closed: no scope or empty query -> nothing
-        pattern = f"%{_like_escape(q.lower())}%"
+        pattern = f"%{_like_escape(nq)}%"
         join_on = (MatterScope.matter == Piece.matter) & (MatterScope.tenant == Piece.tenant)
         conds = [
             Piece.tenant == tenant,
             MatterScope.scope.in_(scopes),
-            func.lower(Piece.full_text).like(pattern, escape="\\"),
+            Piece.full_text_normalized.like(pattern, escape="\\"),
         ]
         with self._sf() as session:
             total = session.scalar(
@@ -1516,6 +1522,86 @@ class SqlStore:
         rows = sorted(rows, key=lambda r: (r[0], r[1]))  # present by (matter, provenance)
         hits = tuple(SearchHit(matter, prov, snippet(full, q)) for matter, prov, full in rows)
         return SearchResults(q, total, hits)
+
+    def _scoped_inventory(self, session: Session, tenant: str, scopes: set[str]) -> Inventory:
+        """The scoped *denominator* (AD-38) computed DIRECTLY over the in-scope *matters* in one
+        snapshot — never by summing per-matter records (unknown-cardinality / noise / retired are
+        never a ``+`` operand, AD-38). ``submitted_pieces`` is the SQL sum of the frozen high-water
+        marks; the rest are live counts, mirroring ``_durable_inventory``'s definitions."""
+        in_scope = select(MatterScope.matter).where(
+            MatterScope.tenant == tenant, MatterScope.scope.in_(sorted(scopes))).scalar_subquery()
+
+        def _count(model: type, *extra: object) -> int:
+            return session.scalar(select(func.count()).select_from(model).where(
+                model.tenant == tenant, model.matter.in_(in_scope), *extra)) or 0
+
+        submitted = session.scalar(select(func.coalesce(func.sum(MatterScope.submitted_pieces), 0))
+                                   .where(MatterScope.tenant == tenant,
+                                          MatterScope.scope.in_(sorted(scopes)))) or 0
+        return Inventory(
+            submitted_pieces=int(submitted),
+            in_corpus=_count(Piece),
+            open_register_entries=_count(Failure, Failure.resolution_state == "open"),
+            excluded_as_noise=_count(NoiseExclusion),
+            unknown_cardinality_entries=_count(
+                Failure, Failure.resolution_state == "open", Failure.cardinality == "unknown"),
+        )
+
+    def open_import_jobs(self, *, tenant: str, scopes: set[str]) -> list[str]:
+        """Open (not-done) import jobs over the in-scope *matters* — the exhaustive engine refuses
+        over a moving population (AD-20, Story 3.2). Empty scope → ``[]`` (fail-closed)."""
+        if not scopes:
+            return []
+        with self._sf() as session:
+            matters = list(session.scalars(select(MatterScope.matter).where(
+                MatterScope.tenant == tenant, MatterScope.scope.in_(sorted(scopes)))).all())
+        return [job for m in matters if (job := self.open_import_job(tenant, m))]
+
+    def exact_search(
+        self, *, tenant: str, scopes: set[str], normalized_query: str
+    ) -> ExactSearch:
+        """The scoped deterministic exact search (Story 3.2, the ``ExactSearchReader`` port): the
+        COMPLETE normalised match over ``full_text_normalized`` (no ``LIMIT`` — AD-20), with the
+        *scoped denominator* aggregated across in-scope *matters* and the OCR-derived share of the
+        searched set, in one snapshot. Scope is a query PRE-filter (AD-13); an empty scope OR a
+        query that normalises to empty reads nothing (fail-closed, AD-12 — a blank query never
+        matches the whole corpus).
+
+        Deferred, carried honestly — not fabricated: ``below_quality_share`` needs an
+        extraction-layer OCR-quality signal that does not yet exist; the register **name-match**
+        (``register_hits``) is deferred on scope — its counts are already in the denominator, and a
+        decrypt-and-match over the encrypted filenames is feasible in-app but out of scope here.
+        """
+        if not scopes or not normalized_query:
+            return ExactSearch(results=[], register_hits=[],
+                               denominator=Inventory(0, 0, 0),
+                               ocr_share=0.0, below_quality_share=0.0)
+        stmt = exact_search_stmt(tenant=tenant, scopes=scopes, normalized_query=normalized_query)
+        with self._sf() as session:
+            rows = session.execute(stmt).all()
+            denom = self._scoped_inventory(session, tenant, scopes)
+            ocr_share = self._scoped_ocr_share(session, tenant, scopes, denom.in_corpus)
+        results = [
+            DeterministicResult(matter=m, piece_id=pid, snippet=snippet(full, normalized_query))
+            for m, pid, full in rows
+        ]
+        return ExactSearch(results=results, register_hits=[], denominator=denom,
+                           ocr_share=ocr_share, below_quality_share=0.0)
+
+    def _scoped_ocr_share(
+        self, session: Session, tenant: str, scopes: set[str], in_corpus: int
+    ) -> float:
+        """The OCR-derived share of the searched set (AD-42): the fraction of in-scope, in-corpus
+        *pièces* whose text came from OCR (``extraction_method == "tesseract"``), so an unreadable
+        scan is *"in the corpus but its text may not be"*. 0.0 when the corpus is empty."""
+        if in_corpus <= 0:
+            return 0.0
+        in_scope = select(MatterScope.matter).where(
+            MatterScope.tenant == tenant, MatterScope.scope.in_(sorted(scopes))).scalar_subquery()
+        ocr = session.scalar(select(func.count()).select_from(Piece).where(
+            Piece.tenant == tenant, Piece.matter.in_(in_scope),
+            Piece.extraction_method == "tesseract")) or 0
+        return ocr / in_corpus
 
     def create_user(self, tenant: str, email: str, password: str, display_name: str,
                     scopes: set[str], *, is_admin: bool = False, actor: str = "system") -> str:

@@ -39,6 +39,7 @@ from apx.checks import (
     import_contracts,
     inventory_record,
     isolation_harness,
+    no_truncation,
     payload_schema,
     perf_gate,
     projection,
@@ -401,6 +402,11 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "truth status is a constant construction site per engine",
        truth_status.truth_status_is_constant_per_engine,
        "truth_status fields on result-set types in apx/** (constant, non-overridable member)"),
+    # ── story 3.2: the no-truncation gate — an exhaustive set is never truncated (AD-20) ────────
+    _p("exhaustive-engine-no-limit", "FR-13", "AD-20",
+       "an exhaustive engine takes no limit",
+       no_truncation.exhaustive_engine_takes_no_limit,
+       "params of functions returning an exhaustive result set in apx/** (no limit/top-k)"),
     # ── story 2.6: the failure register — one owning module per state transition (AD-37) ──────
     _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
        register_ownership.register_state_written_once,

@@ -7,7 +7,56 @@ import dataclasses
 
 import pytest
 
-from apx.core.domain.retrieval import SemanticResult, SuggestiveResultSet, TruthStatus
+from apx.core.domain.inventory import Inventory
+from apx.core.domain.retrieval import (
+    DeterministicResult,
+    ExhaustiveResultSet,
+    RegisterHit,
+    SemanticResult,
+    SuggestiveResultSet,
+    TruthStatus,
+)
+
+
+def _inventory() -> Inventory:
+    return Inventory(submitted_pieces=10, in_corpus=8, open_register_entries=2,
+                     unknown_cardinality_entries=1)
+
+
+def _exhaustive(**over) -> ExhaustiveResultSet:
+    base = dict(
+        results=(), denominator=_inventory(), ocr_share=0.2, below_quality_share=0.05,
+        register_hits=(), normalization="fr-fold-v1",
+    )
+    base.update(over)
+    return ExhaustiveResultSet(**base)
+
+
+def test_an_exhaustive_set_is_constant_exhaustive_and_carries_its_denominator() -> None:
+    rs = _exhaustive()
+    assert rs.truth_status is TruthStatus.EXHAUSTIVE
+    assert rs.denominator.open_register_entries == 2          # the register count (AD-38 record)
+    assert rs.denominator.unknown_cardinality_entries == 1    # unknown-cardinality containers
+    assert rs.ocr_share == 0.2 and rs.normalization == "fr-fold-v1"
+    with pytest.raises(TypeError):                             # truth_status is not an init arg
+        ExhaustiveResultSet(
+            results=(), denominator=_inventory(), ocr_share=0.0, below_quality_share=0.0,
+            register_hits=(), normalization="x", truth_status=TruthStatus.SUGGESTIVE,
+        )
+
+
+def test_an_exhaustive_set_has_no_limit_or_top_k_field() -> None:
+    fields = {f.name for f in dataclasses.fields(_exhaustive())}
+    for forbidden in ("limit", "top_k", "page_size", "cap", "max_results"):
+        assert forbidden not in fields                        # never truncated (AD-20)
+
+
+def test_a_register_hit_is_a_distinct_type_never_inside_the_exhaustive_results() -> None:
+    hit = RegisterHit(matter="m", filename="scan.pdf", error_class="unreadable")
+    rs = _exhaustive(register_hits=(hit,))
+    assert hit not in rs.results                              # separate from the set (AD-21)
+    assert isinstance(rs.register_hits[0], RegisterHit)
+    assert not isinstance(hit, DeterministicResult)
 
 
 def test_truth_status_has_exactly_two_values() -> None:
