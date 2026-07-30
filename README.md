@@ -431,6 +431,7 @@ could contain is an inflated claim about what the suite proves).
 | `corpus-read-no-admin-bypass` | FR-14 | AD-12 | structural | corpus_read_takes_no_admin_bypass | Piece/Chunk-reading functions that take an is_admin/super-user bypass parameter (no super-user corpus read) |
 | `result-response-serialises-truth-status` | FR-15 | AD-20 | structural | result_set_response_serialises_truth_status | response/export models in apx/api/ carrying engine result items (must declare truth_status — never dropped on the wire) |
 | `no-response-merges-engines` | FR-15 | AD-20 | structural | no_response_merges_the_two_engines | response/export models in apx/api/ carrying both a semantic and a deterministic result item (the two engines are never combined) |
+| `originals-encrypted-at-rest` | FR-44 | AD-31 | structural | originals_are_encrypted_at_rest | the filesystem original store's put() encrypts before writing + a behavioural on-disk-ciphertext probe (retained originals encrypted at rest, Story 3.5a) |
 | `register-state-written-once` | FR-5 | AD-37 | structural | register_state_written_once | Failure.resolution_state writes across apx/** |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |

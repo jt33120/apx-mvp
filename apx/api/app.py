@@ -44,6 +44,7 @@ from apx.adapters.extraction.msg import MsgExpander, MsgExtractor
 from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
+from apx.adapters.originals_fs import FilesystemOriginalStore
 from apx.adapters.store_postgres.admission import admit
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.queue import enqueue_import
@@ -184,6 +185,13 @@ def _require_store() -> SqlStore:
     if store is None:
         raise HTTPException(status_code=503, detail="no database configured (set DATABASE_URL)")
     return store
+
+
+def _original_store() -> FilesystemOriginalStore:
+    """The retained-original store (Story 3.5a) for the SYNCHRONOUS ingest path — so a pièce
+    ingested via POST /api/ingest gets its original kept at rest exactly as the worker's upload path
+    does (AC1: every pièce, any format). Built from the data volume + the encryption key (AD-31)."""
+    return FilesystemOriginalStore.from_env()
 
 
 def _int_env(name: str, default: int) -> int:
@@ -1039,10 +1047,13 @@ def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> I
               if store is not None else ExpansionBounds.defaults())
     noise_patterns = (store.get_config(ident.tenant, "exclusion_list")  # config-as-data (FR-6)
                       if store is not None else DEFAULT_EXCLUSION_LIST)
+    # Retain each pièce's original at rest, exactly as the upload/worker path does (Story 3.5a) —
+    # paired with persistence, so a pièce this endpoint stores is also renderable later (AC1).
+    original_store = _original_store() if store is not None else None
     result = ingest_folder(
         folder, matter=req.matter, tenant=ident.tenant,
         extractor=_extractor(), custodian=custodian, expander=_expander(bounds), bounds=bounds,
-        noise_patterns=noise_patterns,
+        noise_patterns=noise_patterns, original_store=original_store,
     )
     persisted = _persist(
         result, wall, ident.actor,

@@ -23,10 +23,25 @@ from apx.adapters.store_postgres.models import Base
 from apx.adapters.store_postgres.queue import _persist_unit, _run_import
 from apx.adapters.store_postgres.store import SqlStore
 from apx.core.app.ingest import IngestionResult
+from tests.embedding_fakes import FakeEmbedder
 
 _URL = os.environ.get("DATABASE_URL", "")
 _IS_PG = _URL.startswith(("postgres://", "postgresql://", "postgresql+psycopg://"))
 pytestmark = pytest.mark.skipif(not _IS_PG, reason="no PostgreSQL DATABASE_URL — CI runs this")
+
+_FAKE = FakeEmbedder()  # story 2.8: the embedder injected at the port boundary (never the real one)
+
+
+class _NoRetention:
+    """A no-op OriginalStore (story 3.5a) — this resume test asserts crash/resume, not retention."""
+
+    def put(self, tenant: str, content_hash: str, data: bytes) -> None: ...
+
+    def open(self, tenant: str, content_hash: str) -> bytes:
+        raise FileNotFoundError
+
+
+_ORIG = _NoRetention()
 
 _NOW = datetime(2026, 7, 27, tzinfo=UTC)
 
@@ -45,7 +60,8 @@ def _crash_after(n: int):  # noqa: ANN202 — a work fn that commits n units the
         if seen["c"] >= n:
             raise RuntimeError("SIGKILL proxy — worker died mid-job")
         seen["c"] += 1
-        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now)
+        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now, embedder=_FAKE,
+                      original_store=_ORIG)
 
     return work
 

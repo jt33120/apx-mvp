@@ -40,6 +40,7 @@ from apx.checks import (
     inventory_record,
     isolation_harness,
     no_truncation,
+    originals_encrypted,
     payload_schema,
     perf_gate,
     projection,
@@ -428,6 +429,10 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("no-response-merges-engines", "FR-15", "AD-20", "no response merges the two engines",
        truth_status_surface.no_response_merges_the_two_engines,
        "response/export models in apx/api/ carrying a semantic AND a deterministic result item"),
+    # ── story 3.5a: the pièce-viewer foundation — retained originals are encrypted at rest ────────
+    _p("originals-encrypted-at-rest", "FR-44", "AD-31", "retained originals are encrypted at rest",
+       originals_encrypted.originals_are_encrypted_at_rest,
+       "the filesystem original store's put() (encrypt-before-write) + a behavioural probe"),
     # ── story 2.6: the failure register — one owning module per state transition (AD-37) ──────
     _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
        register_ownership.register_state_written_once,

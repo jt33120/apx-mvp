@@ -24,6 +24,7 @@ from apx.checks import (
     isolation_harness,
     manifest,
     no_truncation,
+    originals_encrypted,
     payload_schema,
     perf_gate,
     projection,
@@ -107,6 +108,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # the two engines are never combined into one list (FR-15).
     truth_status_surface.result_set_response_serialises_truth_status,
     truth_status_surface.no_response_merges_the_two_engines,
+    # story 3.5a — the pièce viewer foundation: retained originals are encrypted at rest (AD-31).
+    originals_encrypted.originals_are_encrypted_at_rest,
     # story 2.6 — the failure register: one owning module per state transition (AD-37).
     register_ownership.register_state_written_once,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.

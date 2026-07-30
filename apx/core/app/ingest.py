@@ -11,7 +11,9 @@ members ingested individually (recursively — a zip within a zip works), an ema
 ingested as its body AND its attachments. The container itself is transparent — a zip
 is neither a piece nor a failure, only its members are — while an email's body is a
 piece in its own right. Expansion is bounded (depth and member count) so a malicious
-archive cannot exhaust the machine. It persists nothing; a store adapter does that. It
+archive cannot exhaust the machine. It persists nothing, except — when given an
+``OriginalStore`` (Story 3.5a) — each pièce's content-addressed original, streamed as the pièce
+is created and never accumulated; the derived pièces themselves a store adapter persists. It
 never fakes a count.
 """
 
@@ -32,6 +34,7 @@ from apx.core.domain.identity import content_hash, piece_id
 from apx.core.domain.inventory import Inventory
 from apx.core.ports.expansion import ContainerUnopenable, Expander
 from apx.core.ports.extraction import Extractor
+from apx.core.ports.originals import OriginalStore
 
 SCHEMA_VERSION = "slice-a"
 
@@ -119,6 +122,7 @@ def _ingest_one(
     custodian: str,
     extractor: Extractor,
     expander: Expander | None,
+    original_store: OriginalStore | None,
     now: datetime,
     tmpdir: Path,
     counter: list[int],
@@ -199,8 +203,8 @@ def _ingest_one(
                 _ingest_one(
                     member_path, f"{prov}/{name}", depth + 1, result=result, matter=matter,
                     tenant=tenant, custodian=custodian, extractor=extractor, expander=expander,
-                    now=now, tmpdir=tmpdir, counter=counter, max_bytes=max_bytes, bounds=bounds,
-                    noise_patterns=noise_patterns)
+                    original_store=original_store, now=now, tmpdir=tmpdir, counter=counter,
+                    max_bytes=max_bytes, bounds=bounds, noise_patterns=noise_patterns)
         elif members is not None:
             # A recognised but EMPTY container (members == []). It is NOT transparent: fall through
             # to the extractor so it is accounted — an empty archive lands `extracted-empty`, an
@@ -219,6 +223,23 @@ def _ingest_one(
     if outcome.ok:
         raw = path.read_bytes()
         ch = content_hash(raw)
+        if original_store is not None:
+            try:
+                # Retain the original at rest (Story 3.5a) — content-addressed, so re-ingesting the
+                # same bytes is a no-op. This is the ONLY place a member's bytes exist (a container
+                # member lives only in ``tmpdir``), so retention belongs here, not in the worker.
+                original_store.put(tenant, ch, raw)
+            except OSError as exc:
+                # A retention WRITE failure (disk full / IO) makes this pièce a register entry, not
+                # a Piece the viewer could never render — recorded, never an escape (AC6, as the
+                # member-spool-write handling above). Only OSError is a write failure: the store
+                # hashes the tenant into a safe path, so a realistic tenant id never raises — a
+                # ValueError here would be a genuine identity bug (a non-hex content_hash) that
+                # SHOULD surface loudly, not hide as a register row.
+                result.failures.append(IngestedFailure(
+                    path.name, prov, matter, tenant, ErrorClass.RESOURCE_EXHAUSTED,
+                    f"could not retain the original ({type(exc).__name__})", custodian=custodian))
+                return
         result.pieces.append(IngestedPiece(
             id=piece_id(tenant, ch, matter),
             matter=matter,
@@ -255,6 +276,7 @@ def ingest_one_file(
     *,
     custodian: str = "custodian-undeclared",
     expander: Expander | None = None,
+    original_store: OriginalStore | None = None,
     now: datetime | None = None,
     max_bytes: int | None = None,
     bounds: ExpansionBounds | None = None,
@@ -271,8 +293,9 @@ def ingest_one_file(
     with tempfile.TemporaryDirectory(prefix="apx-expand-") as tmp:
         _ingest_one(
             path, prov, 0, result=result, matter=matter, tenant=tenant, custodian=custodian,
-            extractor=extractor, expander=expander, now=stamp, tmpdir=Path(tmp), counter=[0],
-            max_bytes=max_bytes, bounds=resolved, noise_patterns=patterns)
+            extractor=extractor, expander=expander, original_store=original_store, now=stamp,
+            tmpdir=Path(tmp), counter=[0], max_bytes=max_bytes, bounds=resolved,
+            noise_patterns=patterns)
     return result
 
 
@@ -284,6 +307,7 @@ def ingest_folder(
     *,
     custodian: str = "custodian-undeclared",
     expander: Expander | None = None,
+    original_store: OriginalStore | None = None,
     max_bytes: int | None = None,
     bounds: ExpansionBounds | None = None,
     noise_patterns: Sequence[str] | None = None,
@@ -306,8 +330,8 @@ def ingest_folder(
             _ingest_one(
                 path, str(path.relative_to(folder)), 0, result=result, matter=matter,
                 tenant=tenant, custodian=custodian, extractor=extractor, expander=expander,
-                now=now, tmpdir=tmpdir, counter=[0], max_bytes=max_bytes, bounds=resolved,
-                noise_patterns=patterns)
+                original_store=original_store, now=now, tmpdir=tmpdir, counter=[0],
+                max_bytes=max_bytes, bounds=resolved, noise_patterns=patterns)
     # The guarantee must hold on every result (FR-6 / SM-3 shape).
     result.inventory.require_consistent()
     return result

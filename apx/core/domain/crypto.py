@@ -26,6 +26,7 @@ from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
 _PREFIX = "apxenc:v1:"
+_PREFIX_B = _PREFIX.encode("ascii")  # the same versioned prefix for a bytes blob (encrypt_bytes)
 _NONCE_BYTES = 12  # 96-bit nonce, the AES-GCM standard
 KEY_BYTES = 32     # AES-256
 _ENV_KEY = "APX_ENCRYPTION_KEY"          # the PRIMARY key — used to encrypt
@@ -164,5 +165,33 @@ class Cipher:
                 # ValueError: a truncated blob (a too-short nonce) — a corrupt/tampered value; it
                 # will not match any key, so fail closed below rather than escaping as a bare
                 # ValueError (which would crash read_audit's graceful-degrade path, FR-24).
+                continue
+        raise DecryptionError("ciphertext failed authentication (no configured key matched)")
+
+    def encrypt_bytes(self, data: bytes, aad: str | None = None) -> bytes:
+        """Encrypt raw bytes under the PRIMARY key — the binary sibling of :meth:`encrypt`, for a
+        blob at rest (a retained original, Story 3.5a). The token is the raw ``_PREFIX`` bytes ‖
+        nonce ‖ ciphertext — no base64/utf-8, because a blob file needs no ASCII armour. ``aad``
+        binds the value to its identity exactly as on strings, so a blob relocated to a different
+        identity fails authentication (it cannot be silently re-addressed)."""
+        nonce = os.urandom(_NONCE_BYTES)
+        extra = aad.encode("utf-8") if aad else None
+        return _PREFIX_B + nonce + self._aeads[0].encrypt(nonce, data, extra)
+
+    def decrypt_bytes(self, token: bytes, aad: str | None = None) -> bytes:
+        """Decrypt and authenticate a :meth:`encrypt_bytes` token, trying the primary then each
+        previous key. Fails closed (``DecryptionError``) when NO key matches — a wrong key, a
+        tamper, a truncation, a plaintext value, or a mismatched ``aad`` (a relocated blob)."""
+        if not (isinstance(token, bytes | bytearray) and token.startswith(_PREFIX_B)):
+            raise DecryptionError("value is not an apxenc bytes token")
+        body = bytes(token)[len(_PREFIX_B):]
+        nonce, ct = body[:_NONCE_BYTES], body[_NONCE_BYTES:]
+        extra = aad.encode("utf-8") if aad else None
+        for aead in self._aeads:
+            try:
+                return aead.decrypt(nonce, ct, extra)
+            except (InvalidTag, ValueError):
+                # InvalidTag: wrong key / tamper. ValueError: a truncated blob (too-short nonce).
+                # Neither matches any key → fail closed below rather than escaping raw.
                 continue
         raise DecryptionError("ciphertext failed authentication (no configured key matched)")

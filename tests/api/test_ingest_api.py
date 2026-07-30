@@ -60,6 +60,9 @@ def _prepare(tmp_path: Path, monkeypatch) -> SqlStore:
     Base.metadata.create_all(create_engine(url))
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.setenv("APX_SECRET_KEY", SECRET)
+    # Story 3.5a: both ingest paths now retain originals from_env — pin APX_DATA_PATH to this test's
+    # tmp dir so blobs stay isolated here, not written to a shared global temp dir.
+    monkeypatch.setenv("APX_DATA_PATH", str(tmp_path))
     return SqlStore(sessionmaker(bind=create_engine(url), future=True))
 
 
@@ -187,6 +190,15 @@ def test_ingest_persists_and_reads_back(tmp_path: Path, monkeypatch) -> None:
         back = c.get("/api/matters/m/inventory").json()
     assert back["in_corpus"] == 1 and back["open_register_entries"] == 2 \
         and back["consistent"] is True
+    # Story 3.5a: the SYNC /api/ingest path retains the original at rest too (AC1 — every pièce),
+    # openable by (tenant, content_hash) from the same data volume, decrypting to real bytes.
+    from sqlalchemy import select
+
+    from apx.adapters.originals_fs import FilesystemOriginalStore
+    from apx.adapters.store_postgres.models import Piece
+    with store._sf() as s:
+        ch = s.scalars(select(Piece.content_hash).where(Piece.matter == "m")).one()
+    assert FilesystemOriginalStore.from_env().open("t", ch)  # non-empty decrypted original
 
 
 def test_cannot_ingest_into_a_wall_you_do_not_hold(tmp_path: Path, monkeypatch) -> None:

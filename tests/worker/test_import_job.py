@@ -29,6 +29,26 @@ _NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 _FAKE = FakeEmbedder()  # story 2.8: the embedder injected at the port boundary (never the real one)
 
 
+class _NoRetention:
+    """A stand-in OriginalStore (story 3.5a) for resume/quarantine tests that don't assert
+    retention — a real store is exercised in tests/app/test_ingest_originals.py."""
+
+    def put(self, tenant: str, content_hash: str, data: bytes) -> None: ...
+
+    def open(self, tenant: str, content_hash: str) -> bytes:
+        raise FileNotFoundError
+
+
+_ORIG = _NoRetention()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_originals(tmp_path, monkeypatch) -> None:
+    # story 3.5a: the default worker path now retains each pièce's original from_env — pin
+    # APX_DATA_PATH to the test's tmp dir so those blobs stay isolated, not in a global temp dir.
+    monkeypatch.setenv("APX_DATA_PATH", str(tmp_path))
+
+
 @pytest.fixture
 def store() -> SqlStore:
     engine = create_engine(
@@ -90,7 +110,8 @@ def test_resume_processes_only_pending_units_and_never_duplicates(tmp_path, stor
         if len(seen) >= 2:
             raise RuntimeError("worker killed mid-job")   # a crash after two committed units
         seen.append(prov)
-        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now, embedder=_FAKE)
+        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now, embedder=_FAKE,
+                      original_store=_ORIG)
 
     with pytest.raises(RuntimeError):
         _run_import(store, job_id, work=flaky, now=_NOW)     # dies after 2 units
@@ -103,7 +124,8 @@ def test_resume_processes_only_pending_units_and_never_duplicates(tmp_path, stor
 
     def spy(st, job, uid, prov, *, max_bytes, now):  # noqa: ANN001, ANN202
         resumed.append(prov)
-        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now, embedder=_FAKE)
+        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now, embedder=_FAKE,
+                      original_store=_ORIG)
 
     _run_import(store, job_id, work=spy, now=_NOW)
     assert set(resumed).isdisjoint(committed_first)         # committed units are NOT re-processed
@@ -134,7 +156,8 @@ def test_a_poison_unit_is_quarantined_and_the_job_completes(tmp_path, store) -> 
     def work(st, job, uid, prov, *, max_bytes, now):  # noqa: ANN001, ANN202
         if "poison" in prov:
             raise RuntimeError("this unit keeps killing the worker")
-        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now, embedder=_FAKE)
+        _persist_unit(st, job, uid, prov, max_bytes=max_bytes, now=now, embedder=_FAKE,
+                      original_store=_ORIG)
 
     for _ in range(10):                                      # simulate re-dispatch after each kill
         try:

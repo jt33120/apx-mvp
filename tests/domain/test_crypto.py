@@ -155,3 +155,48 @@ def test_load_key_from_env_fails_closed_on_absence_or_garbage() -> None:
         load_key_from_env({"APX_ENCRYPTION_KEY": ""})  # empty
     with pytest.raises(MissingEncryptionKey):
         load_key_from_env({"APX_ENCRYPTION_KEY": "not-a-32-byte-key"})  # wrong length
+
+
+# ── the bytes API (story 3.5a): a retained original at rest, not a string column ──────────────
+def test_encrypt_bytes_round_trips_including_binary_and_empty() -> None:
+    c = Cipher(_key())
+    for data in (b"", b"le contrat", b"\x00\x01\x02\xff binary \x00", b"x" * 100_000):
+        token = c.encrypt_bytes(data)
+        assert token.startswith(b"apxenc:v1:")   # the same versioned prefix, as raw bytes
+        assert token != data                      # never the plaintext on the wire
+        assert c.decrypt_bytes(token) == data
+
+
+def test_encrypt_bytes_is_randomised_per_write() -> None:
+    c = Cipher(_key())
+    assert c.encrypt_bytes(b"same") != c.encrypt_bytes(b"same")  # a fresh nonce each time
+
+
+def test_encrypt_bytes_aad_binds_the_value_to_its_identity() -> None:
+    # a blob encrypted bound to one identity does NOT decrypt under another — so a disk-level
+    # attacker cannot relocate a blob file under a different (tenant, content_hash) and read it.
+    c = Cipher(_key())
+    token = c.encrypt_bytes(b"secret original", aad="original:t:abc")
+    assert c.decrypt_bytes(token, aad="original:t:abc") == b"secret original"
+    with pytest.raises(DecryptionError):
+        c.decrypt_bytes(token, aad="original:t:OTHER")  # relocated → fails closed
+
+
+def test_decrypt_bytes_fails_closed_on_tamper_truncation_wrong_key_and_plaintext() -> None:
+    c = Cipher(_key())
+    token = c.encrypt_bytes(b"payload", aad="a")
+    with pytest.raises(DecryptionError):
+        c.decrypt_bytes(token[:-1], aad="a")                    # a truncated tag
+    with pytest.raises(DecryptionError):
+        c.decrypt_bytes(token[:12] + b"\x00" + token[13:], aad="a")  # a flipped byte
+    with pytest.raises(DecryptionError):
+        Cipher(_key()).decrypt_bytes(token, aad="a")            # a wrong key
+    with pytest.raises(DecryptionError):
+        c.decrypt_bytes(b"not an apxenc token")                 # a plaintext value, refused
+
+
+def test_decrypt_bytes_reads_a_value_written_under_a_previous_key() -> None:
+    old, new = _key(), _key()
+    written = Cipher(old).encrypt_bytes(b"rotated blob", aad="x")
+    # primary=new first, then the previous key — a rotation reads the old value until re-keyed.
+    assert Cipher([new, old]).decrypt_bytes(written, aad="x") == b"rotated blob"
