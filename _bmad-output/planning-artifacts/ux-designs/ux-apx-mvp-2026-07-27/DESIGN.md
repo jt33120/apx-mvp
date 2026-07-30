@@ -1,8 +1,8 @@
 ---
 name: APX
-description: The visual identity of a law-firm instrument for mass-document triage — navy ink, one restrained gold, warm paper. Ratified from apx/web/src/tokens.css (AD-29); this is the source of truth for how APX looks, product-wide.
+description: The visual identity of a law-firm instrument for mass-document triage — navy ink, one restrained gold, warm paper. Ratified from apx/web/src/tokens.css (AD-29); this is the source of truth for how APX looks, product-wide. Extended 2026-07-30 with the Epic-3 truth-status vocabulary (Story 3.4).
 status: final
-updated: 2026-07-27
+updated: 2026-07-30
 sources:
   - apx/web/src/tokens.css            # the implemented design system — this file formalises it
   - docs/context/03-design-and-ux-inventory.md  # salvage verdicts; the three legacy systems reconciled here
@@ -127,6 +127,31 @@ components:
     note: 'A failure-register entry. Filename (mono path beneath), error-class chip (review tone), cardinality, a retry affordance. Resolved rows fade to muted and keep their history.'
     padding: '0.7rem 0.95rem'
     class-chip: '{components.chip.variants.review}'
+  truth-status-badge:
+    note: 'Epic 3 (Story 3.4). The DATA-DRIVEN declaration of a result set truth status — a DIFFERENT axis from the triage tier, never blurred with it, never gold. Two variants, distinguished by glyph + word + framing, not by borrowing a verdict colour.'
+    radius: '{rounded.full}'
+    fontSize: '{typography.eyebrow.fontSize}'
+    letterSpacing: '0.08em'
+    variants:
+      suggestive: { glyph: '≈', label: 'SUGGESTIF', color: '{colors.ink-3}', background: '{colors.line-2}', note: 'Tone-NEUTRAL. Pairs with an OPEN frame — a dashed left rule — signalling an open, non-complete set.' }
+      exhaustive: { glyph: '=', label: 'EXHAUSTIF', color: '{colors.kept}', background: '{colors.kept-bg}', note: 'Authoritative. Pairs with the honesty SEAL (reuses {components.verdict}); a SOLID frame signalling a closed, complete set.' }
+  suggestive-result:
+    note: 'Epic 3. A semantic (suggestive) result set: the truth-status-badge (suggestive) header, an OPEN frame (2px dashed {colors.line} left rule), a ranked list. Each row carries a piece name, matter chip, a snippet with the term marked, and the proximity-indicator. Header count reads "les N plus proches", never "N résultats".'
+    frame: '2px dashed {colors.line}'
+    header-badge: '{components.truth-status-badge.variants.suggestive}'
+  exhaustive-result:
+    note: 'Epic 3. A deterministic (exhaustive) result set: the truth-status-badge (exhaustive) header on a SOLID {colors.line} frame, the scoped {components.equation} denominator, the {components.absence-statement} honesty seal, then the COMPLETE match list. Register name-matches are shown SEPARATELY (AD-21), never inside the list.'
+    frame: '1px solid {colors.line}'
+    header-badge: '{components.truth-status-badge.variants.exhaustive}'
+  absence-statement:
+    note: 'Epic 3 (AD-42). The honest absence/presence claim — the products most dangerous output. A verdict-seal-shaped panel carrying the FOUR qualifications in words: the scoped denominator, the open failure-register count, the unknown-cardinality containers, and the OCR + below-quality shares of the searched set. kept-toned when the scope is fully indexed and stable; review-toned when qualified (register/unknowns non-trivial, or a moving population). NEVER a bare "introuvable".'
+    ok: { color: '{colors.kept}', background: '{colors.kept-bg}' }
+    qualified: { color: '{colors.review}', background: '{colors.review-bg}' }
+    radius: '{rounded.DEFAULT}'
+  proximity-indicator:
+    note: 'Epic 3. A RELATIVE proximity read for a suggestive row — a small four-pip meter in {colors.ink-3} on {colors.line-2}, plus rank. NEVER a false-precise percentage (voice rule: no false-precise single number where a range is the truth).'
+    pip-on: '{colors.ink-3}'
+    pip-off: '{colors.line-2}'
 ---
 
 # APX — Design System
@@ -290,6 +315,39 @@ screen.**
 **Register row** (new, Story 2.6) — `{components.register-row}`. Filename with a mono path
 beneath, a `review`-tone error-class chip, cardinality, and a retry affordance. Resolved
 entries fade to muted and keep their history rather than disappearing.
+
+### Epic-3 additions — the truth-status vocabulary (Story 3.4)
+
+Epic 3 introduces a **second axis** the interface must never blur with the triage tier:
+*truth status* — whether a result set **finds** (suggestive) or **proves** (exhaustive). It is
+carried by the data (one construction site per engine) and rendered identically everywhere it
+appears. It is expressed by **glyph + word + framing**, deliberately **not** by borrowing a
+verdict colour, so "this is a suggestion / a proof" and "this is a kept / à-revoir piece" never
+read as the same thing.
+
+**Truth-status badge** — `{components.truth-status-badge}`. Two variants: **suggestive**
+(`≈ SUGGESTIF`, tone-neutral `ink-3` on `line-2`) and **exhaustive** (`= EXHAUSTIF`, `kept`-toned).
+Uppercase eyebrow scale, `full` radius. Never gold; never a triage colour on the suggestive side.
+
+**Suggestive result set** — `{components.suggestive-result}`. An **open** frame — a 2px *dashed*
+`line` left rule — is the whole point: a dashed edge reads as *not closed*, so the eye is told
+before it reads a word that this set makes no completeness claim. Its header count says
+*"les 20 plus proches"*, never *"20 résultats"*.
+
+**Exhaustive result set** — `{components.exhaustive-result}`. A **solid** `line` frame (a closed
+set), the scoped **equation** denominator, then the **absence-statement** seal, then the complete
+match list. Register name-matches sit in their own block beneath, visibly separate (AD-21).
+
+**Absence statement** — `{components.absence-statement}`. The honesty seal, shaped like the
+**verdict** seal it descends from: `kept`-toned when the searched scope is fully indexed and
+stable, `review`-toned when qualified. It always states the four qualifications in words — the
+scoped denominator, the open register count, unknown-cardinality containers, and the OCR /
+below-quality shares — because *the absence claim is the one output a lawyer may have to defend*.
+
+**Proximity indicator** — `{components.proximity-indicator}`. A small four-pip relative meter in
+`ink-3`, plus rank. It is deliberately **not** a percentage: "au plus proche" is an ordering, not
+a measurement, and a false-precise `87 %` would be exactly the kind of invented number the voice
+bars.
 
 ## Do's and Don'ts
 

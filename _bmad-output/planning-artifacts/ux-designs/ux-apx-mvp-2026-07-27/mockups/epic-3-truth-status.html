@@ -1,0 +1,318 @@
+<title>APX — Maquette Epic 3 (statut de vérité : suggestif / exhaustif)</title>
+<style>
+  /* ============================================================================
+     APX design tokens — lifted verbatim from apx/web/src/tokens.css (AD-29),
+     extended 2026-07-30 with the Epic-3 truth-status vocabulary (Story 3.4).
+     Faithful, offline, self-contained. Forces the warm-paper light world.
+     ============================================================================ */
+  :root {
+    color-scheme: light;
+    --apx-ink: #0b1f3a; --apx-ink-2: #33425a; --apx-ink-3: #5b6678;
+    --apx-paper: #f7f4ee; --apx-surface: #ffffff; --apx-surface-2: #fbf9f5;
+    --apx-line: #e6e0d5; --apx-line-2: #efeae0;
+    --apx-gold: #9a7a34; --apx-gold-2: #b8944a; --apx-muted: #6b7280;
+    --apx-kept: #2f6f4f; --apx-kept-bg: #e8f1eb;
+    --apx-review: #9a5a12; --apx-review-bg: #f6ecdd;
+    --apx-discard: #6f6858; --apx-discard-bg: #eeece5;
+    --apx-danger: #a3161c; --apx-danger-bg: #fbeceb;
+    --apx-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --apx-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --apx-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --apx-radius: 12px; --apx-radius-sm: 8px;
+    --apx-ring: 0 0 0 3px rgba(154,122,52,.28);
+    --apx-shadow: 0 1px 2px rgba(11,31,58,.05), 0 12px 30px rgba(11,31,58,.08);
+    --apx-shadow-sm: 0 1px 2px rgba(11,31,58,.06);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0;
+    background: radial-gradient(1200px 480px at 50% -8%, rgba(154,122,52,.06), transparent 60%), var(--apx-paper);
+    color: var(--apx-ink); font-family: var(--apx-sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  h1,h2,h3 { font-family: var(--apx-serif); color: var(--apx-ink); font-weight: 600; letter-spacing: .01em; text-wrap: balance; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.2rem; margin: 0 0 .5rem; }
+  a { color: var(--apx-gold); text-underline-offset: 2px; }
+  button { font: inherit; cursor: pointer; }
+  mark { background: rgba(154,122,52,.20); color: inherit; border-radius: 3px; padding: 0 .12em; }
+
+  /* ---- meta chrome for the mock itself (not part of the product) ---- */
+  .mock-bar { position: sticky; top: 0; z-index: 20; display: flex; gap: .5rem; align-items: center;
+    flex-wrap: wrap; padding: .6rem 1rem; background: #101f37; color: #e9e3d5; border-bottom: 3px solid var(--apx-gold); }
+  .mock-bar b { font-family: var(--apx-serif); letter-spacing: .04em; }
+  .mock-bar b i { color: var(--apx-gold-2); font-style: normal; }
+  .mock-tabs { display: flex; gap: .25rem; margin-left: auto; flex-wrap: wrap; }
+  .mock-tabs button { background: transparent; color: #cfc8b8; border: 1px solid #2a3a54; border-radius: 999px;
+    padding: .25rem .8rem; font-size: .82rem; }
+  .mock-tabs button[aria-selected="true"] { background: var(--apx-gold); color: #10203a; border-color: var(--apx-gold); font-weight: 600; }
+  .mock-note { max-width: 60rem; margin: .9rem auto -.2rem; padding: 0 1.25rem; color: var(--apx-ink-3); font-size: .82rem; }
+  .mock-note code { font-family: var(--apx-mono); font-size: .92em; }
+
+  /* ---- product shell ---- */
+  .apx-shell { max-width: 60rem; margin: 0 auto; padding: 1.4rem 1.25rem 4rem; }
+  .apx-appbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+    padding-bottom: .9rem; border-bottom: 1px solid var(--apx-line); }
+  .apx-wordmark { font-family: var(--apx-serif); font-weight: 600; letter-spacing: .06em; color: var(--apx-ink); font-size: 1.3rem; }
+  .apx-wordmark b { color: var(--apx-gold); font-weight: 600; }
+  .apx-wordmark .tag { font-family: var(--apx-sans); font-size: .68rem; letter-spacing: .14em; text-transform: uppercase; color: var(--apx-ink-3); margin-left: .35rem; }
+  .apx-who { font-size: .85rem; color: var(--apx-ink-2); display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .apx-badge { background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: 999px; padding: .1rem .6rem; color: var(--apx-ink-3); }
+  .apx-ghost { color: var(--apx-ink); background: transparent; border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .35rem .8rem; font-size: .85rem; }
+  .apx-ghost:hover { background: #efeadf; }
+  .btn { color: #fff; background: var(--apx-ink); border: 1px solid var(--apx-ink); border-radius: var(--apx-radius-sm); padding: .55rem 1rem; font-weight: 560; }
+  .btn:hover { background: #12294a; }
+  .apx-num { font-variant-numeric: tabular-nums; }
+  .apx-mono { font-family: var(--apx-mono); font-size: .85em; word-break: break-all; color: var(--apx-ink-3); }
+  .apx-hint { color: var(--apx-muted); font-size: .88rem; }
+  .eyebrow { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); }
+  .crumbs { font-size: .82rem; color: var(--apx-ink-3); margin: 1.1rem 0 .2rem; }
+  .crumbs b { color: var(--apx-ink-2); font-weight: 560; }
+  :focus-visible { outline: none; box-shadow: var(--apx-ring); border-radius: var(--apx-radius-sm); }
+
+  /* ---- the search bar + explicit mode ---- */
+  .search { display: flex; gap: .7rem; align-items: stretch; flex-wrap: wrap; margin: .5rem 0 .2rem; }
+  .search .field { flex: 1 1 22rem; display: flex; align-items: center; gap: .5rem; background: var(--apx-surface);
+    border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .1rem .2rem .1rem .7rem; box-shadow: var(--apx-shadow-sm); }
+  .search .field span { color: var(--apx-ink-3); }
+  .search input { border: 0; outline: 0; flex: 1; background: transparent; font: inherit; color: var(--apx-ink); padding: .55rem .2rem; }
+  .mode { display: inline-flex; background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: 999px; padding: 3px; box-shadow: var(--apx-shadow-sm); }
+  .mode button { border: 0; background: transparent; border-radius: 999px; padding: .4rem .85rem; font-size: .86rem; color: var(--apx-ink-2); display: inline-flex; gap: .35rem; align-items: center; }
+  .mode button .g { font-family: var(--apx-serif); }
+  .mode button[aria-pressed="true"] { background: var(--apx-ink); color: #fff; font-weight: 560; }
+  .scoperow { display: flex; align-items: center; gap: .5rem; margin: .55rem 0 0; font-size: .82rem; color: var(--apx-muted); }
+  .chip-scope { background: var(--apx-line-2); color: var(--apx-ink-2); border-radius: 999px; padding: .08rem .6rem; font-size: .76rem; }
+
+  /* ---- the truth-status badge (the spine of Epic 3) ---- */
+  .ts { display: inline-flex; align-items: center; gap: .45rem; border-radius: 999px; padding: .12rem .7rem;
+    font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; font-weight: 600; }
+  .ts .g { font-family: var(--apx-serif); font-size: 1rem; font-weight: 600; letter-spacing: 0; }
+  .ts.sug { color: var(--apx-ink-3); background: var(--apx-line-2); }
+  .ts.exh { color: var(--apx-kept); background: var(--apx-kept-bg); }
+
+  /* ---- result set frames: OPEN (dashed) suggestive vs CLOSED (solid) exhaustive ---- */
+  .rset { border-radius: var(--apx-radius); background: var(--apx-surface); margin-top: .7rem; overflow: hidden; }
+  .rset.sug { border: 1px solid var(--apx-line); border-left: 2px dashed var(--apx-line); }
+  .rset.exh { border: 1px solid var(--apx-line); box-shadow: var(--apx-shadow); }
+  .rset-head { display: flex; align-items: center; gap: .7rem; flex-wrap: wrap; padding: .85rem 1rem; border-bottom: 1px solid var(--apx-line-2); }
+  .rset-head .count { margin-left: auto; font-size: .85rem; color: var(--apx-muted); }
+  .rset-head .count b { font-family: var(--apx-serif); color: var(--apx-ink-2); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  /* ---- suggestive rows ---- */
+  .hit { display: grid; grid-template-columns: 1fr auto; gap: .6rem 1rem; padding: .8rem 1rem; border-top: 1px solid var(--apx-line-2); }
+  .hit:hover { background: var(--apx-surface-2); }
+  .hit .name { font-weight: 560; color: var(--apx-ink); }
+  .hit .name .open { color: var(--apx-gold); font-size: .82rem; font-weight: 500; margin-left: .5rem; }
+  .hit .snip { grid-column: 1 / -1; color: var(--apx-ink-2); font-size: .92rem; border-left: 2px solid var(--apx-line); padding-left: .7rem; }
+  .hit .meta { display: flex; gap: .5rem; align-items: center; font-size: .78rem; color: var(--apx-muted); margin-top: .15rem; }
+  .prox { display: inline-flex; gap: 3px; align-items: center; }
+  .prox i { width: 6px; height: 6px; border-radius: 999px; background: var(--apx-line-2); display: inline-block; }
+  .prox i.on { background: var(--apx-ink-3); }
+  .prox b { font-family: var(--apx-serif); color: var(--apx-ink-3); font-weight: 600; font-size: .8rem; margin-left: .2rem; }
+
+  /* ---- the exhaustive denominator (reused equation) + absence-statement seal ---- */
+  .apx-equation { display: grid; grid-template-columns: auto 1fr; gap: 1.5rem; align-items: center; padding: 1.2rem 1.4rem .4rem; }
+  .apx-eq-total { text-align: center; padding-right: 1.4rem; border-right: 1px solid var(--apx-line); }
+  .apx-eq-total .n { font-family: var(--apx-serif); font-size: 2.6rem; line-height: 1; font-variant-numeric: tabular-nums; }
+  .apx-eq-total .l { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-muted); }
+  .apx-eq-rows { display: flex; flex-direction: column; gap: .45rem; }
+  .apx-eq-row { display: grid; grid-template-columns: 4.6rem 1fr; gap: .85rem; align-items: baseline; }
+  .apx-eq-row .n { font-family: var(--apx-serif); font-size: 1.3rem; text-align: right; font-variant-numeric: tabular-nums; }
+  .apx-eq-row .c { color: var(--apx-ink-2); font-size: .95rem; }
+  .apx-eq-row .c small { color: var(--apx-muted); }
+  .dot { display: inline-block; width: .5rem; height: .5rem; border-radius: 999px; margin-right: .1rem; vertical-align: baseline; }
+  .absence { margin: .3rem 1rem 1.1rem; border-radius: var(--apx-radius); padding: .9rem 1.05rem; font-size: .96rem; line-height: 1.5; }
+  .absence.ok { color: #234b39; background: var(--apx-kept-bg); border: 1px solid #cfe3d6; }
+  .absence.qual { color: #6a4211; background: var(--apx-review-bg); border: 1px solid #ecdcc0; }
+  .absence .lead { font-family: var(--apx-serif); font-size: 1.05rem; font-weight: 600; display: block; margin-bottom: .2rem; }
+  .absence .lead .seal { font-family: var(--apx-sans); font-size: .68rem; letter-spacing: .09em; text-transform: uppercase; padding: .1rem .5rem; border-radius: 999px; margin-left: .5rem; vertical-align: middle; }
+  .absence.ok .seal { background: #d5e7db; color: var(--apx-kept); }
+  .absence.qual .seal { background: #ecd9bb; color: var(--apx-review); }
+  .absence u { text-decoration: none; font-weight: 600; }
+
+  /* ---- separate register block (AD-21) ---- */
+  .regblock { margin: 0 1rem 1rem; border: 1px solid var(--apx-line); border-radius: var(--apx-radius); overflow: hidden; }
+  .regblock .rh { padding: .55rem .9rem; background: var(--apx-surface-2); border-bottom: 1px solid var(--apx-line-2); font-size: .82rem; color: var(--apx-review); display: flex; gap: .5rem; align-items: center; }
+  .regblock .rr { padding: .6rem .9rem; display: flex; gap: .6rem; align-items: center; justify-content: space-between; font-size: .9rem; }
+  .chip { border-radius: 999px; padding: .07rem .55rem; font-size: .74rem; }
+  .chip.rev { color: var(--apx-review); background: var(--apx-review-bg); }
+
+  /* ---- moving-population refusal ---- */
+  .refuse { margin-top: .7rem; border: 1px solid #ecdcc0; background: var(--apx-review-bg); border-radius: var(--apx-radius); padding: 1rem 1.15rem; color: #6a4211; display: flex; gap: .8rem; align-items: flex-start; }
+  .refuse .ic { font-family: var(--apx-serif); font-size: 1.3rem; color: var(--apx-review); }
+  .refuse a { color: var(--apx-review); font-weight: 600; }
+
+  /* ---- export headers (the distinction survives to a court-readable page) ---- */
+  .exp-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: .6rem; }
+  .paper { background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: var(--apx-radius); box-shadow: var(--apx-shadow); overflow: hidden; }
+  .paper .doc { padding: 1.1rem 1.2rem; }
+  .paper .stamp { font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; font-weight: 600; padding: .5rem 1.2rem; border-bottom: 1px solid var(--apx-line-2); }
+  .paper.sug .stamp { color: var(--apx-ink-3); background: var(--apx-line-2); }
+  .paper.exh .stamp { color: var(--apx-kept); background: var(--apx-kept-bg); }
+  .paper .doc h3 { font-size: 1.05rem; margin: 0 0 .1rem; }
+  .paper .doc .sub { font-size: .82rem; color: var(--apx-muted); margin-bottom: .6rem; }
+  .paper .doc p { font-size: .9rem; color: var(--apx-ink-2); margin: .5rem 0; }
+  .paper .disc { font-size: .82rem; padding: .55rem .7rem; border-radius: var(--apx-radius-sm); margin-top: .5rem; }
+  .paper.sug .disc { color: var(--apx-ink-3); background: var(--apx-surface-2); border: 1px dashed var(--apx-line); }
+  .paper.exh .disc { color: #234b39; background: var(--apx-kept-bg); border: 1px solid #cfe3d6; }
+
+  .screen { display: none; }
+  .screen.on { display: block; }
+  @media (max-width: 40rem) { .exp-grid { grid-template-columns: 1fr; } .apx-equation { grid-template-columns: 1fr; } .apx-eq-total { border-right: 0; border-bottom: 1px solid var(--apx-line); padding: 0 0 .8rem; } }
+</style>
+
+<div class="mock-bar">
+  <b>AP<i>X</i></b> — Maquette Epic 3 · statut de vérité (Story 3.4)
+  <div class="mock-tabs" role="tablist" aria-label="Écrans">
+    <button role="tab" aria-selected="true" onclick="show(0,this)">Suggestif</button>
+    <button role="tab" aria-selected="false" onclick="show(1,this)">Exhaustif — absence</button>
+    <button role="tab" aria-selected="false" onclick="show(2,this)">Exhaustif — présence</button>
+    <button role="tab" aria-selected="false" onclick="show(3,this)">Population mouvante</button>
+    <button role="tab" aria-selected="false" onclick="show(4,this)">Export (preuve défendable)</button>
+  </div>
+</div>
+<p class="mock-note">Maquette fidèle et hors-ligne, aux tokens réels (<code>tokens.css</code>, AD-29). Le <b>statut de vérité</b> est porté par la donnée (un site de construction par moteur) et rendu à l'identique partout : suggestif <code>≈</code> jamais lu comme complet · exhaustif <code>=</code> portant son dénominateur (AD-38) et ses qualifications (AD-42). Les deux moteurs ne sont <b>jamais</b> fondus dans une même liste (FR-15).</p>
+
+<div class="apx-shell">
+  <div class="apx-appbar">
+    <div><span class="apx-wordmark">AP<b>X</b><span class="tag">triage documentaire</span></span></div>
+    <div class="apx-who"><span>Me Claire Fontaine</span><span class="apx-badge">périmètre : pôle-social</span></div>
+  </div>
+  <div class="crumbs">Dossiers › <b>Aubertin c/ Novadis</b> › Recherche</div>
+
+  <!-- the search entry, shared across screens -->
+  <div class="search">
+    <label class="field"><span>⌕</span><input value="clause de non-concurrence" aria-label="Terme de recherche"></label>
+    <div class="mode" role="group" aria-label="Mode de recherche">
+      <button aria-pressed="false"><span class="g">≈</span> Suggestions <small>(par sujet)</small></button>
+      <button aria-pressed="true"><span class="g">=</span> Preuve <small>(terme exact)</small></button>
+    </div>
+    <button class="btn">Rechercher</button>
+  </div>
+  <div class="scoperow">Recherché dans <span class="chip-scope">périmètre : pôle-social</span> — résultats, dénominateur et qualifications calculés dans ce seul périmètre (AD-13).</div>
+
+  <!-- ============ SCREEN 0 — SUGGESTIVE ============ -->
+  <section class="screen on" aria-label="Résultat suggestif">
+    <div class="rset sug">
+      <div class="rset-head">
+        <span class="ts sug"><span class="g">≈</span> Suggestif</span>
+        <span class="apx-hint">classé par proximité · ne prouve pas l'absence</span>
+        <span class="count">les <b>20</b> pièces les plus proches</span>
+      </div>
+      <div class="hit">
+        <div class="name">Protocole transactionnel — 2021.pdf <span class="open">ouvrir au passage →</span></div>
+        <div class="meta"><span class="prox"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><b>1ᵉ</b></span></div>
+        <div class="snip">« … une <mark>clause de non-concurrence</mark> d'une durée de vingt-quatre mois sur le territoire… »</div>
+      </div>
+      <div class="hit">
+        <div class="name">Courriel — Me Roux à client (12 mars).msg <span class="open">ouvrir au passage →</span></div>
+        <div class="meta"><span class="prox"><i class="on"></i><i class="on"></i><i class="on"></i><i></i><b>2ᵉ</b></span></div>
+        <div class="snip">« … la <mark>non-concurrence</mark> évoquée reste à chiffrer ; la contrepartie financière… »</div>
+      </div>
+      <div class="hit">
+        <div class="name">Avenant n°3 au contrat de travail.docx <span class="open">ouvrir au passage →</span></div>
+        <div class="meta"><span class="prox"><i class="on"></i><i class="on"></i><i></i><i></i><b>3ᵉ</b></span></div>
+        <div class="snip">« … obligation de loyauté et de <mark>non-concurrence</mark> post-contractuelle, sans… »</div>
+      </div>
+      <div style="padding:.6rem 1rem; font-size:.84rem; color:var(--apx-gold); background:var(--apx-surface-2); border-top:1px solid var(--apx-line-2);">voir les 17 autres suggestions →</div>
+    </div>
+    <p class="apx-hint" style="margin:.7rem 0 0">Le cadre <b>en pointillés</b> et le mot <b>suggestif</b> disent, avant toute lecture, que l'ensemble <b>n'est pas clos</b>. Pour une réponse complète et défendable : le mode <b>Preuve</b>.</p>
+  </section>
+
+  <!-- ============ SCREEN 1 — EXHAUSTIVE, ABSENCE (the money screen) ============ -->
+  <section class="screen" aria-label="Résultat exhaustif — absence">
+    <div class="rset exh">
+      <div class="rset-head">
+        <span class="ts exh"><span class="g">=</span> Exhaustif</span>
+        <span class="apx-hint">ensemble complet sur ce périmètre · une seule capture</span>
+      </div>
+      <div class="apx-equation" aria-label="Dénominateur du périmètre recherché">
+        <div class="apx-eq-total"><div class="n apx-num">4 812</div><div class="l">recherché</div></div>
+        <div class="apx-eq-rows">
+          <div class="apx-eq-row"><div class="n apx-num">1 987</div><div class="c"><span class="dot" style="background:var(--apx-kept)"></span>indexé — texte recherchable</div></div>
+          <div class="apx-eq-row"><div class="n apx-num">2 800</div><div class="c"><span class="dot" style="background:var(--apx-review)"></span>au registre — <small>illisibles / non indexées</small></div></div>
+          <div class="apx-eq-row"><div class="n apx-num">1</div><div class="c"><span class="dot" style="background:var(--apx-discard)"></span>archive au <small>contenu inconnu (cardinalité inconnue)</small></div></div>
+        </div>
+      </div>
+      <div class="absence qual">
+        <span class="lead">Aucune occurrence de « clause de non-concurrence ».<span class="seal">réserve</span></span>
+        Recherché dans <u>tout l'indexé de ce périmètre</u>. Le registre liste <u>2 800 pièces illisibles</u> et <u>1 archive au contenu inconnu</u> ; <u>12 %</u> du corpus recherché provient d'un OCR, <u>3 %</u> sous le seuil de qualité.
+      </div>
+      <div class="regblock">
+        <div class="rh">⚑ Correspondances dans le registre — pièces non indexées, hors de l'ensemble recherché (AD-21)</div>
+        <div class="rr"><span>Scan_bordereau_2019.pdf <span class="apx-mono">/USB/2019/scans/</span></span><span class="chip rev">OCR insuffisant</span></div>
+      </div>
+    </div>
+    <p class="apx-hint" style="margin:.7rem 0 0">Le sceau <b>réserve</b> (ambre) plutôt que <b>net</b> (vert) parce que le registre et l'archive inconnue ne sont pas triviaux : la phrase <b>montre ses bords</b>. Jamais un « introuvable » nu.</p>
+  </section>
+
+  <!-- ============ SCREEN 2 — EXHAUSTIVE, PRESENCE ============ -->
+  <section class="screen" aria-label="Résultat exhaustif — présence">
+    <div class="rset exh">
+      <div class="rset-head">
+        <span class="ts exh"><span class="g">=</span> Exhaustif</span>
+        <span class="apx-hint">ensemble complet sur ce périmètre</span>
+        <span class="count"><b>3</b> occurrences · <b>2</b> pièces</span>
+      </div>
+      <div class="absence ok">
+        <span class="lead">3 occurrences de « cession » dans 2 pièces — ensemble complet.<span class="seal">net</span></span>
+        Recherché dans <u>tout l'indexé de ce périmètre</u> (1 987 pièces). Aucune pièce OCR sous le seuil de qualité dans ce périmètre ; le registre ne contient aucune correspondance de nom.
+      </div>
+      <div class="hit"><div class="name">Acte de cession de fonds — 2020.pdf <span class="open">ouvrir au passage →</span></div>
+        <div class="meta"><span class="apx-badge">2 occurrences</span></div>
+        <div class="snip">« … la présente <mark>cession</mark> emporte transfert… » · « … prix de <mark>cession</mark> fixé à… »</div></div>
+      <div class="hit"><div class="name">Conclusions récapitulatives.docx <span class="open">ouvrir au passage →</span></div>
+        <div class="meta"><span class="apx-badge">1 occurrence</span></div>
+        <div class="snip">« … contestant la validité de la <mark>cession</mark> intervenue le… »</div></div>
+    </div>
+    <p class="apx-hint" style="margin:.7rem 0 0">La présence est aussi <b>complète</b> : pas de « top-k », pas de troncature (AD-20). Le sceau <b>net</b> (vert) car le périmètre recherché est entièrement indexé et stable.</p>
+  </section>
+
+  <!-- ============ SCREEN 3 — MOVING POPULATION (refusal) ============ -->
+  <section class="screen" aria-label="Population mouvante">
+    <div class="refuse">
+      <span class="ic">=</span>
+      <div>
+        <div style="font-weight:600; color:var(--apx-ink); margin-bottom:.2rem;">La recherche exhaustive attend un corpus stable.</div>
+        <span class="apx-num">Import en cours sur ce dossier (812 / 4 812 pièces)</span> — une preuve d'absence ne peut être faite sur une population qui bouge. Terminez l'import, ou <a href="#">ouvrez la liste de travail</a>. <br><span class="apx-hint" style="color:#6a4211">Le mode <b>Suggestions</b> reste disponible — clairement marqué comme tel, jamais comme une preuve.</span>
+      </div>
+    </div>
+    <p class="apx-hint" style="margin:.7rem 0 0">Le moteur <b>refuse</b> en nommant l'import — jamais un ensemble exhaustif partiel et silencieux (Story 3.2, <code>MovingPopulation</code>).</p>
+  </section>
+
+  <!-- ============ SCREEN 4 — EXPORT (the distinction survives to paper) ============ -->
+  <section class="screen" aria-label="Export">
+    <p class="apx-hint" style="margin:.2rem 0 0">Le statut de vérité survit à un <b>document lu sans le système</b> (un PDF devant un tribunal). Les deux exports sont distincts sur leur face : on ne peut prendre l'un pour l'autre.</p>
+    <div class="exp-grid">
+      <div class="paper sug">
+        <div class="stamp">≈ Suggestions — liste non exhaustive</div>
+        <div class="doc">
+          <h3>Recherche par sujet — « clause de non-concurrence »</h3>
+          <div class="sub">Périmètre : pôle-social · Me C. Fontaine · 30/07/2026 · 20 pièces les plus proches</div>
+          <p>Liste classée par proximité sémantique. Rang 1 : Protocole transactionnel — 2021.pdf …</p>
+          <div class="disc">Cette liste <b>ne constitue pas une preuve d'absence</b> et ne prétend pas à l'exhaustivité : elle présente les pièces les plus proches de la requête, dans l'ordre de proximité.</div>
+        </div>
+      </div>
+      <div class="paper exh">
+        <div class="stamp">= Recherche exhaustive — preuve</div>
+        <div class="doc">
+          <h3>Recherche exhaustive — « clause de non-concurrence »</h3>
+          <div class="sub">Périmètre : pôle-social · Me C. Fontaine · 30/07/2026 · une capture</div>
+          <p><b>Aucune occurrence.</b> Recherché : 4 812 pièces = 1 987 indexées + 2 800 au registre + 1 archive au contenu inconnu.</p>
+          <div class="disc">Recherché dans tout l'indexé de ce périmètre. Le registre liste 2 800 pièces illisibles et 1 archive au contenu inconnu ; 12 % du corpus recherché provient d'un OCR, 3 % sous le seuil de qualité. <b>Consigné à l'audit</b> (acteur · terme · moteur · périmètre · dénominateur).</div>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+  function show(i, btn){
+    document.querySelectorAll('.screen').forEach((s,n)=>s.classList.toggle('on', n===i));
+    document.querySelectorAll('.mock-tabs button').forEach(b=>b.setAttribute('aria-selected','false'));
+    btn.setAttribute('aria-selected','true');
+    // reflect the mode toggle to match the shown screen (suggestive vs exhaustive)
+    const sug = i===0;
+    const modes = document.querySelectorAll('.mode button');
+    modes[0].setAttribute('aria-pressed', sug ? 'true':'false');
+    modes[1].setAttribute('aria-pressed', sug ? 'false':'true');
+  }
+</script>
