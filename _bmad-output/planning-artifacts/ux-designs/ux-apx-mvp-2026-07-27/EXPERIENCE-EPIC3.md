@@ -3,7 +3,7 @@ name: APX — Experience (Epic 3)
 description: The user-facing surface of APX retrieval — the search entry, the two engines shown visibly and verbally distinct and never combined, the truth-status declaration carried by the data, the AD-42 absence statement, and how the distinction survives into an export a court reads without the system and into the audit record. Peer to EXPERIENCE.md (Epic 2), which owns the home, onboarding, import, completion summary and register; both inherit DESIGN.md.
 status: final
 updated: 2026-07-30
-scope: Epic 3 (retrieval). The truth-status/search surface — Story 3.4 (every result set declares its truth status) is the story this contract unblocks; it also carries the AD-42 absence-statement wording deferred from Story 3.2 and the search-results layer 3.1/3.2 built as data. The pièce viewer (Story 3.5) gets its own section stub here and its full contract via Update mode when 3.5 is taken.
+scope: Epic 3 (retrieval). The truth-status/search surface — Story 3.4 (every result set declares its truth status) is the story this contract unblocks; it also carries the AD-42 absence-statement wording deferred from Story 3.2 and the search-results layer 3.1/3.2 built as data. The pièce viewer (Story 3.5) now carries its full contract here (added 2026-07-30, Update mode) — the full-fidelity build: originals retained at rest and rendered per format inside the tenant boundary.
 sources:
   - _bmad-output/planning-artifacts/epics.md            # Epic 3, stories 3.1–3.5
   - _bmad-output/planning-artifacts/prds/prd-apx-mvp-2026-07-20/prd.md  # FR-12..FR-15, FR-23, FR-44, FR-57
@@ -19,8 +19,8 @@ design: ./DESIGN.md
 > declares its *truth status*) and **3.5** (the *pièce* viewer). This document is the contract
 > for **3.4** and for the **search-results surface** the two engines (3.1 semantic, 3.2
 > deterministic) already produce as data; it also carries the **AD-42 absence-statement
-> wording** deferred from Story 3.2. Story 3.5 (the viewer) has a stub here and its own full
-> pass when taken.
+> wording** deferred from Story 3.2. **Story 3.5 (the *pièce* viewer) now has its full contract
+> here** (the *"The pièce viewer"* section below, added in Update mode 2026-07-30).
 >
 > **This extends [EXPERIENCE.md](./EXPERIENCE.md), it does not restate it.** Foundation, voice,
 > the permanent denominator, the provenance drawer, the RBAC-in-UI rules, the a11y floor and
@@ -223,14 +223,140 @@ Scope is a query pre-filter (AD-13/AD-14, Story 3.3), and Epic 3 surfaces it:
 
 ---
 
-## The pièce viewer (Story 3.5) — stub
+## The pièce viewer (Story 3.5)
 
-Deferred to its own full pass (Story 3.5 carries its own *"UX pass required"* banner). Fixed
-here so 3.4 authors toward it: a result row **opens the pièce in the product, at the highlighted
-passage**, rendered (not merely extracted) per format, inside the *tenant* boundary (no third-party
-render), applying the scope pre-filter (an out-of-scope pièce is not renderable and its existence
-is not disclosed). Opening a pièce is an audited act. Full IA, per-format rendering, and the
-large-file progressive path are the 3.5 contract.
+*Stories 3.5; FR-44, FR-14, FR-45; AD-13/AD-14, AD-31. Key-screens mock:
+[`mockups/epic-3-piece-viewer.html`](./mockups/epic-3-piece-viewer.html) — the eight screens
+below against the real tokens.*
+
+Reading the *pièce* is the job. The viewer is where a lawyer **reads the actual document** —
+where *"lu"* becomes true — so reading never requires leaving the tool or sending a byte outside
+the firm. It **renders** (not merely extracts) per format, inside the *tenant* boundary, applying
+the scope pre-filter, and **opening it is an audited act**.
+
+**The one deliberate exception to the shell.** Everywhere else in APX there is exactly one content
+max-width (`{spacing.shell-max}`, 60rem — a DESIGN.md non-negotiable). **The reading canvas is the
+single surface that leaves it**: a faithful render of a document — a PDF page, a scan, a
+spreadsheet grid — is a *reading plane*, not shell content, and cramming it into 60rem would
+betray the very fidelity this story exists to give. The viewer's chrome (the bar, the structure
+rail, every control) stays strictly in the system's tokens and language; only the *document
+itself* is allowed the room a document needs. This is the viewer's one assumed decision, and it is
+deliberate.
+
+### Information Architecture
+
+The viewer is a **focused route**, reached by *opening a pièce* from anywhere a pièce is named —
+a suggestive hit (Flow 6), an exhaustive match, a *retained extract* (Epic 4), or a *register*
+entry. It is not a tab in the matter; it is the act of opening a document.
+
+```
+Open a pièce  ─(scope pre-filter runs FIRST, AD-13/14)→  the viewer route
+│
+├── BAR   ‹ retour · pièce name · format badge (+ OCR honesty) · scope chip
+│          … ouvert·consigné HH:MM (audit) · ⤓ original · ×
+├── STRUCTURE RAIL   (adapts per format — pages · thread+attachments · sheet tabs · outline)
+├── CANVAS   the rendered document, opened AT the highlighted passage
+└── FOOT   "rendu dans le périmètre du cabinet — aucun contenu n'a quitté l'infrastructure"
+```
+
+### The render, per format (the fidelity matrix)
+
+Rendered, **not** a flat text dump. Each format keeps its nature; each resolves the passage its
+own way; the structure rail carries what that format is *made of*.
+
+| Format | Renders as | The passage is | Structure rail |
+|---|---|---|---|
+| **Born-digital PDF** | the pages | a text span, scrolled-to + washed | page thumbnails |
+| **Scanned PDF** | the **page image** with the **OCR text layer over it** | a **box on the image** | page thumbnails + OCR confidence |
+| **`.docx`** | the rendered document (the document-sheet renderer — screen-1 pattern) | a text span | outline / pages |
+| **`.xlsx`** | the **sheet grid**, sheet tabs | the **cell** | sheet tabs |
+| **`.msg`** | headers · body · **reply chain**, each **attachment its own pièce** | a text span in the body | thread turns + attachments |
+| **Images** | the image (the screen-2 renderer without the OCR overlay) | a region box **if** the position resolves | image meta |
+| **Un-renderable** | **the honest fallback**: states the limit + **offers the original** | — | — |
+
+A format APX cannot render faithfully **never** yields an empty pane (FR-44): it names the limit
+and serves the **original**, which never left the firm. *(Images and `.docx` reuse the screen-1
+and screen-2 render patterns; they get no separate screen because they add no new visual pattern.)*
+
+### The passage — "the tool sent you here"
+
+Carried from a *chunk* / *retained-extract* source position, the viewer **opens at it** — scrolls
+to it and highlights it — and this is **asserted per format with a planted passage** (the AC). The
+highlight is the **`{components.passage-highlight}`** wash: a purposeful gold tint that is the
+deliberate echo of the app's own `::selection`, so the mark reads as *the instrument's own
+pointer*, not decoration. It is keyboard-reachable (the passage is the first focus stop).
+
+### OCR honesty — the truth axis, extended to a single page
+
+Epic 3's spine is *say which truth you are showing*. The viewer extends it from the result set to
+the **page**: a scanned pièce's text came from **OCR**, so the viewer **says so** — the `OCR`
+honesty variant on the format badge, and a confidence note in the rail — because *a term absent
+from a poor OCR layer is in the corpus but its text may not be* (the same qualification the
+exhaustive absence statement carries, AD-42). The instrument never lets recognised text pass for
+the page itself.
+
+### The RBAC boundary — the denial that discloses nothing
+
+The scope pre-filter (AD-13/AD-14, the Story 3.3 pre-filter) runs **before any render**. An
+out-of-scope pièce is **not renderable, not downloadable, and its existence is not disclosed**
+(FR-14/FR-44): the denial is **indistinguishable from a genuine "does not exist"** — no name, no
+size, no scope, no format, nothing that would confirm a pièce sits behind a wall. There is no
+"open in another matter" affordance a wall-holder could use to peer across a wall.
+
+### Opening is an audited act (ties FR-45)
+
+Opening a pièce writes an **audit record** entry — and this is *the fact that distinguishes a
+*validation act* performed **after reading** from one performed from the list*. The bar shows
+*"ouvert · consigné HH:MM"* so the lawyer sees the act is recorded. Opening an attachment (its own
+pièce) is its **own** audited open.
+
+### The tenant boundary
+
+Rendering happens **inside the tenant** — no pièce content (bytes, page images, OCR text) is sent
+to any third-party rendering or conversion service, **in any deployment**. The foot line states
+it; it is a load-bearing product promise, not a reassurance.
+
+### State Patterns (the four states — frontend-quality discipline)
+
+| State | Rule |
+|---|---|
+| **Empty / un-renderable** | Never an empty pane. States the limit and **offers the original** (FR-44). The "no pièce selected" resting state likewise invites, never blanks. |
+| **Loading** | **Progressive** (FR-44 failure path): the structure rail is navigable and the first page renders while the rest streams; the interface stays live — **never a full-screen block, never a client exhausted**. |
+| **Error / out-of-scope** | The **non-disclosing denial** (above). A pièce whose provenance no longer resolves (bytes gone, text changed) is shown **as degraded**, never as though it still resolves (inherited, Story 2.9). |
+| **Real density** | A 340-page PDF (page-by-page), a deep `.msg` chain, a dense `.xlsx`, a poor scan — each renders without exhausting the client. **Over the configured render bound** → the viewer *refuses to render* and offers the **original** or a page-by-page read; the bound protects the reader's machine and hides nothing. |
+
+### Accessibility Floor (delta)
+
+Inherits the Epic-2/Epic-3 floor. Viewer specifics:
+- **Keyboard-first**: the passage is the first focus stop; the structure rail, the attachments,
+  the *original* action, and *close* are all keyboard-operable. Reading at the passage is not
+  mouse-only.
+- **The render region is a labelled region** naming the pièce and its format, so a screen reader
+  announces *"bail commercial, PDF, ouvert au passage"* before the content.
+- **OCR is spoken**, not only coloured: the `OCR` badge and the confidence are read verbatim — a
+  screen-reader user learns the text is recognised, not native.
+- **The denial is announced** as an ordinary "introuvable", carrying no side-channel a sighted
+  user would not also get.
+
+### Key Flow 7 — Claire reads a pièce at the passage
+
+*Stories 3.5; FR-44/FR-14/FR-45.*
+
+1. From a suggestive hit (Flow 6) — or, later, a *retained extract* behind a ranking (Epic 4) —
+   Claire clicks **ouvrir au passage**. The scope pre-filter passes: it is her wall.
+2. The viewer opens on *« Bail commercial — 12 rue de la Paix.pdf »*, the document **rendered**,
+   scrolled to **Article 4**, the *dépôt de garantie* clause washed in gold. **★ Climax beat:**
+   she is reading the **actual document, at the exact clause**, without leaving the tool and
+   **without a byte leaving the cabinet** — and the bar shows the open is *consigné*, so a
+   validation act she performs now is provably *after reading*, not from the list.
+3. The source was a *`.msg`*: she opens its **`annexe-3.xlsx`** attachment — **its own pièce, its
+   own audited open** — and reads the *clause de non-concurrence* cell (0 €), confirming the email's
+   claim in the figures.
+4. Had the pièce been outside her scope, step 2 would have been the **non-disclosing denial** —
+   she would learn *nothing* about a pièce behind a wall.
+5. Had it been a 512 Mo scan, it would have opened **progressively** — page 1 first, the rail
+   already navigable — never blocking her screen; and a `1,2 Go` archive over the render bound
+   would have **offered the original** rather than trying to load it.
 
 ---
 

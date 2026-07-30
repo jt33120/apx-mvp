@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>APX — Le visualiseur de pièce (Story 3.5)</title>
+<style>
+/* ── tokens.css (verbatim :root — the source of truth, AD-29) ─────────────────────────── */
+:root{
+  --apx-ink:#0b1f3a; --apx-ink-2:#33425a; --apx-ink-3:#5b6678;
+  --apx-paper:#f7f4ee; --apx-surface:#ffffff; --apx-surface-2:#fbf9f5;
+  --apx-line:#e6e0d5; --apx-line-2:#efeae0;
+  --apx-gold:#9a7a34; --apx-gold-2:#b8944a; --apx-muted:#6b7280;
+  --apx-kept:#2f6f4f; --apx-kept-bg:#e8f1eb;
+  --apx-review:#9a5a12; --apx-review-bg:#f6ecdd;
+  --apx-discard:#6f6858; --apx-discard-bg:#eeece5;
+  --apx-danger:#a3161c;
+  --apx-serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+  --apx-sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  --apx-mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+  --apx-space-1:0.5rem; --apx-space-2:1rem; --apx-space-3:1.5rem;
+  --apx-radius:12px; --apx-radius-sm:8px;
+  --apx-ring:0 0 0 3px rgba(154,122,52,0.28);
+  --apx-shadow-sm:0 1px 2px rgba(11,31,58,0.06);
+  --apx-shadow:0 1px 2px rgba(11,31,58,0.05),0 12px 30px rgba(11,31,58,0.08);
+}
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  background:radial-gradient(1200px 480px at 50% -8%,rgba(154,122,52,0.06),transparent 60%),var(--apx-paper);
+  color:var(--apx-ink); font-family:var(--apx-sans); line-height:1.55;
+  -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+}
+h1,h2,h3{font-family:var(--apx-serif);color:var(--apx-ink);font-weight:600;letter-spacing:0.01em;text-wrap:balance;}
+.apx-mono{font-family:var(--apx-mono);font-size:0.85em;word-break:break-all;}
+.apx-num{font-variant-numeric:tabular-nums;}
+.apx-chip{display:inline-block;border-radius:999px;padding:0.07rem 0.55rem;font-size:0.76rem;white-space:nowrap;}
+.apx-chip--kept{color:var(--apx-kept);background:var(--apx-kept-bg);}
+.apx-chip--review{color:var(--apx-review);background:var(--apx-review-bg);}
+.apx-chip--discard{color:var(--apx-discard);background:var(--apx-discard-bg);}
+.apx-chip--scope{color:var(--apx-ink-2);background:var(--apx-line-2);}
+
+/* ── the page that presents the mockups ──────────────────────────────────────────────── */
+.page{max-width:76rem;margin:0 auto;padding:2rem 1.25rem 5rem;}
+.masthead{border-bottom:1px solid var(--apx-line);padding-bottom:1.1rem;margin-bottom:1.6rem;}
+.wordmark{font-family:var(--apx-serif);font-weight:600;letter-spacing:0.06em;font-size:1.4rem;}
+.wordmark b{color:var(--apx-gold);}
+.masthead p{color:var(--apx-ink-2);max-width:64ch;margin:0.5rem 0 0;}
+.legend{display:flex;flex-wrap:wrap;gap:0.5rem 1.1rem;margin-top:0.9rem;font-size:0.82rem;color:var(--apx-muted);}
+.legend b{color:var(--apx-ink-2);font-weight:600;}
+.frameset{display:flex;flex-direction:column;gap:2.4rem;}
+.cap{margin:0 0 0.6rem;}
+.cap .k{font-size:0.72rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--apx-ink-3);font-weight:600;}
+.cap h2{font-size:1.14rem;margin:0.15rem 0 0.25rem;}
+.cap p{margin:0;color:var(--apx-ink-2);font-size:0.92rem;max-width:70ch;}
+.cap .state{display:inline-block;font-size:0.7rem;letter-spacing:0.06em;text-transform:uppercase;color:var(--apx-gold);border:1px solid var(--apx-line);border-radius:999px;padding:0.05rem 0.5rem;margin-left:0.4rem;vertical-align:middle;}
+
+/* ── the viewer shell (.pv) — the one surface that leaves the 60rem shell ─────────────── */
+.pv{background:var(--apx-surface);border:1px solid var(--apx-line);border-radius:var(--apx-radius);box-shadow:var(--apx-shadow);overflow:hidden;}
+.pv-bar{display:flex;align-items:center;gap:0.7rem;flex-wrap:wrap;padding:0.6rem 0.85rem;border-bottom:1px solid var(--apx-line);background:var(--apx-surface-2);}
+.pv-back{display:inline-flex;align-items:center;gap:0.35rem;color:var(--apx-ink-2);font-size:0.86rem;border:1px solid var(--apx-line);background:var(--apx-surface);border-radius:var(--apx-radius-sm);padding:0.28rem 0.6rem;cursor:pointer;}
+.pv-id{display:flex;align-items:baseline;gap:0.55rem;min-width:0;flex-wrap:wrap;}
+.pv-id .name{font-family:var(--apx-serif);font-weight:600;font-size:1.02rem;color:var(--apx-ink);}
+.pv-fmt{display:inline-flex;align-items:center;gap:0.3rem;border-radius:999px;padding:0.08rem 0.55rem;font-size:0.72rem;letter-spacing:0.04em;text-transform:uppercase;font-weight:600;color:var(--apx-ink-3);background:var(--apx-line-2);}
+.pv-ocr{color:var(--apx-review);background:var(--apx-review-bg);}
+.pv-right{margin-left:auto;display:flex;align-items:center;gap:0.55rem;flex-wrap:wrap;}
+.pv-audit{display:inline-flex;align-items:center;gap:0.35rem;font-size:0.78rem;color:var(--apx-kept);background:var(--apx-kept-bg);border-radius:999px;padding:0.12rem 0.6rem;}
+.pv-audit .dot{width:6px;height:6px;border-radius:999px;background:var(--apx-kept);display:inline-block;}
+.pv-orig{display:inline-flex;align-items:center;gap:0.35rem;font-size:0.82rem;color:var(--apx-ink);background:var(--apx-surface);border:1px solid var(--apx-line);border-radius:var(--apx-radius-sm);padding:0.26rem 0.6rem;cursor:pointer;}
+.pv-close{border:1px solid var(--apx-line);background:var(--apx-surface);color:var(--apx-ink-3);border-radius:var(--apx-radius-sm);width:1.9rem;height:1.9rem;font-size:1rem;line-height:1;cursor:pointer;}
+
+.pv-body{display:grid;grid-template-columns:13.5rem 1fr;min-height:26rem;}
+.pv-rail{border-right:1px solid var(--apx-line);background:var(--apx-surface-2);padding:0.8rem 0.75rem;overflow:auto;}
+.pv-rail .rk{font-size:0.68rem;letter-spacing:0.08em;text-transform:uppercase;color:var(--apx-ink-3);font-weight:600;margin:0 0 0.5rem;}
+.pv-canvas{background:#efe9df;padding:1.4rem;overflow:auto;display:flex;justify-content:center;align-items:flex-start;}
+.pv-foot{display:flex;align-items:center;gap:0.5rem;padding:0.5rem 0.9rem;border-top:1px solid var(--apx-line);background:var(--apx-surface-2);font-size:0.76rem;color:var(--apx-muted);}
+.pv-foot .lock{color:var(--apx-kept);}
+
+/* the "paper" a rendered document sits on inside the canvas */
+.sheet{background:#fff;width:100%;max-width:44rem;border:1px solid var(--apx-line);box-shadow:0 1px 2px rgba(11,31,58,0.06),0 18px 40px rgba(11,31,58,0.10);border-radius:2px;padding:2.4rem 2.6rem;font-size:0.95rem;color:#1a2438;line-height:1.7;}
+.sheet.doc{font-family:var(--apx-serif);}
+.sheet h4{font-family:var(--apx-serif);text-align:center;font-size:1.1rem;margin:0 0 1.4rem;letter-spacing:0.02em;}
+.sheet p{margin:0 0 1rem;}
+.sheet .art{font-variant:small-caps;letter-spacing:0.03em;color:var(--apx-ink-2);}
+
+/* the passage the tool sent you to — reads as the app's own ::selection, purposeful gold wash */
+.passage{background:rgba(154,122,52,0.17);border-radius:2px;box-shadow:0 0 0 1px rgba(154,122,52,0.22);padding:0.02em 0.05em;scroll-margin-top:2rem;}
+.jump{position:absolute;left:0;transform:translate(-2.1rem,-0.15rem);color:var(--apx-gold);font-size:0.9rem;}
+.passage-wrap{position:relative;}
+
+/* page-thumbnail rail (PDF / scan) */
+.thumbs{display:flex;flex-direction:column;gap:0.5rem;}
+.thumb{border:1px solid var(--apx-line);background:#fff;border-radius:4px;height:3.6rem;display:flex;align-items:flex-end;justify-content:flex-end;padding:0.25rem 0.35rem;font-size:0.66rem;color:var(--apx-muted);cursor:pointer;position:relative;overflow:hidden;}
+.thumb::before{content:"";position:absolute;inset:0.35rem 0.4rem 1rem;background:repeating-linear-gradient(transparent 0 3px,var(--apx-line-2) 3px 4px);}
+.thumb.on{border-color:var(--apx-gold);box-shadow:0 0 0 2px rgba(154,122,52,0.22);}
+.thumb.on .marker{position:absolute;left:0.35rem;top:0.3rem;color:var(--apx-gold);font-size:0.7rem;z-index:1;}
+
+/* scanned page image + OCR overlay */
+.scan{position:relative;width:100%;max-width:40rem;background:linear-gradient(150deg,#efe9dd,#e4dccb 60%,#ded4c0);border:1px solid #cdbf9f;border-radius:2px;box-shadow:0 18px 40px rgba(11,31,58,0.12);aspect-ratio:1/1.32;overflow:hidden;}
+.scan::after{content:"";position:absolute;inset:0;background:repeating-linear-gradient(0.4deg,transparent 0 14px,rgba(120,100,60,0.05) 14px 15px);}
+.scan .ocr{position:absolute;border:1px dashed rgba(60,80,120,0.35);border-radius:2px;}
+.scan .ocr.hit{border:1px solid var(--apx-gold);background:rgba(154,122,52,0.17);box-shadow:0 0 0 2px rgba(154,122,52,0.18);}
+.scan .stamp{position:absolute;right:8%;top:10%;width:5rem;height:5rem;border:2px solid rgba(120,40,40,0.35);border-radius:50%;transform:rotate(-14deg);color:rgba(120,40,40,0.45);font-family:var(--apx-serif);font-size:0.6rem;display:flex;align-items:center;text-align:center;justify-content:center;padding:0.4rem;}
+
+/* .msg email */
+.mail{background:#fff;width:100%;max-width:44rem;border:1px solid var(--apx-line);border-radius:2px;box-shadow:0 18px 40px rgba(11,31,58,0.10);overflow:hidden;}
+.mail-hd{padding:1.1rem 1.4rem;border-bottom:1px solid var(--apx-line-2);}
+.mail-hd .subj{font-family:var(--apx-serif);font-size:1.12rem;font-weight:600;margin:0 0 0.5rem;}
+.mail-hd dl{display:grid;grid-template-columns:auto 1fr;gap:0.1rem 0.8rem;margin:0;font-size:0.86rem;}
+.mail-hd dt{color:var(--apx-ink-3);text-transform:uppercase;font-size:0.68rem;letter-spacing:0.06em;padding-top:0.18rem;}
+.mail-hd dd{margin:0;color:var(--apx-ink-2);}
+.mail-bd{padding:1.2rem 1.4rem;font-size:0.94rem;color:#1a2438;line-height:1.65;}
+.mail-bd p{margin:0 0 0.9rem;}
+.quote{border-left:2px solid var(--apx-line);margin:1rem 0 0;padding:0.2rem 0 0.2rem 0.9rem;color:var(--apx-muted);font-size:0.88rem;}
+.quote summary{cursor:pointer;color:var(--apx-ink-3);font-size:0.82rem;list-style:none;}
+.chain{display:flex;flex-direction:column;gap:0.4rem;}
+.chain .turn{display:flex;gap:0.5rem;align-items:flex-start;font-size:0.82rem;padding:0.4rem 0.5rem;border-radius:var(--apx-radius-sm);cursor:pointer;color:var(--apx-ink-2);}
+.chain .turn.on{background:#fff;border:1px solid var(--apx-line);}
+.chain .turn .who{font-weight:600;color:var(--apx-ink);}
+.chain .turn .rail-line{width:2px;background:var(--apx-line);align-self:stretch;margin-left:0.3rem;}
+.atts{margin-top:0.9rem;}
+.att{display:flex;align-items:center;gap:0.5rem;padding:0.45rem 0.55rem;border:1px solid var(--apx-line);border-radius:var(--apx-radius-sm);background:#fff;margin-bottom:0.4rem;font-size:0.82rem;cursor:pointer;}
+.att:hover{background:var(--apx-surface-2);}
+.att .ic{width:1.5rem;height:1.5rem;border-radius:4px;background:var(--apx-line-2);display:flex;align-items:center;justify-content:center;font-size:0.6rem;color:var(--apx-ink-3);font-weight:600;flex:none;}
+.att .go{margin-left:auto;color:var(--apx-gold);}
+
+/* .xlsx grid */
+.xl{background:#fff;width:100%;max-width:46rem;border:1px solid var(--apx-line);border-radius:2px;box-shadow:0 18px 40px rgba(11,31,58,0.10);overflow:hidden;}
+.xl-tabs{display:flex;gap:0.25rem;padding:0.4rem 0.5rem;background:var(--apx-surface-2);border-bottom:1px solid var(--apx-line-2);}
+.xl-tab{font-size:0.78rem;padding:0.2rem 0.6rem;border-radius:6px 6px 0 0;color:var(--apx-ink-3);cursor:pointer;}
+.xl-tab.on{background:#fff;border:1px solid var(--apx-line-2);border-bottom-color:#fff;color:var(--apx-ink);font-weight:600;}
+table.grid{border-collapse:collapse;width:100%;font-size:0.82rem;}
+table.grid th,table.grid td{border:1px solid var(--apx-line-2);padding:0.32rem 0.55rem;text-align:left;}
+table.grid thead th{background:var(--apx-surface-2);color:var(--apx-ink-3);font-weight:600;font-size:0.72rem;}
+table.grid td.cell-hit{background:rgba(154,122,52,0.17);box-shadow:inset 0 0 0 1px rgba(154,122,52,0.3);}
+table.grid .rownum{background:var(--apx-surface-2);color:var(--apx-muted);text-align:center;width:2rem;}
+
+/* centred message canvases (fallback / denial / large-file) */
+.center{display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;gap:0.7rem;max-width:34rem;margin:auto;padding:2rem 1rem;}
+.center .glyph{width:3.4rem;height:3.4rem;border-radius:12px;display:flex;align-items:center;justify-content:center;font-size:1.5rem;border:1px solid var(--apx-line);background:#fff;}
+.center h3{margin:0;font-size:1.12rem;}
+.center p{margin:0;color:var(--apx-ink-2);font-size:0.92rem;}
+.center .row{display:flex;gap:0.6rem;flex-wrap:wrap;justify-content:center;margin-top:0.4rem;}
+.btn{font-family:inherit;font-weight:560;color:#fff;background:var(--apx-ink);border:1px solid var(--apx-ink);border-radius:var(--apx-radius-sm);padding:0.5rem 0.9rem;cursor:pointer;font-size:0.88rem;}
+.btn.ghost{color:var(--apx-ink);background:transparent;border-color:var(--apx-line);}
+.note{font-size:0.8rem;color:var(--apx-muted);}
+.note.lock{color:var(--apx-kept);}
+
+/* loading skeleton */
+.sk{background:#fff;width:100%;max-width:44rem;border:1px solid var(--apx-line);border-radius:2px;box-shadow:0 18px 40px rgba(11,31,58,0.08);padding:2.4rem 2.6rem;}
+.sk .ln{height:0.8rem;border-radius:3px;background:linear-gradient(90deg,var(--apx-line-2),#f3efe6,var(--apx-line-2));margin-bottom:0.75rem;}
+.progtag{display:inline-flex;align-items:center;gap:0.4rem;font-size:0.8rem;color:var(--apx-ink-2);background:var(--apx-surface);border:1px solid var(--apx-line);border-radius:999px;padding:0.18rem 0.7rem;}
+.progbar{height:3px;border-radius:999px;background:var(--apx-line-2);overflow:hidden;margin-top:0.7rem;}
+.progbar i{display:block;height:100%;width:12%;background:linear-gradient(90deg,var(--apx-gold),var(--apx-gold-2));}
+
+.pv-rail .out{font-size:0.82rem;color:var(--apx-ink-2);}
+.pv-rail .out .lvl{padding:0.22rem 0.3rem;border-radius:6px;cursor:pointer;}
+.pv-rail .out .lvl.on{background:#fff;border:1px solid var(--apx-line);color:var(--apx-ink);}
+.pv-rail .out .sub{padding-left:0.8rem;color:var(--apx-ink-3);}
+
+@media (max-width:52rem){
+  .pv-body{grid-template-columns:1fr;}
+  .pv-rail{border-right:0;border-bottom:1px solid var(--apx-line);max-height:9rem;}
+  .thumbs{flex-direction:row;overflow:auto;}
+  .thumb{min-width:2.8rem;}
+  .sheet,.mail,.xl,.sk{padding-left:1.2rem;padding-right:1.2rem;}
+  .sheet{padding:1.4rem 1.2rem;}
+}
+</style>
+</head>
+<body>
+<div class="page">
+  <header class="masthead">
+    <div class="wordmark">AP<b>X</b> · <span style="font-family:var(--apx-sans);font-weight:400;letter-spacing:0;font-size:0.9rem;color:var(--apx-ink-2)">Le visualiseur de pièce — Story 3.5</span></div>
+    <p>Lire n'importe quelle pièce <b>dans le produit, au passage, pour chaque format</b> — jamais quitter l'outil, jamais envoyer un contenu hors du cabinet. Rendu (pas seulement extrait), pré-filtre de périmètre, ouverture consignée. Contrat&nbsp;: <span class="apx-mono">EXPERIENCE-EPIC3.md</span> · tokens&nbsp;: <span class="apx-mono">DESIGN.md</span> — les deux l'emportent sur ce mockup.</p>
+    <div class="legend">
+      <span><b>Décision forte&nbsp;:</b> le canevas de lecture est la seule surface qui quitte le shell de 60&nbsp;rem.</span>
+      <span><b>Passage&nbsp;:</b> lavis d'or, l'écho du <span class="apx-mono">::selection</span> de l'app — « l'outil t'a mené ici ».</span>
+      <span><b>Frontière tenant&nbsp;:</b> rendu sur place, aucun service tiers.</span>
+    </div>
+  </header>
+
+  <div class="frameset">
+
+    <!-- 1 · PDF NATIF AU PASSAGE — the flagship, real density -->
+    <section>
+      <div class="cap">
+        <div class="k">1 · PDF natif — ouvert au passage <span class="state">densité réelle</span></div>
+        <h2>Le geste central : d'un chunk vers la source, surlignée</h2>
+        <p>La barre porte l'identité, le périmètre, le format, l'ouverture <b>consignée</b> et l'original. Le canevas rend le document ; le passage d'où venait le résultat est surligné et atteint au chargement (<span class="apx-mono">scroll-margin</span>). Le rail liste les pages, celle du passage marquée.</p>
+      </div>
+      <div class="pv">
+        <div class="pv-bar">
+          <button class="pv-back">‹ retour à la recherche</button>
+          <div class="pv-id">
+            <span class="name">Bail commercial — 12 rue de la Paix.pdf</span>
+            <span class="pv-fmt">PDF</span>
+            <span class="apx-chip apx-chip--scope">baux-2024</span>
+          </div>
+          <div class="pv-right">
+            <span class="pv-audit"><span class="dot"></span>ouvert · consigné 14:32</span>
+            <button class="pv-orig">⤓ original</button>
+            <button class="pv-close" aria-label="Fermer">×</button>
+          </div>
+        </div>
+        <div class="pv-body">
+          <aside class="pv-rail">
+            <p class="rk">Pages · 12</p>
+            <div class="thumbs">
+              <div class="thumb">1</div>
+              <div class="thumb">2</div>
+              <div class="thumb on"><span class="marker">▸</span>3</div>
+              <div class="thumb">4</div>
+              <div class="thumb">5</div>
+            </div>
+          </aside>
+          <div class="pv-canvas">
+            <div class="sheet doc">
+              <h4>BAIL COMMERCIAL</h4>
+              <p>Entre les soussignés, la société <b>DUPONT IMMOBILIER</b>, ci-après « le BAILLEUR », et la société <b>MARTIN &amp; Cie</b>, ci-après « le PRENEUR »,</p>
+              <p><span class="art">Article 4 — Dépôt de garantie.</span></p>
+              <p class="passage-wrap"><span class="jump">▸</span><span class="passage">Le PRENEUR s'engage à verser au BAILLEUR, à la signature des présentes, un dépôt de garantie équivalent à trois mois de loyer en principal, soit la somme de vingt-sept mille euros (27&nbsp;000&nbsp;€), non productif d'intérêts, restituable en fin de bail déduction faite des sommes dont le PRENEUR serait redevable.</span></p>
+              <p>Ce dépôt ne pourra en aucun cas être imputé sur les loyers, notamment sur ceux des derniers mois d'occupation.</p>
+            </div>
+          </div>
+        </div>
+        <div class="pv-foot"><span class="lock">▪</span> Rendu dans le périmètre du cabinet — aucun contenu n'a quitté l'infrastructure.</div>
+      </div>
+    </section>
+
+    <!-- 2 · PDF SCANNÉ + COUCHE OCR — the hardest, honesty-carrying -->
+    <section>
+      <div class="cap">
+        <div class="k">2 · PDF scanné — couche OCR sur l'image <span class="state">densité réelle</span></div>
+        <h2>Le texte reconnu, posé sur l'image de la page</h2>
+        <p>Un scan se rend comme <b>image</b> ; la couche OCR sélectionnable est positionnée par-dessus, le passage étant une boîte sur l'image. Une puce <b>OCR</b> dit honnêtement que ce texte vient d'une reconnaissance — sa fidélité n'est pas garantie (l'axe de vérité de l'Epic 3, prolongé jusqu'à la page).</p>
+      </div>
+      <div class="pv">
+        <div class="pv-bar">
+          <button class="pv-back">‹ retour</button>
+          <div class="pv-id">
+            <span class="name">Attestation Mme Girard (2003).pdf</span>
+            <span class="pv-fmt pv-ocr">PDF scanné · OCR</span>
+            <span class="apx-chip apx-chip--scope">succession-girard</span>
+          </div>
+          <div class="pv-right">
+            <span class="pv-audit"><span class="dot"></span>ouvert · consigné 15:07</span>
+            <button class="pv-orig">⤓ original</button>
+            <button class="pv-close" aria-label="Fermer">×</button>
+          </div>
+        </div>
+        <div class="pv-body">
+          <aside class="pv-rail">
+            <p class="rk">Pages · 2</p>
+            <div class="thumbs">
+              <div class="thumb on"><span class="marker">▸</span>1</div>
+              <div class="thumb">2</div>
+            </div>
+            <p class="rk" style="margin-top:1rem">Qualité OCR</p>
+            <p class="out" style="color:var(--apx-review)">Texte reconnu à 91 %. Certains mots peuvent différer de l'image.</p>
+          </aside>
+          <div class="pv-canvas">
+            <div class="scan">
+              <div class="stamp">Enregistré 2003</div>
+              <div class="ocr" style="left:12%;top:14%;width:64%;height:3%"></div>
+              <div class="ocr" style="left:12%;top:22%;width:70%;height:3%"></div>
+              <div class="ocr hit" style="left:12%;top:41%;width:73%;height:4%"></div>
+              <div class="ocr" style="left:12%;top:49%;width:58%;height:3%"></div>
+              <div class="ocr" style="left:12%;top:64%;width:40%;height:3%"></div>
+            </div>
+          </div>
+        </div>
+        <div class="pv-foot"><span class="lock">▪</span> Image et OCR rendus sur place — aucun envoi à un service de reconnaissance tiers.</div>
+      </div>
+    </section>
+
+    <!-- 3 · .MSG — headers, body, reply chain, attachments as their own pièces -->
+    <section>
+      <div class="cap">
+        <div class="k">3 · Courriel .msg — en-têtes, chaîne, pièces jointes <span class="state">densité réelle</span></div>
+        <h2>Chaque pièce jointe est <em>sa propre pièce</em></h2>
+        <p>En-têtes (De/À/Objet/Date), corps, et la <b>chaîne de réponse</b> repliée. Le rail porte les tours du fil et les <b>pièces jointes</b> — chacune s'ouvre comme sa propre pièce, avec sa propre entrée d'audit. Ouvrir une pièce jointe, c'est un nouvel acte consigné.</p>
+      </div>
+      <div class="pv">
+        <div class="pv-bar">
+          <button class="pv-back">‹ retour</button>
+          <div class="pv-id">
+            <span class="name">RE: Cession Dupont — clause de non-concurrence.msg</span>
+            <span class="pv-fmt">Courriel</span>
+            <span class="apx-chip apx-chip--scope">cession-dupont</span>
+          </div>
+          <div class="pv-right">
+            <span class="pv-audit"><span class="dot"></span>ouvert · consigné 09:48</span>
+            <button class="pv-orig">⤓ original</button>
+            <button class="pv-close" aria-label="Fermer">×</button>
+          </div>
+        </div>
+        <div class="pv-body">
+          <aside class="pv-rail">
+            <p class="rk">Fil · 3 messages</p>
+            <div class="chain">
+              <div class="turn on"><span class="who">Me Fontaine</span> · 30 juil. 09:41</div>
+              <div class="turn"><span class="who">Me Roux</span> · 30 juil. 08:12</div>
+              <div class="turn"><span class="who">Me Fontaine</span> · 29 juil. 18:03</div>
+            </div>
+            <p class="rk" style="margin-top:1rem">Pièces jointes · 3</p>
+            <div class="atts">
+              <div class="att"><span class="ic">PDF</span> projet-acte.pdf <span class="go">→ pièce</span></div>
+              <div class="att"><span class="ic">XLS</span> annexe-3.xlsx <span class="go">→ pièce</span></div>
+              <div class="att"><span class="ic">DWG</span> plan-local.dwg <span class="go">→ pièce</span></div>
+            </div>
+          </aside>
+          <div class="pv-canvas" style="padding:1.4rem">
+            <div class="mail">
+              <div class="mail-hd">
+                <p class="subj">RE: Cession Dupont — clause de non-concurrence</p>
+                <dl>
+                  <dt>De</dt><dd>Me Claire Fontaine &lt;c.fontaine@cabinet.fr&gt;</dd>
+                  <dt>À</dt><dd>Me Sophie Roux &lt;s.roux@cabinet.fr&gt;</dd>
+                  <dt>Date</dt><dd>30 juillet 2026, 09:41</dd>
+                </dl>
+              </div>
+              <div class="mail-bd">
+                <p>Sophie,</p>
+                <p>Confirmation après relecture : le projet d'acte ne contient <b>aucune</b> clause de non-concurrence opposable au cédant. J'ai vérifié l'annexe 3 (répartition du prix) — rien non plus côté fonds.</p>
+                <p>Je te laisse trancher avant l'envoi au client. Claire.</p>
+                <details class="quote"><summary>— Le 30 juil. à 08:12, Me Roux a écrit —</summary>
+                  <p style="margin-top:0.6rem">Peux-tu confirmer qu'aucune clause de non-concurrence ne subsiste dans la dernière version&nbsp;? Le client y tient. S.</p>
+                </details>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="pv-foot"><span class="lock">▪</span> Courriel et pièces jointes rendus dans le périmètre du cabinet.</div>
+      </div>
+    </section>
+
+    <!-- 4 · .XLSX — sheet tabs, grid, passage cell -->
+    <section>
+      <div class="cap">
+        <div class="k">4 · Tableur .xlsx — onglets, grille, cellule du passage <span class="state">densité réelle</span></div>
+        <h2>La grille, pas une extraction de texte à plat</h2>
+        <p>Onglets de feuilles dans le rail, la grille rendue, et la <b>cellule</b> d'où venait le résultat surlignée du même lavis d'or. Un tableur reste un tableur — lignes, colonnes, feuilles.</p>
+      </div>
+      <div class="pv">
+        <div class="pv-bar">
+          <button class="pv-back">‹ retour</button>
+          <div class="pv-id">
+            <span class="name">Annexe 3 — répartition du prix.xlsx</span>
+            <span class="pv-fmt">Tableur</span>
+            <span class="apx-chip apx-chip--scope">cession-dupont</span>
+          </div>
+          <div class="pv-right">
+            <span class="pv-audit"><span class="dot"></span>ouvert · consigné 09:50</span>
+            <button class="pv-orig">⤓ original</button>
+            <button class="pv-close" aria-label="Fermer">×</button>
+          </div>
+        </div>
+        <div class="pv-body">
+          <aside class="pv-rail">
+            <p class="rk">Feuilles · 3</p>
+            <div class="out">
+              <div class="lvl on">Répartition</div>
+              <div class="lvl">Immobilisations</div>
+              <div class="lvl">Notes</div>
+            </div>
+          </aside>
+          <div class="pv-canvas" style="padding:1.4rem;align-items:flex-start">
+            <div class="xl">
+              <div class="xl-tabs">
+                <span class="xl-tab on">Répartition</span>
+                <span class="xl-tab">Immobilisations</span>
+                <span class="xl-tab">Notes</span>
+              </div>
+              <table class="grid">
+                <thead><tr><th class="rownum"></th><th>A — Poste</th><th>B — Montant (€)</th><th>C — Part</th></tr></thead>
+                <tbody>
+                  <tr><td class="rownum">1</td><td>Fonds de commerce</td><td class="apx-num">180 000</td><td class="apx-num">72 %</td></tr>
+                  <tr><td class="rownum">2</td><td>Matériel</td><td class="apx-num">42 000</td><td class="apx-num">17 %</td></tr>
+                  <tr><td class="rownum">3</td><td class="cell-hit">Clause de non-concurrence</td><td class="apx-num cell-hit">0</td><td class="apx-num">0 %</td></tr>
+                  <tr><td class="rownum">4</td><td>Stock</td><td class="apx-num">28 000</td><td class="apx-num">11 %</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+        <div class="pv-foot"><span class="lock">▪</span> Rendu dans le périmètre du cabinet.</div>
+      </div>
+    </section>
+
+    <!-- 5 · UNRENDERABLE FORMAT — offers the original, never an empty pane (the EMPTY state, told honestly) -->
+    <section>
+      <div class="cap">
+        <div class="k">5 · Format non rendable — offre l'original <span class="state">état vide</span></div>
+        <h2>Jamais un volet vide : il propose l'original et le dit</h2>
+        <p>Un format qu'on ne sait pas rendre fidèlement (ici un <span class="apx-mono">.dwg</span>) ne laisse <b>jamais</b> un volet vide (FR-44) : il énonce la limite et sert l'original — qui n'a jamais quitté le cabinet.</p>
+      </div>
+      <div class="pv">
+        <div class="pv-bar">
+          <button class="pv-back">‹ retour</button>
+          <div class="pv-id">
+            <span class="name">plan-local.dwg</span>
+            <span class="pv-fmt">AutoCAD</span>
+            <span class="apx-chip apx-chip--scope">cession-dupont</span>
+          </div>
+          <div class="pv-right">
+            <span class="pv-audit"><span class="dot"></span>ouvert · consigné 09:51</span>
+            <button class="pv-close" aria-label="Fermer">×</button>
+          </div>
+        </div>
+        <div class="pv-body" style="grid-template-columns:1fr">
+          <div class="pv-canvas">
+            <div class="center">
+              <div class="glyph">▤</div>
+              <h3>Ce format ne se rend pas dans le produit</h3>
+              <p>Les fichiers AutoCAD (<span class="apx-mono">.dwg</span>) ne sont pas rendus ici. L'original est disponible, tel qu'il a été déposé.</p>
+              <div class="row">
+                <button class="btn">⤓ Ouvrir l'original (4,2 Mo)</button>
+              </div>
+              <p class="note lock">▪ L'original n'a jamais quitté le cabinet.</p>
+            </div>
+          </div>
+        </div>
+        <div class="pv-foot"><span class="lock">▪</span> Aucun rendu tiers — l'original est servi depuis l'infrastructure du cabinet.</div>
+      </div>
+    </section>
+
+    <!-- 6 · OUT OF SCOPE — the denial that discloses nothing (ERROR state, RBAC) -->
+    <section>
+      <div class="cap">
+        <div class="k">6 · Hors périmètre — le déni qui ne divulgue rien <span class="state">état erreur · RBAC</span></div>
+        <h2>Non rendable, non téléchargeable, existence non divulguée</h2>
+        <p>Une pièce hors du périmètre de la session donne <b>exactement</b> la même réponse qu'une pièce inexistante (FR-14/FR-44) — aucun nom, aucune taille, aucun périmètre, rien qui confirme son existence. Le mur de Chine tient jusque dans le message d'erreur.</p>
+      </div>
+      <div class="pv">
+        <div class="pv-bar">
+          <button class="pv-back">‹ retour</button>
+          <div class="pv-id"><span class="name" style="color:var(--apx-ink-3)">Pièce introuvable</span></div>
+          <div class="pv-right"><button class="pv-close" aria-label="Fermer">×</button></div>
+        </div>
+        <div class="pv-body" style="grid-template-columns:1fr">
+          <div class="pv-canvas">
+            <div class="center">
+              <div class="glyph" style="color:var(--apx-ink-3)">∅</div>
+              <h3>Cette pièce est introuvable dans votre périmètre</h3>
+              <p>Aucune pièce ne correspond à cette référence pour votre session. Si vous pensez y avoir droit, demandez l'accès au périmètre concerné à un administrateur.</p>
+              <p class="note">Par principe, le produit ne révèle jamais l'existence d'une pièce hors de votre périmètre — cette réponse est la même dans tous les cas.</p>
+            </div>
+          </div>
+        </div>
+        <div class="pv-foot"><span class="lock">▪</span> Pré-filtre de périmètre appliqué avant tout rendu (AD-13/AD-14).</div>
+      </div>
+    </section>
+
+    <!-- 7 · PROGRESSIVE LOAD — large pièce, never blocks (LOADING state) -->
+    <section>
+      <div class="cap">
+        <div class="k">7 · Chargement progressif — la grosse pièce ne bloque jamais <span class="state">état chargement</span></div>
+        <h2>La page arrive par morceaux ; l'interface reste vivante</h2>
+        <p>Une pièce volumineuse s'ouvre <b>progressivement</b> (FR-44, chemin d'échec) : le rail est déjà navigable, la première page se rend, le reste suit. Jamais un écran bloqué, jamais un client épuisé.</p>
+      </div>
+      <div class="pv">
+        <div class="pv-bar">
+          <button class="pv-back">‹ retour</button>
+          <div class="pv-id">
+            <span class="name">Instruction complète — scellés.pdf</span>
+            <span class="pv-fmt">PDF</span>
+            <span class="apx-chip apx-chip--scope">instruction-2025</span>
+          </div>
+          <div class="pv-right">
+            <span class="pv-audit"><span class="dot"></span>ouvert · consigné 16:20</span>
+            <button class="pv-close" aria-label="Fermer">×</button>
+          </div>
+        </div>
+        <div class="pv-body">
+          <aside class="pv-rail">
+            <p class="rk">Pages · 340</p>
+            <div class="thumbs">
+              <div class="thumb on"><span class="marker">▸</span>1</div>
+              <div class="thumb">2</div>
+              <div class="thumb">3</div>
+              <div class="thumb" style="opacity:0.5">…</div>
+            </div>
+          </aside>
+          <div class="pv-canvas">
+            <div class="sk">
+              <span class="progtag">◐ Chargement · page 1 sur 340 · 512 Mo</span>
+              <div class="progbar"><i></i></div>
+              <div style="margin-top:1.4rem">
+                <div class="ln" style="width:82%"></div><div class="ln" style="width:96%"></div>
+                <div class="ln" style="width:90%"></div><div class="ln" style="width:70%"></div>
+                <div class="ln" style="width:88%"></div><div class="ln" style="width:48%"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="pv-foot"><span class="lock">▪</span> Rendu progressif dans le périmètre du cabinet.</div>
+      </div>
+    </section>
+
+    <!-- 8 · OVER THE RENDER BOUND — refuse-to-render, offer original (ERROR/limit state) -->
+    <section>
+      <div class="cap">
+        <div class="k">8 · Au-delà de la borne de rendu — offre l'original <span class="state">état erreur · borne</span></div>
+        <h2>Une pièce trop grande pour être rendue, sans épuiser le poste</h2>
+        <p>Au-dessus de la borne de rendu configurée, le produit <b>n'essaie pas</b> de tout charger : il propose l'original ou une lecture page par page. La borne protège le poste du lecteur — le chemin d'échec est un choix, pas un plantage.</p>
+      </div>
+      <div class="pv">
+        <div class="pv-bar">
+          <button class="pv-back">‹ retour</button>
+          <div class="pv-id">
+            <span class="name">Sauvegarde messagerie — 2019-2024.pst</span>
+            <span class="pv-fmt">Archive</span>
+            <span class="apx-chip apx-chip--scope">instruction-2025</span>
+          </div>
+          <div class="pv-right">
+            <button class="pv-orig">⤓ original</button>
+            <button class="pv-close" aria-label="Fermer">×</button>
+          </div>
+        </div>
+        <div class="pv-body" style="grid-template-columns:1fr">
+          <div class="pv-canvas">
+            <div class="center">
+              <div class="glyph" style="color:var(--apx-review)">⚠</div>
+              <h3>Cette pièce dépasse la borne de rendu</h3>
+              <p>À <b class="apx-num">1,2 Go</b>, ce fichier dépasse la limite de rendu dans le produit (fixée à 200&nbsp;Mo). Ouvrez l'original, ou demandez une lecture page par page.</p>
+              <div class="row">
+                <button class="btn">⤓ Ouvrir l'original</button>
+                <button class="btn ghost">Lire page par page</button>
+              </div>
+              <p class="note">La borne est une donnée de configuration — elle protège votre poste, elle ne cache aucune pièce.</p>
+            </div>
+          </div>
+        </div>
+        <div class="pv-foot"><span class="lock">▪</span> Aucun rendu tiers — la décision de borne reste dans le cabinet.</div>
+      </div>
+    </section>
+
+  </div>
+</div>
+</body>
+</html>

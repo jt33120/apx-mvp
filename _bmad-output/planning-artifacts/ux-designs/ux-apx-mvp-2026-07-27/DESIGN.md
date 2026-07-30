@@ -1,6 +1,6 @@
 ---
 name: APX
-description: The visual identity of a law-firm instrument for mass-document triage — navy ink, one restrained gold, warm paper. Ratified from apx/web/src/tokens.css (AD-29); this is the source of truth for how APX looks, product-wide. Extended 2026-07-30 with the Epic-3 truth-status vocabulary (Story 3.4).
+description: The visual identity of a law-firm instrument for mass-document triage — navy ink, one restrained gold, warm paper. Ratified from apx/web/src/tokens.css (AD-29); this is the source of truth for how APX looks, product-wide. Extended 2026-07-30 with the Epic-3 truth-status vocabulary (Story 3.4) and the pièce-viewer vocabulary (Story 3.5).
 status: final
 updated: 2026-07-30
 sources:
@@ -152,6 +152,35 @@ components:
     note: 'Epic 3. A RELATIVE proximity read for a suggestive row — a small four-pip meter in {colors.ink-3} on {colors.line-2}, plus rank. NEVER a false-precise percentage (voice rule: no false-precise single number where a range is the truth).'
     pip-on: '{colors.ink-3}'
     pip-off: '{colors.line-2}'
+  piece-viewer:
+    note: 'Epic 3 (Story 3.5). The pièce reading surface — a focused route, not a widget. A BAR (back · pièce name in serif · format-badge · scope chip · audit marker · original · close), a BODY (structure-rail + document-canvas), and a FOOT stating the tenant boundary. Chrome stays strictly in tokens; only the document-canvas leaves the shell.'
+    bar-background: '{colors.surface-2}'
+    border: '1px solid {colors.line}'
+    radius: '{rounded.DEFAULT}'
+    audit-marker: { color: '{colors.kept}', background: '{colors.kept-bg}', note: 'ouvert · consigné HH:MM — opening is an audited act (FR-45), and the bar shows it.' }
+  document-canvas:
+    note: 'Epic 3 (Story 3.5). The rendered document itself — THE ONE SURFACE THAT LEAVES THE 60rem shell, because a faithful render (PDF page, scan, spreadsheet grid) is a reading plane, not shell content. A warm {colors.paper}-darker ground under a white document sheet; documents anchor to the top. This is the viewer''s single assumed exception, deliberate and documented.'
+    ground: '#efe9df'
+    sheet-background: '{colors.surface}'
+    sheet-shadow: '{elevation.shadow}'
+  structure-rail:
+    note: 'Epic 3 (Story 3.5). The per-format "what this document is made of" rail: PDF/scan page thumbnails, .msg thread turns + attachments (each attachment its OWN pièce), .xlsx sheet tabs, .docx outline. On {colors.surface-2}; collapses to a horizontal strip below 52rem.'
+    background: '{colors.surface-2}'
+    divider: '1px solid {colors.line}'
+  passage-highlight:
+    note: 'Epic 3 (Story 3.5). The passage the tool sent you to, per format (text span, OCR box on a scan, spreadsheet cell). A purposeful gold wash that is the DELIBERATE ECHO of the app ::selection (rgba(154,122,52,0.18)) — the instrument''s own pointer, not decoration. The one sanctioned recurring use of gold as fill, justified because it IS a selection. scroll-margin so opening lands on it.'
+    background: 'rgba(154, 122, 52, 0.17)'
+    ring: '0 0 0 1px rgba(154, 122, 52, 0.22)'
+  format-badge:
+    note: 'Epic 3 (Story 3.5). A neutral chip naming the pièce format (PDF · Courriel · Tableur · image). The OCR variant is review-toned — the truth axis extended to a single page: recognised text is DECLARED as recognised, never passed for the page (AD-42 honesty, applied to the viewer).'
+    radius: '{rounded.full}'
+    neutral: { color: '{colors.ink-3}', background: '{colors.line-2}' }
+    ocr: { color: '{colors.review}', background: '{colors.review-bg}' }
+  render-fallback:
+    note: 'Epic 3 (Story 3.5). The centred honest message for an un-renderable format, an out-of-scope denial, or a pièce over the render bound. NEVER an empty pane (FR-44): it states the limit and OFFERS THE ORIGINAL. The out-of-scope variant discloses NOTHING (byte-identical to "does not exist"); the over-bound variant is review-toned.'
+    radius: '{rounded.DEFAULT}'
+    ink: '{colors.ink-2}'
+    over-bound-tone: '{colors.review}'
 ---
 
 # APX — Design System
@@ -348,6 +377,44 @@ below-quality shares — because *the absence claim is the one output a lawyer m
 `ink-3`, plus rank. It is deliberately **not** a percentage: "au plus proche" is an ordering, not
 a measurement, and a false-precise `87 %` would be exactly the kind of invented number the voice
 bars.
+
+### Epic-3 additions — the pièce-viewer vocabulary (Story 3.5)
+
+The viewer is where a lawyer **reads the actual document**. Its vocabulary is grounded in the
+key-screens mock ([`mockups/epic-3-piece-viewer.html`](./mockups/epic-3-piece-viewer.html)); the
+tokens above decide, the mock illustrates.
+
+**Piece viewer** — `{components.piece-viewer}`. A focused reading surface: a `surface-2` **bar**
+(back · pièce name in serif · format-badge · scope chip · the `kept`-toned *ouvert · consigné*
+audit marker · original · close), a **body** (structure-rail + document-canvas), and a **foot**
+stating the tenant boundary. Every control is in-token; the surface reads as the same instrument.
+
+**Document canvas** — `{components.document-canvas}`. **The one surface that leaves the 60rem
+shell** — the single, deliberate, documented exception in the whole system, because a faithful
+render is a *reading plane*, not shell content. A warm `#efe9df` ground carries a white document
+sheet with the standard lift shadow; documents anchor to the top.
+
+**Structure rail** — `{components.structure-rail}`. The per-format "what this document is made
+of": page thumbnails (PDF/scan), thread turns + attachments (`.msg` — each attachment its **own**
+pièce), sheet tabs (`.xlsx`), an outline (`.docx`). On `surface-2`; collapses to a horizontal
+strip below 52rem.
+
+**Passage highlight** — `{components.passage-highlight}`. The passage the tool sent you to, per
+format. A purposeful gold wash that is the **deliberate echo of the app `::selection`** — the
+*instrument's own pointer*. This is the **one sanctioned recurring use of gold as a fill**,
+justified precisely because it *is* a selection, not ornament. (It does not spend the "one
+flourish per surface" budget — it is functional, like focus.)
+
+**Format badge** — `{components.format-badge}`. A neutral chip naming the format; its **OCR
+variant is `review`-toned**, extending the Epic-3 truth axis to a single page: recognised text is
+**declared** as recognised (with a confidence note), never passed for the page itself — the same
+honesty the absence statement carries (AD-42), applied to the viewer.
+
+**Render fallback** — `{components.render-fallback}`. The centred honest message for an
+un-renderable format, an out-of-scope denial, or a pièce over the render bound. It is **never an
+empty pane** (FR-44): it states the limit and **offers the original**. The **out-of-scope**
+variant discloses **nothing** — byte-identical to "does not exist"; the **over-bound** variant is
+`review`-toned and offers the original or a page-by-page read.
 
 ## Do's and Don'ts
 
