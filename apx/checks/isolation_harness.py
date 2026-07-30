@@ -1,8 +1,8 @@
 """Structural properties that guard the runtime boundary NOW (story 1.12; AD-16/AD-45/AD-24).
 
 Three static checks over the **product runtime** — apx/ minus the build-time tooling (the harness
-itself, ``checks/``, and the offline fitness driver, ``fitness/``) and the test tree — each with a
-failure-path fixture that fires:
+itself, ``checks/``, the offline fitness driver, ``fitness/``, and the on-demand timed-run gate,
+``timedrun/``) and the test tree — each with a failure-path fixture that fires:
 
 - **no_runtime_import_from_tests (FR-33/AD-16):** no runtime module imports the test tree
   (``tests``, ``conftest``, a ``_fixtures`` package). The v1 defect was a demo layer that overrode
@@ -40,8 +40,10 @@ _REPO_ROOT = _APX_ROOT.parent
 
 # The product runtime = apx/ minus the build-time tooling. FR-33/AD-16 is about the product's
 # request/ingestion data path — the harness (checks/) legitimately names "_fixtures"/"tests" in its
-# own scanning logic, and the fitness driver (fitness/) is CI tooling, so neither is the runtime.
-_RUNTIME_EXCLUDE = frozenset({"checks", "fitness", "__pycache__"})
+# own scanning logic, the fitness driver (fitness/) is CI tooling, and the timed-run gate
+# (timedrun/) is on-demand measurement tooling that probes VRAM via a nvidia-smi subprocess
+# (Story 2.13/AD-28). None is the runtime, so none is scanned by the seals the runtime satisfies.
+_RUNTIME_EXCLUDE = frozenset({"checks", "fitness", "timedrun", "__pycache__"})
 
 
 def _runtime_trees() -> tuple[list[tuple[Path, ast.Module]], list[str]]:

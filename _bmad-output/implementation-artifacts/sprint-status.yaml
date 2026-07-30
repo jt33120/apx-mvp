@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-07-29  # story 2-12 done (corpus + gold-set eval gate; 3-reviewer pass resolved; 2-10/2-11 UX-deferred)
+last_updated: 2026-07-30  # story 2-13 done (timed-run gate; real numbers pending hardware). Epic 2 code-complete; 2-10/2-11 remain UX-deferred
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -59,7 +59,7 @@ development_status:
   2-10-the-completion-summary-tasks-not-a-log: backlog          # UX pass required — deferred
   2-11-the-worklist-and-the-matters-zone: backlog               # UX pass required — deferred
   2-12-the-corpus-and-gold-set-evaluation-pipeline: done
-  2-13-the-timed-5-000-pi-ce-concurrent-run-the-gate: backlog
+  2-13-the-timed-5-000-pi-ce-concurrent-run-the-gate: done
   epic-2-retrospective: optional
   epic-3: backlog
   3-1-semantic-retrieval-marked-suggestive: backlog

@@ -15,8 +15,12 @@ demand — never in CI (a real 5,000-doc run costs money and minutes).
 
 from __future__ import annotations
 
+import resource
+import subprocess
+import sys
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 
 from apx.adapters.judge.criteria import CriteriaJudge
@@ -136,3 +140,164 @@ def timed_cascade(
         band=counting.calls, dedup_seconds=dedup_seconds, judge_seconds=judge_seconds,
         workers=workers,
     )
+
+
+# --------------------------------------------------------------------------------------------------
+# The machine envelope (Story 2.13 / U2, Open Risk 3): OCR + embedding + LLM judgement summed while
+# CONTENDING for one machine. The number nobody had. Real figures need the CCBE target hardware; the
+# framework here is provable in CI with stubs and NEVER fabricates a figure (NFR-2).
+# --------------------------------------------------------------------------------------------------
+
+
+def sample_vram_mb() -> float | None:
+    """Current GPU memory in use (MiB) via ``nvidia-smi`` — no new dependency, stdlib subprocess.
+
+    Returns ``None`` when there is no GPU / no ``nvidia-smi`` (the CPU profile and all of CI): VRAM
+    is a GPU-profile figure, recorded ``unavailable`` rather than invented. Output is captured, not
+    inherited; a missing binary, a timeout, or a non-zero exit all resolve to ``None``.
+    """
+    try:
+        proc = subprocess.run(
+            ["nvidia-smi", "--query-gpu=memory.used", "--format=csv,noheader,nounits"],
+            capture_output=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if proc.returncode != 0:
+        return None
+    # nvidia-smi can print a driver/NVML error to stdout with exit code 0 (or non-UTF8 bytes); any
+    # unparseable line resolves to no reading rather than crashing the sampler thread.
+    values: list[float] = []
+    for line in proc.stdout.decode("utf-8", "replace").splitlines():
+        try:
+            values.append(float(line.strip()))
+        except ValueError:
+            continue
+    return max(values) if values else None
+
+
+def _peak_rss_mb() -> float:
+    """Peak resident set size of this process (MiB). ``ru_maxrss`` is KiB on Linux (the target
+    hardware) and bytes on macOS (dev) — normalise by platform so the figure is MiB on both."""
+    ru = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    divisor = 1024 * 1024 if sys.platform == "darwin" else 1024
+    return ru / divisor
+
+
+class _VramPeak:
+    """Poll VRAM in the background during a run and keep the peak. ``peak`` stays ``None`` the whole
+    run when there is no GPU (the sampler observes nothing to record) — never faked to zero."""
+
+    def __init__(self, interval: float = 0.1) -> None:
+        self._interval = interval
+        self.peak: float | None = None
+        self._stop = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def _poll(self) -> None:
+        while not self._stop.is_set():
+            sample = sample_vram_mb()
+            if sample is not None:
+                self.peak = sample if self.peak is None else max(self.peak, sample)
+            self._stop.wait(self._interval)
+
+    def __enter__(self) -> _VramPeak:
+        self._thread = threading.Thread(target=self._poll, daemon=True)
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc: object) -> None:
+        self._stop.set()
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
+
+@dataclass(frozen=True)
+class Envelope:
+    """The machine envelope of one concurrent run: what the four stages cost together on one box."""
+
+    documents: int
+    wall_clock_s: float
+    peak_rss_mb: float
+    peak_vram_mb: float | None      # None on the CPU profile / in CI — never invented (NFR-2)
+    workers: int
+
+    @property
+    def docs_per_second(self) -> float:
+        return self.documents / self.wall_clock_s if self.wall_clock_s else 0.0
+
+    @property
+    def extrapolated_100k_s(self) -> float:
+        """Linear extrapolation to the 100 000-piece design target. A projection, not a measurement
+        — honest only alongside the real per-document cost it is scaled from."""
+        return self.wall_clock_s / self.documents * 100_000 if self.documents else 0.0
+
+    def report(self) -> str:
+        if self.peak_vram_mb is None:
+            vram = "indisponible (pas de GPU)"
+        else:
+            vram = f"{self.peak_vram_mb:.0f} MiB"
+        return (
+            f"  documents        {self.documents}  (×{self.workers} en concurrence)\n"
+            f"  horloge          {self.wall_clock_s:.2f} s  →  {self.docs_per_second:.0f} docs/s\n"
+            f"  RSS crête        {self.peak_rss_mb:.0f} MiB\n"
+            f"  VRAM crête       {vram}\n"
+            f"  extrapolé 100k   {self.extrapolated_100k_s / 3600:.1f} h"
+        )
+
+
+def timed_pipeline(
+    units: list[tuple[str, str]],
+    *,
+    extract,
+    ocr,
+    embed,
+    judge,
+    workers: int,
+) -> Envelope:
+    """Run the four ingestion stages — extraction, OCR (for scans), embedding, LLM judgement —
+    CONCURRENTLY over ``units``, so up to ``workers`` pieces are in flight at once and the stages
+    overlap and contend for the machine (Open Risk 3: nobody summed the machine). Captures the
+    machine envelope: wall-clock, peak RSS, peak VRAM.
+
+    The four stages are injected callables — near-instant stubs and a fake embedder in CI (no real
+    model, no GPU), the real components (Tesseract, BGE-M3, the LLM band) on the target hardware.
+    A piece whose extraction returns empty (a scan) falls back to OCR, exactly as production does.
+    """
+    with _VramPeak() as vram:
+        t0 = time.perf_counter()
+
+        def _process(unit: tuple[str, str]) -> None:
+            text = extract(unit) or ocr(unit)
+            embed(text)
+            judge(text)
+
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            for _ in pool.map(_process, units):
+                pass
+        wall_clock_s = time.perf_counter() - t0
+
+    return Envelope(
+        documents=len(units),
+        wall_clock_s=wall_clock_s,
+        peak_rss_mb=_peak_rss_mb(),
+        peak_vram_mb=vram.peak,
+        workers=workers,
+    )
+
+
+def stub_stages() -> dict:
+    """The four CI-default stages as injectable callables: near-instant stand-ins so the concurrent
+    orchestration and the envelope capture are provable without the real Tesseract, BGE-M3 or LLM —
+    none is loaded (AD-11: the embedder is faked at the port boundary). Extraction is a passthrough
+    over the already-extracted synthetic text; on the target hardware the real components are
+    swapped in stage by stage. Pass to ``timed_pipeline(units, **stub_stages())``."""
+    stub = StubJudge()
+    return {
+        "extract": lambda unit: unit[1],
+        "ocr": lambda unit: "",
+        "embed": lambda text: [0.0] * 8,   # a fake vector — the real BGE-M3 is never loaded
+        "judge": lambda text: stub.judge(question="pertinent", text=text),
+    }

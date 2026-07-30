@@ -24,6 +24,7 @@ from apx.checks import (
     isolation_harness,
     manifest,
     payload_schema,
+    perf_gate,
     projection,
     register_ownership,
     scope_admin,
@@ -86,6 +87,9 @@ CHECKS: list[Callable[[], CheckResult]] = [
     forward_looking.no_model_reported_confidence,
     forward_looking.no_banned_confidence_phrasing,
     gold_gate.ranking_code_requires_the_gold_gate,
+    # story 2.13 — the perf-ceiling gate: no invented latency/throughput ceiling before the timed
+    # 5000-pièce run is measured (NFR-2). Vacuous until such a ceiling is declared.
+    perf_gate.no_perf_ceiling_before_measurement,
     # story 2.6 — the failure register: one owning module per state transition (AD-37).
     register_ownership.register_state_written_once,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.

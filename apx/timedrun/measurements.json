@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "note": "PENDING the CCBE target hardware. The real 5000-piece concurrent figures need the EUR 2000 machine, both inference profiles (AD-27), the real BGE-M3 and Tesseract on real scanned PDFs - none available in dev/CI. Every figure below is unmeasured; the harness records pending, never a fabricated number (NFR-2). Flip `measured` to true and fill every figure only from a real run on the target hardware.",
+  "profiles": {
+    "gpu": {
+      "measured": false,
+      "wall_clock_s": null,
+      "extrapolated_100k_s": null,
+      "peak_rss_mb": null,
+      "peak_vram_mb": null,
+      "chunk_yield": null,
+      "hnsw_p95_ms": null,
+      "index_build_within_work_mem": null,
+      "full_text_index_bytes": null,
+      "per_piece_max": null,
+      "tesseract_vs_llm": null
+    },
+    "cpu": {
+      "measured": false,
+      "wall_clock_s": null,
+      "extrapolated_100k_s": null,
+      "peak_rss_mb": null,
+      "peak_vram_mb": null,
+      "chunk_yield": null,
+      "hnsw_p95_ms": null,
+      "index_build_within_work_mem": null,
+      "full_text_index_bytes": null,
+      "per_piece_max": null,
+      "tesseract_vs_llm": null
+    }
+  }
+}

@@ -11,7 +11,8 @@ from pathlib import Path
 
 from apx.checks import isolation_harness as ih
 
-_EXTRACTION = Path(ih.__file__).resolve().parents[1] / "adapters" / "extraction"
+_APX = Path(ih.__file__).resolve().parents[1]                     # the apx/ package
+_EXTRACTION = _APX / "adapters" / "extraction"
 
 
 def _imports(path: Path) -> set[str]:
@@ -40,6 +41,16 @@ def test_the_gpl_seal_is_green_only_because_the_worker_is_exempt() -> None:
 def test_the_subprocess_call_site_lives_in_the_msg_adapter() -> None:
     assert "subprocess" in _imports(_EXTRACTION / "msg.py")             # the one exec boundary
     assert ih.no_subprocess_call_outside_extraction().ok               # exempt inside extraction
+
+
+def test_timedrun_is_edge_tooling_excluded_from_the_runtime_subprocess_seal() -> None:
+    # The timed-run gate (apx/timedrun/) probes VRAM via an nvidia-smi subprocess (Story 2.13). It
+    # is on-demand measurement tooling — never in the request/ingestion path — so, like fitness/, it
+    # sits OUTSIDE the product runtime the AD-28 seal governs. The seal stays green with it present.
+    assert "subprocess" in _imports(_APX / "timedrun" / "harness.py")  # the VRAM probe exists
+    assert ih.no_subprocess_call_outside_extraction().ok               # yet the runtime is clean
+    runtime_paths = [path for path, _ in ih._runtime_trees()[0]]
+    assert not any("timedrun" in p.parts for p in runtime_paths)        # timedrun ≠ the runtime
 
 
 def test_the_real_extraction_subprocess_captures_stderr() -> None:

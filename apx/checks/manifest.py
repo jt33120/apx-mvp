@@ -40,6 +40,7 @@ from apx.checks import (
     inventory_record,
     isolation_harness,
     payload_schema,
+    perf_gate,
     projection,
     register_ownership,
     scope_admin,
@@ -388,6 +389,12 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "ranking code is gated by the gold-set recall harness",
        gold_gate.ranking_code_requires_the_gold_gate,
        "ranking/triage sites in apx/** + eval/harness.py recall gate (vacuous until Epic 4)"),
+    # ── story 2.13: the perf-ceiling gate — no invented ceiling before the timed run is measured ──
+    _p("no-perf-ceiling-before-measurement", "NFR-2", "AD-32",
+       "no perf ceiling before the timed run is measured",
+       perf_gate.no_perf_ceiling_before_measurement,
+       "module-level latency/throughput/wall-clock ceiling constants in apx/** vs the pending "
+       "measurement record (vacuous until a ceiling is declared)"),
     # ── story 2.6: the failure register — one owning module per state transition (AD-37) ──────
     _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
        register_ownership.register_state_written_once,
