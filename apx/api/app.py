@@ -46,6 +46,7 @@ from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.originals_fs import FilesystemOriginalStore
+from apx.adapters.render_html import HtmlPieceRenderer
 from apx.adapters.store_postgres.admission import admit
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.queue import enqueue_import
@@ -55,6 +56,7 @@ from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.read.deterministic import MovingPopulation, search_exhaustive
 from apx.core.app.read.piece import open_piece
+from apx.core.app.read.render import render_piece
 from apx.core.app.read.semantic import search_semantic
 from apx.core.app.triage import triage_pieces
 from apx.core.domain import capacity
@@ -195,6 +197,14 @@ def _original_store() -> FilesystemOriginalStore:
     ingested via POST /api/ingest gets its original kept at rest exactly as the worker's upload path
     does (AC1: every pièce, any format). Built from the data volume + the encryption key (AD-31)."""
     return FilesystemOriginalStore.from_env()
+
+
+@lru_cache(maxsize=1)
+def _piece_renderer() -> HtmlPieceRenderer:
+    """The server-side office renderer (Story 3.5c-2) — stateless, built once. `.docx`/`.xlsx` →
+    sanitised inline HTML inside the tenant boundary; any other format falls through to the
+    original. A composition-root singleton, like `_embedder`/`_original_store`."""
+    return HtmlPieceRenderer()
 
 
 def _int_env(name: str, default: int) -> int:
@@ -1475,6 +1485,54 @@ def get_piece_original(piece_id: str, ident: Identity = Depends(current_identity
             "Content-Disposition": _content_disposition(view.filename),
             "X-Content-Type-Options": "nosniff",
         })
+
+
+class PieceRenderOut(BaseModel):
+    """A server-side render of a pièce for the viewer (Story 3.5c-2). ``renderable`` is False when
+    the pièce is in scope but the original should be offered instead (over the render bound, an
+    unrenderable format, or an unavailable blob) — then ``reason`` carries the honest limit and the
+    content fields are null. When True, ``html`` is **sanitised** markup safe for the SPA to embed
+    (sandboxed); ``truncated`` says a render bound was hit. Out-of-scope/absent never reaches here —
+    it is the same 404 as ``/original`` (existence not disclosed)."""
+
+    piece_id: str
+    renderable: bool
+    format: str | None = None
+    # `title` is UNTRUSTED text metadata (the pièce filename) — NOT sanitised; the SPA renders it as
+    # a text node, never innerHTML (same contract as `filename`). Only `html` is embed-safe.
+    title: str | None = None
+    html: str | None = None      # sanitised markup, safe for the SPA to embed (sandboxed)
+    truncated: bool = False
+    reason: str | None = None
+
+
+@app.get("/api/pieces/{piece_id}/render", response_model=PieceRenderOut)
+def get_piece_render(
+    piece_id: str, response: Response, ident: Identity = Depends(current_identity)
+) -> PieceRenderOut:
+    """Render an in-scope office pièce (`.docx`/`.xlsx`) to **sanitised inline HTML** within the
+    tenant boundary (Story 3.5c-2). Scope pre-filter first (AD-13/14): out-of-scope OR absent → the
+    SAME 404 as `/original`. A served render is the AUDITED open (FR-45), one `open-piece` entry —
+    reading the rendered content IS opening the pièce. Over the render bound, an unhandled format,
+    or a missing/tampered blob → `renderable:false` + the honest reason (the client offers the
+    original; the later `/original` fetch is then the audited read — no double audit here). No pièce
+    byte leaves for a third-party service; the sanitised HTML rides a JSON envelope, never a live
+    top-level HTML document. `Cache-Control: no-store` (AD-29: tenant data is never cached)."""
+    store = _require_store()
+    outcome = render_piece(
+        tenant=ident.tenant, scopes=ident.scopes, piece_id=piece_id, reader=store,
+        originals=_original_store(), renderer=_piece_renderer(), max_bytes=_render_bound())
+    if outcome is None:
+        raise HTTPException(status_code=404, detail=_PIECE_ABSENT)  # discloses nothing
+    response.headers["Cache-Control"] = "no-store"
+    if outcome.document is None:
+        return PieceRenderOut(piece_id=piece_id, renderable=False, reason=outcome.reason)
+    store.audit_piece_open(tenant=ident.tenant, matter=outcome.matter, actor=ident.actor,
+                           piece_id=outcome.piece_id)
+    doc = outcome.document
+    return PieceRenderOut(
+        piece_id=outcome.piece_id, renderable=True, format=doc.format, title=doc.title,
+        html=doc.html, truncated=doc.truncated)
 
 
 @app.get("/api/matters/{matter}/audit", response_model=AuditTrailOut)

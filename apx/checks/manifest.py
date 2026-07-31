@@ -46,6 +46,7 @@ from apx.checks import (
     projection,
     read_path,
     register_ownership,
+    renders_sanitized,
     scope_admin,
     secrets,
     tenant_isolation,
@@ -433,6 +434,11 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("originals-encrypted-at-rest", "FR-44", "AD-31", "retained originals are encrypted at rest",
        originals_encrypted.originals_are_encrypted_at_rest,
        "the filesystem original store's put() (encrypt-before-write) + a behavioural probe"),
+    # ── story 3.5c-2: the render-sanitisation gate — office renders emit only sanitised HTML ──────
+    _p("rendered-html-is-sanitized", "FR-44", "AD-29", "rendered HTML is sanitised",
+       renders_sanitized.rendered_html_is_sanitized,
+       "the render adapter's one RenderedDocument construction site (inside _rendered, which "
+       "sanitises via nh3) + a behavioural XSS-battery + adversarial-.xlsx probe"),
     # ── story 2.6: the failure register — one owning module per state transition (AD-37) ──────
     _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
        register_ownership.register_state_written_once,

@@ -30,6 +30,7 @@ from apx.checks import (
     projection,
     read_path,
     register_ownership,
+    renders_sanitized,
     scope_admin,
     secrets,
     tenant_isolation,
@@ -110,6 +111,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     truth_status_surface.no_response_merges_the_two_engines,
     # story 3.5a — the pièce viewer foundation: retained originals are encrypted at rest (AD-31).
     originals_encrypted.originals_are_encrypted_at_rest,
+    # story 3.5c-2 — the render-sanitisation gate: office renders emit only sanitised HTML (AD-29).
+    renders_sanitized.rendered_html_is_sanitized,
     # story 2.6 — the failure register: one owning module per state transition (AD-37).
     register_ownership.register_state_written_once,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.

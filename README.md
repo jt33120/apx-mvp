@@ -432,6 +432,7 @@ could contain is an inflated claim about what the suite proves).
 | `result-response-serialises-truth-status` | FR-15 | AD-20 | structural | result_set_response_serialises_truth_status | response/export models in apx/api/ carrying engine result items (must declare truth_status — never dropped on the wire) |
 | `no-response-merges-engines` | FR-15 | AD-20 | structural | no_response_merges_the_two_engines | response/export models in apx/api/ carrying both a semantic and a deterministic result item (the two engines are never combined) |
 | `originals-encrypted-at-rest` | FR-44 | AD-31 | structural | originals_are_encrypted_at_rest | the filesystem original store's put() encrypts before writing + a behavioural on-disk-ciphertext probe (retained originals encrypted at rest, Story 3.5a) |
+| `rendered-html-is-sanitized` | FR-44 | AD-29 | structural | rendered_html_is_sanitized | the render adapter builds a RenderedDocument at one site (inside _rendered, which nh3-sanitises) so no render path emits unsanitised HTML + a behavioural XSS-battery and adversarial-.xlsx probe (Story 3.5c-2) |
 | `register-state-written-once` | FR-5 | AD-37 | structural | register_state_written_once | Failure.resolution_state writes across apx/** |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |

@@ -58,6 +58,15 @@ dependencies = [
     # counsel with the AD-28 licence note. Fully offline; pulls a heavy transitive tree
     # (pycryptodomex, pyppmd, pybcj, brotli, inflate64, multivolumefile). Imported lazily.
     "py7zr==1.1.3",
+    # Server-side office RENDERING for the pièce viewer (story 3.5c-2, AD-14's render path). Both
+    # LOCAL, offline, in-process and lazily imported in adapters/render_html — no pièce byte ever
+    # leaves the tenant boundary to a conversion service. mammoth — .docx → HTML (**BSD-2-Clause**,
+    # pure-Python; its one dep `cobble` is BSD-2 too); imported lazily. nh3 — the HTML **sanitiser**
+    # (Rust bindings to ammonia, **MIT**), the load-bearing XSS boundary: untrusted document markup
+    # is stripped to a strict allow-list before it can reach the SPA. A missing nh3 fails the render
+    # CLOSED (never unsanitised). openpyxl (.xlsx, already pinned above) completes the office set.
+    "mammoth==1.12.0",
+    "nh3==0.3.6",
 ]
 
 [project.optional-dependencies]

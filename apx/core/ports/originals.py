@@ -28,3 +28,8 @@ class OriginalStore(Protocol):
         """The retained bytes for ``(tenant, content_hash, kind)``, decrypted. Fails closed — raises
         when the blob is absent, tampered, or unauthenticated (never returns garbage)."""
         ...
+
+    def size(self, tenant: str, content_hash: str, kind: str = "original") -> int | None:
+        """The retained blob's PLAINTEXT byte size, or ``None`` when absent — the viewer's
+        render-bound decision (Story 3.5b/c), computed WITHOUT decrypting the blob."""
+        ...
