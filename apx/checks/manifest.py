@@ -437,8 +437,8 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     # ── story 3.5c-2: the render-sanitisation gate — office renders emit only sanitised HTML ──────
     _p("rendered-html-is-sanitized", "FR-44", "AD-29", "rendered HTML is sanitised",
        renders_sanitized.rendered_html_is_sanitized,
-       "the render adapter's one RenderedDocument construction site (inside _rendered, which "
-       "sanitises via nh3) + a behavioural XSS-battery + adversarial-.xlsx probe"),
+       "the render_html package's one RenderedDocument construction site (inside _rendered, nh3) — "
+       "office + .msg — + a behavioural XSS-battery + adversarial-.xlsx probe"),
     # ── story 2.6: the failure register — one owning module per state transition (AD-37) ──────
     _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
        register_ownership.register_state_written_once,

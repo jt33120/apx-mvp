@@ -72,7 +72,7 @@ development_status:
   3-5c-per-format-renderers-and-passage-highlight: in-progress  # split c-1..c-4 by port shape/dep (hybrid render, Julian 2026-07-31)
   3-5c-1-ocr-positions-at-ingestion: done  # OCR word boxes captured + stored encrypted at rest (kind=ocr-layout)
   3-5c-2-server-side-renderers: done  # .docx/.xlsx -> nh3-sanitized HTML; render port + /render endpoint + sanitization gate; +mammoth+nh3 (3-reviewer SHIP)
-  3-5c-3-msg-renderer: backlog  # .msg structured (headers/body/thread) reusing the port; GPL-isolated worker render mode
+  3-5c-3-msg-renderer: done  # .msg structured (headers/body/thread) reusing the port; GPL-isolated worker render mode (3-reviewer SHIP)
   3-5c-4-scan-page-image-overlay: backlog  # scanned-PDF page image + OCR overlay (consumes 3.5c-1 layout)
   3-5d-the-viewer-surface: backlog  # React screen, the 4 states, the large-file failure path
   epic-3-retrospective: optional

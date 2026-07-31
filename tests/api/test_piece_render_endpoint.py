@@ -132,6 +132,28 @@ def test_an_in_scope_docx_renders_its_text(tmp_path, monkeypatch) -> None:
     assert body["renderable"] is True and "Article 4" in body["html"]
 
 
+def test_an_in_scope_msg_renders_via_the_worker_and_is_audited(tmp_path, monkeypatch) -> None:
+    from apx.adapters.extraction import msg as msgmod
+    store = _prepare(tmp_path, monkeypatch)
+    pid = _seed(store, "m-in", WALL, b"OLE-ish .msg bytes", "courriel.msg")
+    store.create_user(TENANT, "me@cab.fr", "password1", "Me Durand", {WALL})
+    # the GPL-isolated worker is mocked (a valid .msg cannot be synthesised); the composite routes
+    # .msg to MsgRenderer, which spools the bytes and calls the worker's render mode.
+    monkeypatch.setattr(msgmod, "_run_msg_worker", lambda p, m: {
+        "ok": True, "from": "adverse@x.fr", "subject": "Mise en demeure",
+        "body": "Bonjour Maître,\nvoir ci-joint.", "attachments": ["contrat.pdf"]})
+    c = TestClient(app)
+    _login(c)
+    r = c.get(f"/api/pieces/{pid}/render")
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["renderable"] is True and body["title"] == "Mise en demeure"
+    assert "adverse@x.fr" in body["html"] and "contrat.pdf" in body["html"]
+    assert "<script" not in body["html"].lower()
+    assert r.headers["cache-control"] == "no-store"
+    assert _audit_actions(store).count("open-piece") == 1   # a .msg render audits like any open
+
+
 def test_an_adversarial_xlsx_carries_no_active_content(tmp_path, monkeypatch) -> None:
     store = _prepare(tmp_path, monkeypatch)
     data = _xlsx([["<script>alert(1)</script>", "<img src=x onerror=y()>"]])

@@ -46,7 +46,7 @@ from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.originals_fs import FilesystemOriginalStore
-from apx.adapters.render_html import HtmlPieceRenderer
+from apx.adapters.render_html import CompositePieceRenderer, HtmlPieceRenderer, MsgRenderer
 from apx.adapters.store_postgres.admission import admit
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.queue import enqueue_import
@@ -200,11 +200,12 @@ def _original_store() -> FilesystemOriginalStore:
 
 
 @lru_cache(maxsize=1)
-def _piece_renderer() -> HtmlPieceRenderer:
-    """The server-side office renderer (Story 3.5c-2) — stateless, built once. `.docx`/`.xlsx` →
-    sanitised inline HTML inside the tenant boundary; any other format falls through to the
-    original. A composition-root singleton, like `_embedder`/`_original_store`."""
-    return HtmlPieceRenderer()
+def _piece_renderer() -> CompositePieceRenderer:
+    """The server-side renderer chain (Story 3.5c-2/3.5c-3) — stateless, built once. `.docx`/`.xlsx`
+    → sanitised HTML in-process (HtmlPieceRenderer); `.msg` → sanitised HTML via the GPL-isolated
+    worker (MsgRenderer); any other format falls through to the original. A composition-root
+    singleton, like `_embedder`/`_original_store`. All members render inside the tenant boundary."""
+    return CompositePieceRenderer([HtmlPieceRenderer(), MsgRenderer()])
 
 
 def _int_env(name: str, default: int) -> int:
@@ -1510,8 +1511,9 @@ class PieceRenderOut(BaseModel):
 def get_piece_render(
     piece_id: str, response: Response, ident: Identity = Depends(current_identity)
 ) -> PieceRenderOut:
-    """Render an in-scope office pièce (`.docx`/`.xlsx`) to **sanitised inline HTML** within the
-    tenant boundary (Story 3.5c-2). Scope pre-filter first (AD-13/14): out-of-scope OR absent → the
+    """Render an in-scope office/email pièce (`.docx`/`.xlsx` in-process, `.msg` via the isolated
+    worker) to **sanitised inline HTML** in the tenant boundary (Story 3.5c-2/3.5c-3). Scope
+    pre-filter first (AD-13/14): out-of-scope OR absent → the
     SAME 404 as `/original`. A served render is the AUDITED open (FR-45), one `open-piece` entry —
     reading the rendered content IS opening the pièce. Over the render bound, an unhandled format,
     or a missing/tampered blob → `renderable:false` + the honest reason (the client offers the

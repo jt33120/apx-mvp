@@ -28,7 +28,10 @@ from apx.checks.import_contracts import CheckResult
 from apx.checks.payload_schema import _fail_closed, _load_trees
 
 _APX_ROOT = Path(__file__).resolve().parent.parent
-_RENDERER_FILE = _APX_ROOT / "adapters" / "render_html" / "renderer.py"
+# The render adapter PACKAGE (not one file): ``_load_trees``/``_iter_py`` globs a root's directory,
+# so pointing at the package sweeps every render module — the office renderer, the ``.msg`` one
+# (Story 3.5c-3), and any future render module — so the one-construction-site invariant covers all.
+_RENDER_PKG = _APX_ROOT / "adapters" / "render_html"
 
 
 def _find_func(trees: Iterable[tuple[Path, ast.Module]], func_name: str) -> ast.FunctionDef | None:
@@ -39,13 +42,37 @@ def _find_func(trees: Iterable[tuple[Path, ast.Module]], func_name: str) -> ast.
     return None
 
 
-def _rendered_document_sites(node: ast.AST) -> list[ast.Call]:
-    """Every ``RenderedDocument(...)`` construction call within ``node`` (by name or attribute)."""
+def _find_func_with_tree(
+    trees: Iterable[tuple[Path, ast.Module]], func_name: str
+) -> tuple[ast.FunctionDef | None, ast.Module | None]:
+    for _path, tree in trees:
+        for node in ast.walk(tree):
+            if isinstance(node, ast.FunctionDef) and node.name == func_name:
+                return node, tree
+    return None, None
+
+
+def _rd_bound_names(tree: ast.Module) -> set[str]:
+    """The local name(s) ``RenderedDocument`` is bound to in this module — so an aliased import
+    (``from ...render import RenderedDocument as RD``) cannot smuggle an unsanitised ``RD(...)``
+    past the construction-site check (Reviewer finding, Story 3.5c-3)."""
+    names = {"RenderedDocument"}
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom):
+            for alias in node.names:
+                if alias.name == "RenderedDocument":
+                    names.add(alias.asname or alias.name)
+    return names
+
+
+def _rendered_document_sites(node: ast.AST, bound_names: set[str]) -> list[ast.Call]:
+    """Every ``RenderedDocument`` construction call within ``node`` — by the module's bound name
+    (any alias) or the attribute form ``mod.RenderedDocument``."""
     out: list[ast.Call] = []
     for child in ast.walk(node):
         if isinstance(child, ast.Call):
             func = child.func
-            if (isinstance(func, ast.Name) and func.id == "RenderedDocument") or (
+            if (isinstance(func, ast.Name) and func.id in bound_names) or (
                     isinstance(func, ast.Attribute) and func.attr == "RenderedDocument"):
                 out.append(child)
     return out
@@ -123,26 +150,33 @@ def rendered_html_is_sanitized(roots: Iterable[Path] | None = None) -> CheckResu
     and the real sanitiser/renderer strip active content from adversarial input (behavioural)."""
     name, ad = "rendered HTML is sanitised", "AD-29"
     is_real = roots is None
-    roots = list(roots) if roots is not None else [_RENDERER_FILE]
+    roots = list(roots) if roots is not None else [_RENDER_PKG]
     trees, unparseable = _load_trees(roots)
     if unparseable:
         return _fail_closed(name, ad, unparseable)
-    trees = list(trees)
-    module = next((tree for _path, tree in trees), None)
-    if module is None:
+    # `_iter_py` globs a file root's whole directory, so multiple roots in one dir yield duplicate
+    # parses — dedupe by resolved path so a site is counted once (else its own node reads outside).
+    trees = list({path.resolve(): (path, tree) for path, tree in trees}.values())
+    if not trees:
         return CheckResult(name, ad, False, "no render adapter module found to inspect (AD-29)")
 
-    rendered = _find_func(trees, "_rendered")
+    rendered, rendered_tree = _find_func_with_tree(trees, "_rendered")
     if rendered is None:
         return CheckResult(name, ad, False,
                            "no _rendered() in the render adapter — the one sanitising construction "
                            "site is missing; every render must route through it (AD-29)")
-    inside = _rendered_document_sites(rendered)
+    inside = _rendered_document_sites(rendered, _rd_bound_names(rendered_tree))
     if not inside:
         return CheckResult(name, ad, False,
                            "_rendered() constructs no RenderedDocument — it must be the "
                            "sanitising builder (AD-29)")
-    outside = set(map(id, _rendered_document_sites(module))) - set(map(id, inside))
+    # union the construction sites across EVERY module in the package (not just one tree), each
+    # under its OWN bound name — so a second render module (e.g. .msg) cannot build a
+    # RenderedDocument outside _rendered, even via an import alias.
+    all_sites: list = []
+    for _path, tree in trees:
+        all_sites.extend(_rendered_document_sites(tree, _rd_bound_names(tree)))
+    outside = set(map(id, all_sites)) - set(map(id, inside))
     if outside:
         return CheckResult(name, ad, False,
                            "a RenderedDocument is built OUTSIDE _rendered() — that path could "

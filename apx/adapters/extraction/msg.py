@@ -58,6 +58,20 @@ def _run_msg_worker(path: Path, mode: str) -> dict | None:
         return None
 
 
+def structured_msg(path: Path) -> dict | None:
+    """The ``.msg``'s routing headers + body + attachment NAMES for the viewer render (3.5c-3), via
+    the GPL-isolated worker's ``render`` mode — no attachment bytes (attachments are their own
+    pièces). ``None`` on any failure (a non-``.msg``, or a crash / timeout / unreadable / empty
+    ``.msg``) so the caller offers the original (FR-44). ``extract-msg`` stays worker-only; this
+    wrapper touches only the worker's JSON, never the library."""
+    if path.suffix.lower() != ".msg":
+        return None
+    result = _run_msg_worker(path, "render")
+    if result is None or not result.get("ok"):
+        return None
+    return result
+
+
 class MsgExtractor:
     """Implements the Extractor port for ``.msg`` via the out-of-process worker (AD-28)."""
 

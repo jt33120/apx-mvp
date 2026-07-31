@@ -31,6 +31,11 @@ from typing import Any
 VERSION = "extract-msg/0.56.0"
 _HEADERS = ("sender", "to", "cc", "date", "subject")
 _LABELS = {"sender": "From", "to": "To", "cc": "Cc", "date": "Date", "subject": "Subject"}
+# A memory backstop for the render body: cap the (possibly RTF-decompressed) body in the ISOLATED
+# worker before it crosses to the product process, so a decompression-bomb body spikes memory HERE
+# (bounded by the worker timeout), never in the API process. Far above MsgRenderer's display cap —
+# a normal email body passes through untouched; the viewer's own cap governs normal truncation.
+_RENDER_BODY_MAX = 2_000_000
 
 
 def _text(msg: Any) -> dict[str, Any]:
@@ -101,6 +106,25 @@ def _attachments(msg: Any) -> dict[str, Any]:
     return {"ok": True, "attachments": out, "method": "extract-msg", "version": VERSION}
 
 
+def _render(msg: Any) -> dict[str, Any]:
+    """The structured email for the viewer render (Story 3.5c-3): the routing headers, the plain
+    body (inline quoted reply chain, as Outlook stores it), and the attachment NAMES only — never
+    attachment bytes (they are their own pièces). No header AND no body → ``extracted-empty``.
+    The in-process ``MsgRenderer`` escapes + sanitises these; the worker only extracts them."""
+    headers: dict[str, str] = {}
+    for attr, key in (("sender", "from"), ("to", "to"), ("cc", "cc"),
+                      ("date", "date"), ("subject", "subject")):
+        value = getattr(msg, attr, None)
+        if value:
+            headers[key] = str(value)
+    body = (getattr(msg, "body", None) or "")[:_RENDER_BODY_MAX]  # memory backstop (see constant)
+    names = [_att_name(att) for att in getattr(msg, "attachments", []) or []]
+    if not headers and not body.strip():
+        return {"ok": False, "error_class": "extracted-empty"}
+    return {"ok": True, **headers, "body": body, "attachments": names,
+            "method": "extract-msg", "version": VERSION}
+
+
 def run(mode: str, path: str) -> dict[str, Any]:
     """Open the .msg and dispatch on ``mode``. The ``extract_msg`` import AND all parse-time
     stdout are inside the ``redirect_stdout`` guard, so any chatter the library writes to stdout
@@ -122,6 +146,8 @@ def run(mode: str, path: str) -> dict[str, Any]:
                 return _text(msg)
             if mode == "attachments":
                 return _attachments(msg)
+            if mode == "render":
+                return _render(msg)
             return {"ok": False, "error_class": "unreadable"}
         finally:
             msg.close()
