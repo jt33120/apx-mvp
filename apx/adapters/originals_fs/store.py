@@ -100,3 +100,14 @@ class FilesystemOriginalStore:
         a tampered/relocated blob raises ``DecryptionError`` (the AAD/tag never authenticates)."""
         token = self._blob_path(tenant, content_hash).read_bytes()
         return self._cipher.decrypt_bytes(token, aad=_aad(tenant, content_hash))
+
+    def size(self, tenant: str, content_hash: str) -> int | None:
+        """The retained original's PLAINTEXT byte size, or ``None`` if the blob is absent (Story
+        3.5b — the viewer's render-bound decision). Derived from the on-disk token size minus the
+        fixed cipher overhead (prefix + nonce + GCM tag) — no decryption, so it is cheap even for a
+        large blob."""
+        path = self._blob_path(tenant, content_hash)
+        if not path.exists():
+            return None
+        overhead = len(self._cipher.encrypt_bytes(b""))  # constant: prefix + nonce + tag
+        return max(0, path.stat().st_size - overhead)

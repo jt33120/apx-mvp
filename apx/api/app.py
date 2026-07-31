@@ -24,6 +24,7 @@ from datetime import UTC, datetime, timedelta
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 from uuid import uuid4
 
 import pyotp
@@ -53,6 +54,7 @@ from apx.api.logging import install_secret_redaction
 from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.read.deterministic import MovingPopulation, search_exhaustive
+from apx.core.app.read.piece import open_piece
 from apx.core.app.read.semantic import search_semantic
 from apx.core.app.triage import triage_pieces
 from apx.core.domain import capacity
@@ -63,6 +65,7 @@ from apx.core.domain.config import (
     default_of,
     expansion_bounds,
 )
+from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.head_journal import open_journal
 from apx.core.domain.inventory import Inventory
 from apx.core.ports.embedding import Embedder
@@ -1395,6 +1398,83 @@ def export_exhaustive(
                       scopes=ident.scopes, denominator=_inventory_of(out.denominator),
                       action="export-search")
     return HTMLResponse(_exhaustive_export_html(out))
+
+
+# ── the pièce viewer read path (Story 3.5b) — scope pre-filter · audit-on-open · size bound ──
+class PieceMetaOut(BaseModel):
+    """The pièce viewer's metadata — enough to render or offer the original, never the content.
+    Returned only for an in-scope pièce; out of scope is the SAME 404 as absent (FR-14/FR-44)."""
+
+    piece_id: str
+    matter: str
+    filename: str
+    media_kind: str
+    ocr: bool
+    byte_size: int | None
+    renderable_inline: bool
+
+
+_PIECE_ABSENT = "pièce introuvable"  # ONE message for out-of-scope AND absent — discloses nothing
+
+
+def _render_bound() -> int:
+    """The inline-render byte bound (config-as-data via env): a pièce larger than this is offered as
+    the original / loaded progressively, never rendered inline to exhaustion (Story 3.5b/d)."""
+    return _int_env("APX_PIECE_RENDER_MAX_BYTES", 25 * 1024 * 1024)
+
+
+def _content_disposition(name: str) -> str:
+    """A safe RFC 6266 ``Content-Disposition`` that PRESERVES a non-ASCII (accented FR/LU) name via
+    ``filename*``, with an ASCII fallback for old clients. Both legs are injection-safe: the ASCII
+    leg strips control/quote/backslash chars; ``filename*`` percent-encodes everything dangerous (a
+    CR/LF becomes %0D%0A — never a literal header break)."""
+    printable = "".join(c for c in name if c.isprintable())
+    ascii_fallback = printable.replace('"', "").replace("\\", "").encode(
+        "ascii", "ignore").decode("ascii").strip() or "piece"
+    utf8 = quote(printable, safe="") or "piece"
+    return f"attachment; filename=\"{ascii_fallback}\"; filename*=UTF-8''{utf8}"
+
+
+@app.get("/api/pieces/{piece_id}", response_model=PieceMetaOut)
+def get_piece(piece_id: str, ident: Identity = Depends(current_identity)) -> PieceMetaOut:
+    """The pièce viewer's metadata IF the caller holds its *matter*'s scope (the read pre-filter,
+    AD-13/14). Out of scope OR absent → the SAME 404 (existence not disclosed). A peek — the audited
+    read is the /original content access."""
+    store = _require_store()
+    view = open_piece(tenant=ident.tenant, scopes=ident.scopes, piece_id=piece_id, reader=store)
+    if view is None:
+        raise HTTPException(status_code=404, detail=_PIECE_ABSENT)
+    size = _original_store().size(ident.tenant, view.content_hash)
+    return PieceMetaOut(
+        piece_id=view.piece_id, matter=view.matter, filename=view.filename,
+        media_kind=view.media_kind, ocr=view.ocr, byte_size=size,
+        renderable_inline=size is not None and size <= _render_bound())
+
+
+@app.get("/api/pieces/{piece_id}/original")
+def get_piece_original(piece_id: str, ident: Identity = Depends(current_identity)) -> Response:
+    """Serve the retained ORIGINAL bytes IF in scope — decrypted within the tenant boundary (3.5a),
+    as an ATTACHMENT with octet-stream + nosniff so an uploaded .html/.svg can never execute in the
+    app origin (safe inline rendering is the 3.5c/d renderer's job). Opening the content is the
+    AUDITED read (FR-45). Out of scope/absent → the same 404; a missing/unreadable blob → an honest
+    409, never a 500."""
+    store = _require_store()
+    view = open_piece(tenant=ident.tenant, scopes=ident.scopes, piece_id=piece_id, reader=store)
+    if view is None:
+        raise HTTPException(status_code=404, detail=_PIECE_ABSENT)
+    try:
+        data = _original_store().open(ident.tenant, view.content_hash)
+    except (FileNotFoundError, DecryptionError):
+        raise HTTPException(
+            status_code=409, detail="l'original de cette pièce n'est pas disponible") from None
+    store.audit_piece_open(tenant=ident.tenant, matter=view.matter, actor=ident.actor,
+                           piece_id=view.piece_id)
+    return Response(
+        content=data, media_type="application/octet-stream",
+        headers={
+            "Content-Disposition": _content_disposition(view.filename),
+            "X-Content-Type-Options": "nosniff",
+        })
 
 
 @app.get("/api/matters/{matter}/audit", response_model=AuditTrailOut)

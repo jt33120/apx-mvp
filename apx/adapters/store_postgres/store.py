@@ -80,7 +80,7 @@ from apx.core.domain.normalization import normalize
 from apx.core.domain.retrieval import DeterministicResult, SemanticResult
 from apx.core.domain.search import snippet
 from apx.core.domain.triage import TriageOutcome
-from apx.core.ports.read import ExactSearch
+from apx.core.ports.read import ExactSearch, PieceView
 from apx.core.projection import Snapshot
 
 _log = logging.getLogger("apx.store")
@@ -423,6 +423,31 @@ class RecallResult:
 def _excerpt(text: str, width: int = 240) -> str:
     flat = " ".join(text.split())
     return flat[:width] + ("…" if len(flat) > width else "")
+
+
+# Story 3.5b: a coarse media kind for the viewer, DERIVED from the filename extension (no new
+# column). The renderer (3.5c) refines this; the viewer (3.5d) branches on it.
+_MEDIA_KIND_BY_EXT = {
+    ".pdf": "pdf",
+    ".msg": "email", ".eml": "email",
+    ".xlsx": "spreadsheet", ".xls": "spreadsheet", ".csv": "spreadsheet", ".ods": "spreadsheet",
+    ".docx": "document", ".doc": "document", ".rtf": "document", ".txt": "document",
+    ".odt": "document",
+    ".png": "image", ".jpg": "image", ".jpeg": "image", ".tif": "image", ".tiff": "image",
+    ".gif": "image", ".bmp": "image", ".webp": "image",
+}
+
+
+def _media_kind(filename: str) -> str:
+    ext = ("." + filename.rsplit(".", 1)[-1].lower()) if "." in filename else ""
+    return _MEDIA_KIND_BY_EXT.get(ext, "other")
+
+
+def _basename(provenance_path: str) -> str:
+    """The representative filename shown in the viewer — the last path segment of the (decrypted)
+    provenance path. A container member's provenance is ``outer/inner.ext``; its basename is
+    ``inner.ext`` (both '/' and '\\' separators handled)."""
+    return provenance_path.replace("\\", "/").rstrip("/").rsplit("/", 1)[-1] or provenance_path
 
 
 def _failure_id(tenant: str, matter: str | None, submitted_path: str) -> str:
@@ -1326,6 +1351,48 @@ class SqlStore:
         with self._sf() as session, session.begin():
             self._append_audit(session, tenant, None, actor, action, detail,
                                now or datetime.now(UTC))
+
+    def read_piece(
+        self, *, tenant: str, scopes: set[str], piece_id: str
+    ) -> PieceView | None:
+        """Story 3.5b — the pièce viewer's metadata for ONE pièce, IF its *matter*'s scope is held.
+        Scope is a query PRE-FILTER (AD-13/AD-14): the pièce is fetched only when its matter is in
+        the held set — never fetched-then-post-filtered. Out of scope (or absent) → ``None``, so a
+        caller cannot tell an out-of-scope pièce from an absent one (FR-14/FR-44). No admin
+        bypass (a Piece read takes no ``is_admin`` — Story 3.3 gate); empty scope → ``None``
+        (fail-closed, AD-12)."""
+        if not scopes:
+            return None
+        held_matters = select(MatterScope.matter).where(
+            MatterScope.tenant == tenant, MatterScope.scope.in_(sorted(scopes)))
+        with self._sf() as session:
+            piece = session.scalars(
+                select(Piece).where(
+                    Piece.id == piece_id,
+                    Piece.tenant == tenant,
+                    Piece.matter.in_(held_matters),
+                )
+            ).one_or_none()
+            if piece is None:
+                return None
+            filename = _basename(piece.provenance_path)  # EncryptedText decrypts on access
+            return PieceView(
+                piece_id=piece.id, matter=piece.matter, content_hash=piece.content_hash,
+                filename=filename, media_kind=_media_kind(filename),
+                ocr=piece.extraction_method == "tesseract",
+            )
+
+    def audit_piece_open(
+        self, *, tenant: str, matter: str, actor: str, piece_id: str, now: datetime | None = None
+    ) -> None:
+        """Record opening a pièce's CONTENT as an audited act (FR-45) — the fact distinguishing a
+        *validation act* performed AFTER reading from one performed from the list. ONE entry on the
+        (tenant, matter) chain (AD-43), like a query audit (Story 3.4). The edge calls this only
+        after a successful in-scope read, so a denied/out-of-scope attempt writes no disclosing
+        entry."""
+        with self._sf() as session, session.begin():
+            self._append_audit(session, tenant, matter, actor, "open-piece",
+                               f"piece={piece_id}", now or datetime.now(UTC))
 
     def deduplicate(self, matter: str, tenant: str, scopes: set[str]) -> DedupSummary:
         """The deterministic tier of the judgment cascade for a matter — scope-checked.

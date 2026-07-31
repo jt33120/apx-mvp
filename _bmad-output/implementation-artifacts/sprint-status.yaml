@@ -68,7 +68,7 @@ development_status:
   3-4-every-result-set-declares-its-truth-status: done
   3-5-the-pi-ce-viewer: in-progress  # decomposed into 4 increments (3-5a..d) — full-fidelity build (Julian, 2026-07-30)
   3-5a-original-retention-at-rest: done  # originals kept at rest, encrypted, content-addressed
-  3-5b-the-piece-read-path: backlog  # single read path + scope pre-filter + audit-on-open + large-file bound
+  3-5b-the-piece-read-path: done  # single read path + scope pre-filter + audit-on-open + large-file bound
   3-5c-per-format-renderers-and-passage-highlight: backlog  # PDF/scan+OCR/.msg/.docx/.xlsx/images, passage per format
   3-5d-the-viewer-surface: backlog  # React screen, the 4 states, the large-file failure path
   epic-3-retrospective: optional

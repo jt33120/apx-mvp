@@ -59,3 +59,29 @@ class ExactSearchReader(Protocol):
         the AD-38 denominator and the OCR shares, all in one snapshot. There is no identifier-only
         method and no result-set post-filter (AD-14)."""
         ...
+
+
+@dataclass(frozen=True)
+class PieceView:
+    """The DB-resolved metadata for ONE pièce (Story 3.5b) — identity + format, never the content.
+    ``filename`` is the decrypted representative provenance basename; ``media_kind`` a coarse format
+    (pdf/email/spreadsheet/document/image/other); ``ocr`` the honesty flag (its text came from OCR).
+    The retained original's size / render-bound decision is added at the edge, not carried here."""
+
+    piece_id: str
+    matter: str
+    content_hash: str
+    filename: str
+    media_kind: str
+    ocr: bool
+
+
+class PieceReader(Protocol):
+    def read_piece(self, *, tenant: str, scopes: set[str], piece_id: str) -> PieceView | None:
+        """The pièce's viewer metadata IF its *matter*'s scope is held — scope a query PRE-FILTER
+        (AD-13/AD-14, never a post-filter) — else ``None``, indistinguishable from a genuinely
+        absent pièce (existence not disclosed, FR-14/FR-44). An empty ``scopes`` set reads nothing
+        (fail-closed, AD-12). No admin bypass — an admin is not a data superuser (a Piece read takes
+        no ``is_admin``, Story 3.3 gate) — and no identifier-only method (id always with tenant +
+        scope, AD-14)."""
+        ...
