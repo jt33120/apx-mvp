@@ -73,23 +73,28 @@ def _blob_is_ciphertext_at_rest() -> str | None:
     root = Path(tempfile.mkdtemp(prefix="apx-orig-gate-"))
     store = FilesystemOriginalStore(root, Cipher(os.urandom(32)))
     plaintext = b"APX-ORIGINAL-AT-REST-PROBE-\x00\x01\x02-confidential-bytes"
+    layout = b"APX-OCR-LAYOUT-AT-REST-PROBE-{words:boxes}-confidential"
     ch = hashlib.sha256(plaintext).hexdigest()
     store.put("probe", ch, plaintext)
+    store.put("probe", ch, layout, kind="ocr-layout")  # a second KIND (Story 3.5c-1) must be too
 
-    # the plaintext must appear in NO file under the root — not only the canonical blob — so a store
-    # that also drops a plaintext sidecar, or writes through an alias, is caught (not just the
+    # neither plaintext may appear in ANY file under the root — not only the canonical blobs — so a
+    # store that drops a plaintext sidecar, or writes through an alias, is caught (not just the
     # literal `write(data)` the static leg sees).
     for f in root.rglob("*"):
-        if f.is_file() and plaintext in f.read_bytes():
-            return f"a plaintext original was found on disk ({f.name}) — not encrypted (AD-31)"
-    # a wrong key must not decrypt the retained original (authenticated encryption, not obfuscation)
-    try:
-        FilesystemOriginalStore(root, Cipher(os.urandom(32))).open("probe", ch)
-        return "the retained original decrypted under a WRONG key — not authenticated (AD-31)"
-    except DecryptionError:
-        pass  # good — a wrong key fails closed
-    if store.open("probe", ch) != plaintext:
-        return "the retained original did not round-trip under the right key"
+        blob = f.read_bytes() if f.is_file() else b""
+        if plaintext in blob or layout in blob:
+            return f"a plaintext artifact was found on disk ({f.name}) — not encrypted (AD-31)"
+    # a wrong key must not decrypt EITHER kind (authenticated encryption, not obfuscation)
+    wrong = FilesystemOriginalStore(root, Cipher(os.urandom(32)))
+    for kind in ("original", "ocr-layout"):
+        try:
+            wrong.open("probe", ch, kind)
+            return f"the {kind} blob decrypted under a WRONG key — not authenticated (AD-31)"
+        except DecryptionError:
+            pass  # good — a wrong key fails closed
+    if store.open("probe", ch) != plaintext or store.open("probe", ch, "ocr-layout") != layout:
+        return "a retained blob did not round-trip under the right key"
     return None
 
 

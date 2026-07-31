@@ -25,15 +25,16 @@ from pathlib import Path
 from apx.core.domain.crypto import Cipher
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")            # a sha256 content_hash (AD-40) — the ONLY blob name
+_SAFE_KIND = re.compile(r"[a-z][a-z0-9-]*")     # an artifact kind: original | ocr-layout | …
 
 
-def _aad(tenant: str, content_hash: str) -> str:
+def _aad(tenant: str, content_hash: str, kind: str) -> str:
     """The associated data binding a blob to its exact identity — a blob file moved under another
-    tenant/hash fails authentication on read, so a disk-level attacker cannot re-address it. The
-    ``content_hash`` is a fixed-length 64-hex digest at a fixed position, so this is INJECTIVE for
-    ANY tenant string (no reliance on a tenant charset — two distinct identities never share an
-    AAD, even a tenant containing ':')."""
-    return f"apx-original:v1:{content_hash}:{tenant}"
+    tenant/hash/kind fails authentication on read, so a disk-level attacker cannot re-address it nor
+    swap one artifact KIND for another (an ``ocr-layout`` can never be read as an ``original``). The
+    fixed-position ``kind`` and fixed-length ``content_hash`` keep this INJECTIVE for ANY tenant
+    string (no reliance on a tenant charset — two distinct identities never share an AAD)."""
+    return f"apx-original:v1:{kind}:{content_hash}:{tenant}"
 
 
 class FilesystemOriginalStore:
@@ -54,24 +55,29 @@ class FilesystemOriginalStore:
         base = (source.get("APX_DATA_PATH", "") or "").strip() or tempfile.gettempdir()
         return cls(Path(base) / "originals", Cipher.from_env(source))
 
-    def _blob_path(self, tenant: str, content_hash: str) -> Path:
-        """The blob path. ``content_hash`` is validated as a sha256 hex digest (the traversal guard
-        on the file name); the ``tenant`` is HASHED into its directory segment, so ANY tenant string
-        — a real firm slug like ``cabinet.fr`` or ``étude-müller`` — yields a safe segment that can
-        never escape ``root`` (the raw tenant still binds the AAD, so isolation is not weakened)."""
+    def _blob_path(self, tenant: str, content_hash: str, kind: str) -> Path:
+        """The blob path. ``content_hash`` is validated as a sha256 hex digest and ``kind`` as a
+        plain token (the traversal guard on the file name); the ``tenant`` is HASHED into its
+        directory segment, so ANY tenant string — a real firm slug like ``cabinet.fr`` or
+        ``étude-müller`` — yields a safe segment that cannot escape ``root`` (the raw tenant still
+        binds the AAD, so isolation is not weakened). The ``original`` kind is the bare hash; a
+        derived kind (``ocr-layout``) is a ``.kind`` sibling."""
         if not _HEX64.fullmatch(content_hash):
             raise ValueError("content_hash must be a sha256 hex digest")
         if not tenant:
             raise ValueError("tenant must be non-empty")
+        if not _SAFE_KIND.fullmatch(kind):
+            raise ValueError("kind must be a plain token")
         tenant_dir = hashlib.sha256(tenant.encode("utf-8")).hexdigest()
-        return self._root / tenant_dir / content_hash[:2] / content_hash
+        base = self._root / tenant_dir / content_hash[:2] / content_hash
+        return base if kind == "original" else base.with_name(f"{content_hash}.{kind}")
 
-    def put(self, tenant: str, content_hash: str, data: bytes) -> None:
-        path = self._blob_path(tenant, content_hash)
+    def put(self, tenant: str, content_hash: str, data: bytes, kind: str = "original") -> None:
+        path = self._blob_path(tenant, content_hash, kind)
         if path.exists():
             return  # content-addressed: identical bytes are stored once (idempotent)
         path.parent.mkdir(parents=True, exist_ok=True)
-        token = self._cipher.encrypt_bytes(data, aad=_aad(tenant, content_hash))
+        token = self._cipher.encrypt_bytes(data, aad=_aad(tenant, content_hash, kind))
         # Atomic publish: write a temp sibling, fsync, then rename onto the final name — a crash
         # mid-write leaves a stray temp file, never a half-written blob read as whole.
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".blob")
@@ -95,18 +101,19 @@ class FilesystemOriginalStore:
             finally:
                 os.close(dir_fd)
 
-    def open(self, tenant: str, content_hash: str) -> bytes:
-        """The decrypted original bytes. Fail-closed: a missing blob raises ``FileNotFoundError``;
-        a tampered/relocated blob raises ``DecryptionError`` (the AAD/tag never authenticates)."""
-        token = self._blob_path(tenant, content_hash).read_bytes()
-        return self._cipher.decrypt_bytes(token, aad=_aad(tenant, content_hash))
+    def open(self, tenant: str, content_hash: str, kind: str = "original") -> bytes:
+        """The decrypted bytes for ``kind``. Fail-closed: a missing blob raises
+        ``FileNotFoundError`` and a tampered/relocated/wrong-kind blob raises ``DecryptionError``
+        (the AAD/tag never authenticates)."""
+        token = self._blob_path(tenant, content_hash, kind).read_bytes()
+        return self._cipher.decrypt_bytes(token, aad=_aad(tenant, content_hash, kind))
 
-    def size(self, tenant: str, content_hash: str) -> int | None:
-        """The retained original's PLAINTEXT byte size, or ``None`` if the blob is absent (Story
-        3.5b — the viewer's render-bound decision). Derived from the on-disk token size minus the
-        fixed cipher overhead (prefix + nonce + GCM tag) — no decryption, so it is cheap even for a
-        large blob."""
-        path = self._blob_path(tenant, content_hash)
+    def size(self, tenant: str, content_hash: str, kind: str = "original") -> int | None:
+        """The retained blob's PLAINTEXT byte size, or ``None`` if absent (Story 3.5b — the viewer's
+        render-bound decision). Derived from the on-disk token size minus the fixed cipher overhead
+        (prefix + nonce + GCM tag; the AAD is authenticated, not stored) — no decryption, so it is
+        cheap even for a large blob."""
+        path = self._blob_path(tenant, content_hash, kind)
         if not path.exists():
             return None
         overhead = len(self._cipher.encrypt_bytes(b""))  # constant: prefix + nonce + tag

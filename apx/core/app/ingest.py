@@ -229,6 +229,12 @@ def _ingest_one(
                 # same bytes is a no-op. This is the ONLY place a member's bytes exist (a container
                 # member lives only in ``tmpdir``), so retention belongs here, not in the worker.
                 original_store.put(tenant, ch, raw)
+                if outcome.layout is not None:
+                    # An OCR'd pièce also retains its word-box layout (Story 3.5c-1) — same
+                    # content_hash, a distinct KIND — so the viewer draws the overlay without
+                    # re-running OCR at view time.
+                    original_store.put(
+                        tenant, ch, outcome.layout.to_json().encode(), kind="ocr-layout")
             except OSError as exc:
                 # A retention WRITE failure (disk full / IO) makes this pièce a register entry, not
                 # a Piece the viewer could never render — recorded, never an escape (AC6, as the

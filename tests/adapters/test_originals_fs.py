@@ -149,6 +149,33 @@ def test_empty_file_round_trips(tmp_path: Path) -> None:
     assert _blob(tmp_path, "t", ch).read_bytes().startswith(b"apxenc:v1:")
 
 
+def test_a_kind_blob_round_trips_and_is_a_distinct_artifact(tmp_path: Path) -> None:
+    # Story 3.5c-1: a second KIND (the OCR layout) shares the content_hash but is a distinct blob.
+    s = _store(tmp_path)
+    data, layout = b"%PDF scanned original", b'{"dpi":200,"pages":[]}'
+    ch = _ch(data)
+    s.put("t", ch, data)                                  # the original
+    s.put("t", ch, layout, kind="ocr-layout")             # its OCR layout
+    assert s.open("t", ch) == data
+    assert s.open("t", ch, kind="ocr-layout") == layout
+    assert _blob(tmp_path, "t", ch).exists()                                   # the original blob
+    assert _blob(tmp_path, "t", ch).with_name(f"{ch}.ocr-layout").exists()     # the layout blob
+
+
+def test_a_kind_blob_cannot_be_read_as_another_kind(tmp_path: Path) -> None:
+    # the AAD binds the KIND: relocating the layout bytes onto the original path fails closed, so an
+    # ocr-layout can never be served as the original (or vice versa).
+    s = _store(tmp_path)
+    ch = _ch(b"x")
+    s.put("t", ch, b"the layout bytes", kind="ocr-layout")
+    with pytest.raises(FileNotFoundError):
+        s.open("t", ch)                                   # no original blob exists at that path
+    orig = _blob(tmp_path, "t", ch)
+    orig.write_bytes(orig.with_name(f"{ch}.ocr-layout").read_bytes())  # relocate the layout blob
+    with pytest.raises(DecryptionError):
+        s.open("t", ch)                                   # wrong-kind AAD → fail closed
+
+
 def test_from_env_builds_from_data_path_and_key(tmp_path: Path) -> None:
     from apx.core.domain.crypto import generate_key
     env = {"APX_DATA_PATH": str(tmp_path), "APX_ENCRYPTION_KEY": generate_key()}

@@ -16,14 +16,15 @@ from typing import Protocol
 
 
 class OriginalStore(Protocol):
-    def put(self, tenant: str, content_hash: str, data: bytes) -> None:
-        """Retain ``data`` as the original of ``(tenant, content_hash)``, encrypted at rest.
-        Idempotent: a blob already present for that identity is not rewritten (content-addressed
-        dedup). Raises ``OSError`` on a disk failure — the caller records it as that pièce's
-        failure, never an escape."""
+    def put(self, tenant: str, content_hash: str, data: bytes, kind: str = "original") -> None:
+        """Retain ``data`` for ``(tenant, content_hash, kind)``, encrypted at rest. ``kind`` selects
+        the artifact — ``original`` (the file bytes) or a derived kind like ``ocr-layout`` (Story
+        3.5c-1) — bound into the AAD, so one kind can never be read as another. Idempotent: a blob
+        already present for that identity is not rewritten. Raises ``OSError`` on a disk failure —
+        the caller records it as that pièce's failure, never an escape."""
         ...
 
-    def open(self, tenant: str, content_hash: str) -> bytes:
-        """The retained original bytes for ``(tenant, content_hash)``, decrypted. Fails closed —
-        raises when the blob is absent, tampered, or unauthenticated (never returns garbage)."""
+    def open(self, tenant: str, content_hash: str, kind: str = "original") -> bytes:
+        """The retained bytes for ``(tenant, content_hash, kind)``, decrypted. Fails closed — raises
+        when the blob is absent, tampered, or unauthenticated (never returns garbage)."""
         ...
