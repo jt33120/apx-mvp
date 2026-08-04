@@ -27,13 +27,14 @@ from sqlalchemy import Text, cast, delete, event, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from apx.adapters.store_postgres.backfill import link_id
+from apx.adapters.store_postgres.backfill import case_theory_version_id, link_id
 from apx.adapters.store_postgres.chunk_writer import UnauthorizedScope
 from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.deterministic_query import exact_search_stmt
 from apx.adapters.store_postgres.models import (
     AuditRecord,
     BackupRecord,
+    CaseTheoryVersion,
     Chunk,
     Failure,
     ImportJob,
@@ -345,6 +346,29 @@ class AuditEntry:
 class AuditTrail:
     entries: list[AuditEntry]
     verified: bool  # the chain recomputes cleanly (no gap, reorder or truncation)
+
+
+@dataclass(frozen=True)
+class CaseTheoryVersionView:
+    """One readable version of a matter's case theory (Story 4.1). ``text`` is None for a
+    *withdrawal* version. ``version_id`` is the stable identity a future ranking version names."""
+
+    version_no: int
+    version_id: str
+    text: str | None
+    actor: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class CaseTheory:
+    """The current state of a matter's case theory (scope-checked). ``present`` = an active
+    (non-withdrawn) theory exists; ``withdrawn`` = the latest version is a withdrawal; ``current``
+    = the latest version (active OR withdrawal), None when a theory was never set."""
+
+    present: bool
+    withdrawn: bool
+    current: CaseTheoryVersionView | None
 
 
 @dataclass(frozen=True)
@@ -2559,3 +2583,103 @@ class SqlStore:
                     seq, actor if actor is not None else "«illisible»", action,
                     detail if detail is not None else "«illisible»", chain, ts.isoformat()))
         return AuditTrail(entries, verified)
+
+    # ── Story 4.1: the optional case theory — versioned, audited, referenceable ────────────────
+    def _version_view(self, row: CaseTheoryVersion) -> CaseTheoryVersionView:
+        return CaseTheoryVersionView(
+            version_no=row.version_no, version_id=row.id, text=row.text,
+            actor=row.actor, created_at=row.created_at)
+
+    def _case_theory_state(self, latest: CaseTheoryVersion | None) -> CaseTheory:
+        """The current state derived from the latest version row: none set → absent; a NULL-text
+        latest → withdrawn; else present."""
+        if latest is None:
+            return CaseTheory(present=False, withdrawn=False, current=None)
+        view = self._version_view(latest)
+        if latest.text is None:  # a withdrawal version
+            return CaseTheory(present=False, withdrawn=True, current=view)
+        return CaseTheory(present=True, withdrawn=False, current=view)
+
+    def append_case_theory_version(
+        self, *, tenant: str, matter: str, actor: str, text: str | None
+    ) -> CaseTheory:
+        """The ONE owning use case (AD-37) for a case theory version — APPEND-ONLY (FR-37).
+        Normalises ``text`` ("" → None, a *withdrawal*); a NO-OP that writes neither a version nor
+        an audit entry when the text equals the current active/withdrawn state (as ``set_config``).
+        Otherwise appends ``version_no = prev + 1``, updates the denormalised
+        ``matter_scope.case_theory`` cache, and writes ONE audit entry
+        (``case_theory_written`` / ``case_theory_withdrawn``) ATOMIC with the version (AD-22 — both
+        commit or neither). The ``(tenant, matter, version_no)`` unique constraint makes a
+        concurrent double-write fail loudly and retry, never silently overwrite (AD-37 conditional
+        commit). Raises ``ValueError`` for an unknown matter. This method NEVER triggers any
+        recompute — its only effects are the version row, the cache update and the one audit entry
+        (the "re-rank is never automatic" guarantee; ranking does not exist yet)."""
+        normalized = (text or "").strip() or None
+        box: list[CaseTheory] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            ms = session.get(MatterScope, {"tenant": tenant, "matter": matter})
+            if ms is None:
+                raise ValueError("unknown matter")
+            latest = session.scalar(
+                select(CaseTheoryVersion)
+                .where(CaseTheoryVersion.tenant == tenant, CaseTheoryVersion.matter == matter)
+                .order_by(CaseTheoryVersion.version_no.desc())
+                .limit(1))
+            effective = latest.text if latest is not None else None
+            if effective == normalized:
+                box.append(self._case_theory_state(latest))  # no change — no version, no audit
+                return
+            version_no = (latest.version_no if latest is not None else 0) + 1
+            row = CaseTheoryVersion(
+                id=case_theory_version_id(tenant, matter, version_no, normalized),
+                tenant=tenant, matter=matter, version_no=version_no,
+                text=normalized, actor=actor, created_at=now)
+            session.add(row)
+            ms.case_theory = normalized  # the denormalised current-value cache tracks the latest
+            action = "case_theory_written" if normalized is not None else "case_theory_withdrawn"
+            self._append_audit(session, tenant, matter, actor, action, f"version={version_no}", now)
+            box.append(self._case_theory_state(row))
+
+        self._audited_tx(_work)
+        return box[-1]
+
+    def read_case_theory(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> CaseTheory | None:
+        """The current state of a matter's case theory — scope pre-filtered (AD-13). Returns None
+        when the matter is out of scope OR absent (indistinguishable — non-disclosing, FR-14);
+        a ``CaseTheory`` (possibly ``present=False``) when the matter's wall is held. Not audited
+        (a read; the writes are the audited acts, FR-37)."""
+        with self._sf() as session:
+            held = session.scalar(
+                select(MatterScope.matter).where(
+                    MatterScope.tenant == tenant, MatterScope.matter == matter,
+                    MatterScope.scope.in_(sorted(scopes))))
+            if held is None:
+                return None
+            latest = session.scalar(
+                select(CaseTheoryVersion)
+                .where(CaseTheoryVersion.tenant == tenant, CaseTheoryVersion.matter == matter)
+                .order_by(CaseTheoryVersion.version_no.desc())
+                .limit(1))
+            return self._case_theory_state(latest)
+
+    def list_case_theory_versions(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> list[CaseTheoryVersionView] | None:
+        """The full readable history of a matter's case theory, ascending by ``version_no`` (FR-37
+        "retains previous versions readably") — scope pre-filtered the same way as
+        :meth:`read_case_theory`. Returns None when the matter is out of scope or absent."""
+        with self._sf() as session:
+            held = session.scalar(
+                select(MatterScope.matter).where(
+                    MatterScope.tenant == tenant, MatterScope.matter == matter,
+                    MatterScope.scope.in_(sorted(scopes))))
+            if held is None:
+                return None
+            rows = session.scalars(
+                select(CaseTheoryVersion)
+                .where(CaseTheoryVersion.tenant == tenant, CaseTheoryVersion.matter == matter)
+                .order_by(CaseTheoryVersion.version_no.asc())).all()
+            return [self._version_view(r) for r in rows]

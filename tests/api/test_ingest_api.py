@@ -617,3 +617,25 @@ def test_upload_persists_the_optional_case_theory(tmp_path: Path, monkeypatch) -
         theories = {ms.matter: ms.case_theory for ms in s.scalars(select(MatterScope)).all()}
     assert theories["avec"] == "contestation d'un licenciement pour insuffisance"
     assert theories["sans"] is None  # skipped blocks nothing and leaves NULL
+
+
+def test_upload_versions_and_audits_the_case_theory_at_import(tmp_path: Path, monkeypatch) -> None:
+    # Story 4.1: a case theory stated at import (FR-37 "writable at import") is versioned + audited
+    # from version 1 through the ONE owning use case, at upload time.
+    from sqlalchemy import select
+
+    from apx.adapters.store_postgres.models import AuditRecord, CaseTheoryVersion
+    store = _prepare(tmp_path, monkeypatch)
+    store.create_user("t", "me@cab.fr", "pw", "Me Durand", {"wall-A"})
+    with TestClient(app) as c:
+        _login(c, "me@cab.fr")
+        _run_upload(store, c.post(
+            "/api/ingest-upload",
+            data={"matter": "avec", "scope": "wall-A", "custodian": "M. Martin",
+                  "case_theory": "théorie de la cause"},
+            files=[("files", ("a.txt", b"x", "text/plain"))]))
+    with store._sf() as s:
+        versions = s.scalars(select(CaseTheoryVersion)).all()
+        actions = list(s.scalars(select(AuditRecord.action).where(AuditRecord.tenant == "t")))
+    assert [(v.version_no, v.text) for v in versions] == [(1, "théorie de la cause")]
+    assert "case_theory_written" in actions

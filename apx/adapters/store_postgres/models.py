@@ -17,6 +17,7 @@ from sqlalchemy import (
     CheckConstraint,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     String,
@@ -281,6 +282,43 @@ class MatterScope(Base):
     case_theory: Mapped[str | None] = mapped_column(
         EncryptedText("matter_scope.case_theory"), nullable=True
     )
+
+
+class CaseTheoryVersion(Base):
+    """One version of a *matter*'s optional case theory (FR-37, Story 4.1) — the versioned,
+    audited, referenceable model that SUPERSEDES the single ``matter_scope.case_theory`` column
+    (now a denormalised current-value cache). APPEND-ONLY: a rewrite is a NEW row; a *withdrawal*
+    (FR-37's "delete") is a new row with ``text = NULL``; a prior version is NEVER updated or
+    deleted (AD-7 — asserted by the ``case_theory_version_is_append_only`` structural check). The
+    version + its audit entry are written by exactly one owning use case (AD-37).
+
+    ``version_no`` is a per-matter monotonic counter — the ordering AD-49 wants for the history
+    (the audit ``seq`` carries the record's monotonic order). ``id`` is the deterministic
+    ``sha256(tenant \\x00 matter \\x00 version_no \\x00 text)`` — a stable, collision-free identity
+    a future *ranking version* names (AD-23). ``text`` (the legal strategy) and ``actor`` (a
+    person's display name) are confidential → application-encrypted at rest (AD-31). No cascade FK
+    (AD-7): a *matter* is retired, never hard-deleted out from under its case-theory history."""
+
+    __tablename__ = "case_theory_version"
+    __table_args__ = (
+        # a per-matter monotonic version_no; a concurrent double-write collides here and fails
+        # loudly (AD-37 conditional commit), never a silent overwrite. Also indexes (tenant,matter).
+        UniqueConstraint("tenant", "matter", "version_no", name="uq_case_theory_version"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+    )
+
+    # sha256(tenant \0 matter \0 version_no \0 text) — the referent a ranking version names (AD-23)
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)  # per-matter, 1-based
+    # NULL text == a withdrawal version (the append-only "delete", FR-37). Confidential → encrypted.
+    text: Mapped[str | None] = mapped_column(
+        EncryptedText("case_theory_version.text"), nullable=True)
+    actor: Mapped[str] = mapped_column(EncryptedText("case_theory_version.actor"), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class ImportJob(Base):

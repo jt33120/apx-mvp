@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-08-04  # story 3-5 COMPLETE (the pièce viewer, 3-5a..3-5d-2). Epic 3 in-progress; 3-1..3-5 done
+last_updated: 2026-08-04  # Epic 4: 4-1 (the optional case theory) DONE. Epic 3 3-1..3-5 done
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -78,8 +78,8 @@ development_status:
   3-5d-1-the-viewer-surface: done  # React route + chrome + 4 states; scan page-image+OCR box+passage, office/msg sandboxed HTML, image, honest fallback, non-disclosing 404, audit surfaced; workflow-review 5-confirmed/8-refuted, fixed; tsc+vite green
   3-5d-2-born-digital-pdf-and-image-region: done  # born-digital PDF inline via PDF.js (offline worker + text-layer passage highlight); CSP extended (fixes 3.5d-1 image blob too); workflow-review 5-confirmed/9-refuted, fixed; image region box N/A (no position source)
   epic-3-retrospective: optional
-  epic-4: backlog
-  4-1-the-optional-case-theory: backlog
+  epic-4: in-progress
+  4-1-the-optional-case-theory: done  # the versioned/audited/referenceable case theory + append-only gate (Julian, 2026-08-04)
   4-2-the-relevance-judgement-a-cascade-cheap-filters-first: backlog
   4-3-the-ranked-order-and-the-reproducible-ranking-version: backlog
   4-4-confidence-is-derived-never-self-reported: backlog

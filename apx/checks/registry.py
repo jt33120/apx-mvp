@@ -14,6 +14,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from apx.checks import (
+    case_theory_ownership,
     configuration,
     credential_storage,
     encryption,
@@ -115,6 +116,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     renders_sanitized.rendered_html_is_sanitized,
     # story 2.6 — the failure register: one owning module per state transition (AD-37).
     register_ownership.register_state_written_once,
+    # story 4.1 — the case theory: the version table is append-only, one owning module (AD-37/AD-7).
+    case_theory_ownership.case_theory_version_is_append_only,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

@@ -13,6 +13,7 @@ would make every historical row fail closed on read (the type refuses a non-ciph
 from __future__ import annotations
 
 import hashlib
+from datetime import UTC, datetime
 
 from sqlalchemy import Connection, text
 
@@ -42,6 +43,9 @@ ENCRYPTED_COLUMNS = [
     ("user_account", "id", "mfa_secret", "user_account.mfa_secret"),
     ("recall_review", "id", "reviewer", "recall_review.reviewer"),
     ("matter_scope", ("tenant", "matter"), "case_theory", "matter_scope.case_theory"),
+    # Story 4.1: the versioned case theory — text (legal strategy) + actor (display name) encrypted.
+    ("case_theory_version", "id", "text", "case_theory_version.text"),
+    ("case_theory_version", "id", "actor", "case_theory_version.actor"),
     ("import_job", "id", "actor", "import_job.actor"),
     ("import_job", "id", "custodian", "import_job.custodian"),
     ("import_job", "id", "case_theory", "import_job.case_theory"),
@@ -58,6 +62,16 @@ def link_id(piece_id: str, value: str) -> str:
     same (piece, value) is one row, and a concurrent double-insert collides on this PK (absorbed,
     never a duplicate). The store computes the SAME id at write time, so this and runtime agree."""
     return hashlib.sha256(f"{piece_id}\x00{value}".encode()).hexdigest()
+
+
+def case_theory_version_id(tenant: str, matter: str, version_no: int, text: str | None) -> str:
+    """The deterministic identity of one case theory version (Story 4.1, FR-37):
+    ``sha256(tenant \x00 matter \x00 version_no \x00 text)``. ``version_no`` makes two identical
+    texts distinct; a withdrawal (``text`` None) hashes the empty string. This is the referent a
+    future *ranking version* names (AD-23); the store computes the SAME id at write time, so this
+    backfill and the runtime agree."""
+    return hashlib.sha256(
+        f"{tenant}\x00{matter}\x00{version_no}\x00{text or ''}".encode()).hexdigest()
 
 
 def _pk_cols(pk: str | tuple[str, ...]) -> tuple[str, ...]:
@@ -195,6 +209,45 @@ def revert_piece_links_to_scalar(conn: Connection) -> int:
         stored = cipher.encrypt(plain, aad="piece.custodian") if cipher else plain
         conn.execute(
             text("UPDATE piece SET custodian = :v WHERE id = :k"), {"v": stored, "k": piece_id})
+        written += 1
+    return written
+
+
+def backfill_case_theory_versions(conn: Connection) -> int:
+    """Seed ``case_theory_version`` version 1 from each ``matter_scope`` row's current
+    ``case_theory`` (Story 4.1, migration ``0023``). The text is re-encrypted under the version
+    column's AAD (an ``EncryptedText`` AAD binds a ciphertext to its column, so a verbatim copy
+    would fail closed on read). Key-free on an EMPTY store (a fresh DB / the CI
+    upgrade→downgrade→upgrade cycle, which runs without ``APX_ENCRYPTION_KEY``): the cipher is
+    loaded ONLY when a ciphertext value is present. Idempotent: a matter that already carries a
+    version is skipped, so a re-run is a no-op. The backfilled version is authored by
+    ``system:backfill`` at migration time — the original authoring timestamp is not recoverable
+    from a single column. Returns the rows written."""
+    rows = conn.execute(text(
+        "SELECT tenant, matter, case_theory FROM matter_scope WHERE case_theory IS NOT NULL")).all()
+    if not rows:
+        return 0
+    cipher = _cipher_if(any(is_ciphertext(r.case_theory) for r in rows))
+    now = datetime.now(UTC)
+    written = 0
+    for row in rows:
+        if conn.execute(
+            text("SELECT 1 FROM case_theory_version WHERE tenant = :t AND matter = :m"),
+            {"t": row.tenant, "m": row.matter},
+        ).first():
+            continue  # idempotent — a matter already versioned is left untouched
+        plain = cipher.decrypt(row.case_theory, aad="matter_scope.case_theory") \
+            if (cipher and is_ciphertext(row.case_theory)) else row.case_theory
+        vid = case_theory_version_id(row.tenant, row.matter, 1, plain)
+        stored_text = cipher.encrypt(plain, aad="case_theory_version.text") if cipher else plain
+        stored_actor = cipher.encrypt("system:backfill", aad="case_theory_version.actor") \
+            if cipher else "system:backfill"
+        conn.execute(
+            text("INSERT INTO case_theory_version "
+                 "(id, tenant, matter, version_no, text, actor, created_at) "
+                 "VALUES (:id, :t, :m, 1, :txt, :actor, :ts)"),
+            {"id": vid, "t": row.tenant, "m": row.matter, "txt": stored_text,
+             "actor": stored_actor, "ts": now})
         written += 1
     return written
 

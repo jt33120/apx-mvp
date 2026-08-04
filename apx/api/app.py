@@ -588,6 +588,12 @@ def _persist(
     except ScopeConflict as exc:
         # a re-ingest may not move a matter's wall — that is the admin re-scope path (409)
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # Story 4.1: a case theory stated at import is a versioned, audited act (FR-37) — the matter now
+    # exists, so record it through the ONE owning use case. Idempotent: a re-ingest with an
+    # unchanged theory adds no version; this never triggers a re-rank (ranking is a later act).
+    if case_theory is not None:
+        store.append_case_theory_version(
+            tenant=tenant, matter=matter, actor=actor, text=case_theory)
     return True
 
 
@@ -1159,6 +1165,12 @@ async def ingest_upload(
             case_theory=theory, audit=False)
     except ScopeConflict as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
+    # Story 4.1: the case theory stated at upload is versioned + audited NOW (FR-37 "writable at
+    # import") — the matter exists (just created above), so version 1 is recorded through the ONE
+    # owning use case before the bytes are spooled. Idempotent on a re-upload with the same theory.
+    if theory is not None:
+        store.append_case_theory_version(
+            tenant=ident.tenant, matter=matter, actor=ident.actor, text=theory)
 
     # Spool the uploaded bytes to a durable staging dir keyed by the job id, so a restartable
     # worker can read them after the request returns (the request's temp dir would not survive).
@@ -1642,6 +1654,103 @@ def read_audit(matter: str, ident: Identity = Depends(current_identity)) -> Audi
         ],
         verified=trail.verified,
     )
+
+
+# ── Story 4.1: the optional case theory — versioned, audited, scope-checked ────────────────────
+_MATTER_ABSENT = "dossier introuvable"  # ONE message for out-of-scope AND absent — non-disclosing
+
+
+class CaseTheoryVersionOut(BaseModel):
+    version_no: int
+    version_id: str
+    text: str | None  # null for a withdrawal version
+    withdrawn: bool
+    actor: str
+    timestamp: datetime
+
+
+class CaseTheoryOut(BaseModel):
+    matter: str
+    present: bool     # an active (non-withdrawn) theory exists
+    withdrawn: bool   # the latest version is a withdrawal
+    current: CaseTheoryVersionOut | None
+
+
+class CaseTheoryIn(BaseModel):
+    text: str  # the lawyer's own words; "" (or whitespace) is a withdrawal (FR-37)
+
+
+class CaseTheoryHistoryOut(BaseModel):
+    matter: str
+    versions: list[CaseTheoryVersionOut]
+
+
+def _version_out(v: object) -> CaseTheoryVersionOut:
+    return CaseTheoryVersionOut(
+        version_no=v.version_no, version_id=v.version_id, text=v.text,
+        withdrawn=v.text is None, actor=v.actor, timestamp=v.created_at)
+
+
+def _case_theory_out(matter: str, state: object) -> CaseTheoryOut:
+    return CaseTheoryOut(
+        matter=matter, present=state.present, withdrawn=state.withdrawn,
+        current=_version_out(state.current) if state.current is not None else None)
+
+
+@app.get("/api/matters/{matter}/case-theory", response_model=CaseTheoryOut)
+def get_case_theory(matter: str, ident: Identity = Depends(current_identity)) -> CaseTheoryOut:
+    """The current case theory for a matter (FR-37) — its text, version and author, or `present`
+    false when none is set / it was withdrawn. A matter whose wall the caller does not hold is
+    indistinguishable from an absent one: the same non-disclosing 404 (FR-14). Not an audited read
+    (the writes below are the audited acts)."""
+    store = _require_store()
+    state = store.read_case_theory(tenant=ident.tenant, matter=matter, scopes=ident.scopes)
+    if state is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return _case_theory_out(matter, state)
+
+
+@app.put("/api/matters/{matter}/case-theory", response_model=CaseTheoryOut)
+def put_case_theory(
+    matter: str, body: CaseTheoryIn, ident: Identity = Depends(current_identity)
+) -> CaseTheoryOut:
+    """Write or rewrite the case theory (FR-37) — a new version, recorded in the audit record with
+    actor and timestamp; an unchanged text is an idempotent no-op. Requires the matter's wall
+    (else the same non-disclosing 404). Never triggers a re-rank (ranking is a later, explicit
+    act)."""
+    store = _require_store()
+    if store.read_case_theory(tenant=ident.tenant, matter=matter, scopes=ident.scopes) is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)  # non-disclosing wall gate
+    state = store.append_case_theory_version(
+        tenant=ident.tenant, matter=matter, actor=ident.actor, text=body.text)
+    return _case_theory_out(matter, state)
+
+
+@app.delete("/api/matters/{matter}/case-theory", response_model=CaseTheoryOut)
+def delete_case_theory(matter: str, ident: Identity = Depends(current_identity)) -> CaseTheoryOut:
+    """Withdraw the case theory (FR-37 failure path) — an APPEND-ONLY act: a withdrawal version is
+    recorded, prior versions remain readable, nothing is hard-deleted (AD-7). Requires the matter's
+    wall."""
+    store = _require_store()
+    if store.read_case_theory(tenant=ident.tenant, matter=matter, scopes=ident.scopes) is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    state = store.append_case_theory_version(
+        tenant=ident.tenant, matter=matter, actor=ident.actor, text=None)
+    return _case_theory_out(matter, state)
+
+
+@app.get("/api/matters/{matter}/case-theory/versions", response_model=CaseTheoryHistoryOut)
+def case_theory_history(
+    matter: str, ident: Identity = Depends(current_identity)
+) -> CaseTheoryHistoryOut:
+    """The full readable history of the matter's case theory (FR-37 "retains previous versions
+    readably"), ascending by version — requires the matter's wall (else non-disclosing 404)."""
+    store = _require_store()
+    versions = store.list_case_theory_versions(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes)
+    if versions is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return CaseTheoryHistoryOut(matter=matter, versions=[_version_out(v) for v in versions])
 
 
 def _register_out(e: object) -> RegisterEntryOut:

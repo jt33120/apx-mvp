@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from apx.checks import (
+    case_theory_ownership,
     configuration,
     credential_storage,
     encryption,
@@ -443,6 +444,10 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("register-state-written-once", "FR-5", "AD-37", "register state written only in the store",
        register_ownership.register_state_written_once,
        "Failure.resolution_state writes across apx/**"),
+    # ── story 4.1: the case theory — the version table is append-only, one owner (AD-37/AD-7) ───
+    _p("case-theory-append-only", "FR-37", "AD-37", "case theory versions append-only, one owner",
+       case_theory_ownership.case_theory_version_is_append_only,
+       "CaseTheoryVersion construction + UPDATE/DELETE of case_theory_version across apx/**"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),
