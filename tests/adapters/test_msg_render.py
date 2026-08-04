@@ -90,8 +90,8 @@ def test_spool_dir_prefers_the_encrypted_data_volume(
         monkeypatch: pytest.MonkeyPatch, tmp_path: object) -> None:
     import tempfile
 
-    from apx.adapters.render_html.msg import _spool_dir
+    from apx.adapters.spool import spool_dir
     monkeypatch.setenv("APX_DATA_PATH", str(tmp_path))
-    assert _spool_dir() == str(tmp_path)                  # decrypted plaintext stays on the volume
+    assert spool_dir() == str(tmp_path)                   # decrypted plaintext stays on the volume
     monkeypatch.delenv("APX_DATA_PATH", raising=False)
-    assert _spool_dir() == tempfile.gettempdir()          # dev/test fallback only
+    assert spool_dir() == tempfile.gettempdir()           # dev/test fallback only

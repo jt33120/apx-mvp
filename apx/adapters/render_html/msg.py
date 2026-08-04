@@ -23,18 +23,11 @@ import tempfile
 from pathlib import Path
 
 from apx.adapters.render_html.renderer import _rendered
+from apx.adapters.spool import spool_dir
 from apx.core.ports.render import RenderedDocument
 
 # Lawyer-language header labels (FR); the worker returns the raw values, escaped + sanitised here.
 _HEADER_LABELS = (("from", "De"), ("to", "À"), ("cc", "Cc"), ("date", "Date"), ("subject", "Objet"))
-
-
-def _spool_dir() -> str:
-    """Decrypted ``.msg`` plaintext must transit the ENCRYPTED data volume (AD-31), not the system
-    temp (a possibly-unencrypted mount) — matching ``FilesystemOriginalStore``'s on-volume temp.
-    Falls back to the system temp only when ``APX_DATA_PATH`` is unset (dev/test). Read per render,
-    so the cached renderer honours the current environment."""
-    return os.environ.get("APX_DATA_PATH", "").strip() or tempfile.gettempdir()
 
 
 class MsgRenderer:
@@ -58,7 +51,7 @@ class MsgRenderer:
         # unguarded raise/500, never unsanitised HTML.
         tmp: str | None = None
         try:
-            fd, tmp = tempfile.mkstemp(suffix=".msg", dir=_spool_dir())
+            fd, tmp = tempfile.mkstemp(suffix=".msg", dir=spool_dir())
             with os.fdopen(fd, "wb") as fh:
                 fh.write(data)
             struct = structured_msg(Path(tmp))

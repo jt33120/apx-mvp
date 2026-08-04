@@ -47,6 +47,7 @@ from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.originals_fs import FilesystemOriginalStore
 from apx.adapters.render_html import CompositePieceRenderer, HtmlPieceRenderer, MsgRenderer
+from apx.adapters.render_image import Pdf2ImageRasterizer
 from apx.adapters.store_postgres.admission import admit
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.queue import enqueue_import
@@ -57,6 +58,7 @@ from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.read.deterministic import MovingPopulation, search_exhaustive
 from apx.core.app.read.piece import open_piece
 from apx.core.app.read.render import render_piece
+from apx.core.app.read.scan import read_scan_page
 from apx.core.app.read.semantic import search_semantic
 from apx.core.app.triage import triage_pieces
 from apx.core.domain import capacity
@@ -206,6 +208,14 @@ def _piece_renderer() -> CompositePieceRenderer:
     worker (MsgRenderer); any other format falls through to the original. A composition-root
     singleton, like `_embedder`/`_original_store`. All members render inside the tenant boundary."""
     return CompositePieceRenderer([HtmlPieceRenderer(), MsgRenderer()])
+
+
+@lru_cache(maxsize=1)
+def _page_rasterizer() -> Pdf2ImageRasterizer:
+    """The scanned-PDF page rasteriser (Story 3.5c-4) — stateless, built once. Rasterises one page
+    at a time at the OCR dpi (so the image aligns with the stored word boxes), on the box (poppler),
+    inside the tenant boundary. A composition-root singleton, like `_piece_renderer`."""
+    return Pdf2ImageRasterizer()
 
 
 def _int_env(name: str, default: int) -> int:
@@ -1434,6 +1444,23 @@ def _render_bound() -> int:
     return _int_env("APX_PIECE_RENDER_MAX_BYTES", 25 * 1024 * 1024)
 
 
+def _scan_bound() -> int:
+    """The scanned-PDF page-render byte bound (config-as-data via env, Story 3.5c-4). Well above the
+    inline bound: rasterising reads the whole file to produce ONE page, so a many-page scan renders
+    page-by-page while a huge archive is offered as the original. Protects the server's memory."""
+    return _int_env("APX_SCAN_RENDER_MAX_BYTES", 128 * 1024 * 1024)
+
+
+def _scan_pixels_bound() -> int:
+    """The per-page PIXEL bound (config-as-data via env, Story 3.5c-4). A tiny PDF can declare a
+    giant page whose raster is GBs though its file is under the byte bound (a *pixel bomb*), so a
+    page whose ``width × height`` (from the stored OCR layout) exceeds this is offered as the
+    original before poppler is invoked. Default 100 Mpx — generous for real scans (A0 @ 200 dpi ≈
+    64 Mpx),
+    refusing the crafted large-format bombs (60×60 in @ 200 dpi ≈ 144 Mpx)."""
+    return _int_env("APX_SCAN_MAX_PIXELS", 100_000_000)
+
+
 def _content_disposition(name: str) -> str:
     """A safe RFC 6266 ``Content-Disposition`` that PRESERVES a non-ASCII (accented FR/LU) name via
     ``filename*``, with an ASCII fallback for old clients. Both legs are injection-safe: the ASCII
@@ -1535,6 +1562,58 @@ def get_piece_render(
     return PieceRenderOut(
         piece_id=outcome.piece_id, renderable=True, format=doc.format, title=doc.title,
         html=doc.html, truncated=doc.truncated)
+
+
+@app.get("/api/pieces/{piece_id}/page/{page}")
+def get_piece_page(
+    piece_id: str, page: int, ident: Identity = Depends(current_identity)
+) -> Response:
+    """Rasterise page `page` (0-indexed) of an in-scope scanned PDF to a PNG within the tenant
+    boundary (Story 3.5c-4). Scope pre-filter first (AD-13/14): out-of-scope OR absent → 404
+    (existence not disclosed). `/page` serves the document's READABLE content, so — like `/original`
+    and `/render` — a served page is an AUDITED open (FR-45). It requires a stored OCR layer (a
+    scan): a born-digital / no-layout PDF, an out-of-range or pixel-bomb page, over the scan byte
+    bound, or a missing/tampered blob → 409 (in-scope but not served here — the client renders the
+    original), never a 500 and never an unaudited read. `image/png` + nosniff + no-store (AD-29)."""
+    store = _require_store()
+    outcome = read_scan_page(
+        tenant=ident.tenant, scopes=ident.scopes, piece_id=piece_id, page=page, reader=store,
+        originals=_original_store(), rasterizer=_page_rasterizer(), max_bytes=_scan_bound(),
+        max_pixels=_scan_pixels_bound())
+    if outcome is None:
+        raise HTTPException(status_code=404, detail=_PIECE_ABSENT)  # discloses nothing
+    if outcome.png is None:
+        raise HTTPException(status_code=409, detail=outcome.reason)  # in-scope — offer the original
+    store.audit_piece_open(tenant=ident.tenant, matter=outcome.matter, actor=ident.actor,
+                           piece_id=outcome.piece_id)  # serving readable content is an audited open
+    return Response(
+        content=outcome.png, media_type="image/png",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+@app.get("/api/pieces/{piece_id}/layout")
+def get_piece_layout(piece_id: str, ident: Identity = Depends(current_identity)) -> Response:
+    """Serve the stored OCR layout (page dims + word boxes + confidence + dpi + page count) for an
+    in-scope scanned pièce — the overlay coordinates the viewer draws over the page images (Story
+    3.5c-1/c-4). Scope pre-filter first: out-of-scope, absent, OR no layout (a born-digital / no-OCR
+    pièce) → the SAME non-disclosing 404; a tampered blob → 409. The stored, authenticated JSON is
+    served as-is (no re-serialisation). The layout is overlay METADATA (word coordinates), not the
+    readable page content, so it is NOT itself audited — the audited open is the served `/page`
+    content (FR-45). `application/json` + nosniff + `Cache-Control: no-store` (AD-29)."""
+    view = open_piece(tenant=ident.tenant, scopes=ident.scopes, piece_id=piece_id,
+                      reader=_require_store())
+    if view is None:
+        raise HTTPException(status_code=404, detail=_PIECE_ABSENT)
+    try:
+        layout = _original_store().open(ident.tenant, view.content_hash, kind="ocr-layout")
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=_PIECE_ABSENT) from None  # no OCR layout
+    except DecryptionError:
+        raise HTTPException(
+            status_code=409, detail="la couche OCR de cette pièce n'est pas disponible") from None
+    return Response(
+        content=layout, media_type="application/json",
+        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
 
 
 @app.get("/api/matters/{matter}/audit", response_model=AuditTrailOut)
