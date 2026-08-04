@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-07-30  # story 3-4 done (truth-status surface, full-stack). Epic 3 in-progress
+last_updated: 2026-08-04  # story 3-5d-1 done (React viewer surface). Epic 3 in-progress; 3-5d-2 (PDF.js) remains
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -74,7 +74,9 @@ development_status:
   3-5c-2-server-side-renderers: done  # .docx/.xlsx -> nh3-sanitized HTML; render port + /render endpoint + sanitization gate; +mammoth+nh3 (3-reviewer SHIP)
   3-5c-3-msg-renderer: done  # .msg structured (headers/body/thread) reusing the port; GPL-isolated worker render mode (3-reviewer SHIP)
   3-5c-4-scan-page-image-overlay: done  # scanned-PDF page image + OCR overlay (consumes 3.5c-1 layout); workflow-review SHIP-w-fixes
-  3-5d-the-viewer-surface: backlog  # React screen, the 4 states, the large-file failure path
+  3-5d-the-viewer-surface: in-progress  # React viewer; decomposed into d-1 (surface) + d-2 (PDF.js) — full-fidelity build
+  3-5d-1-the-viewer-surface: done  # React route + chrome + 4 states; scan page-image+OCR box+passage, office/msg sandboxed HTML, image, honest fallback, non-disclosing 404, audit surfaced; workflow-review 5-confirmed/8-refuted, fixed; tsc+vite green
+  3-5d-2-born-digital-pdf-and-image-region: backlog  # born-digital PDF inline via PDF.js (offline worker + text-layer passage) + image region box — the closer
   epic-3-retrospective: optional
   epic-4: backlog
   4-1-the-optional-case-theory: backlog

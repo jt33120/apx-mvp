@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Link } from "react-router";
 import {
   ApiError, changePassword, createUser, exhaustiveExportUrl, grantScope, importStatus, ingestUpload,
   judgeMatter, listMatters, listUsers, login, logout, me, readAudit, readLabels, readTriage,
@@ -588,8 +589,10 @@ function SuggestivePanel({ q, res }: { q: string; res: SuggestiveResult }) {
           <div className="name">
             <span className="apx-num" style={{ color: "var(--apx-ink-3)" }}>{i + 1}ᵉ</span>{" "}
             {r.piece_id}
-            <span className="apx-hint" title="Le viewer ouvre au passage — Story 3.5"
-              style={{ marginLeft: ".5rem" }}>ouvrir au passage →</span>
+            <Link className="apx-open" style={{ marginLeft: ".5rem" }}
+              to={`/piece/${encodeURIComponent(r.piece_id)}?passage=${encodeURIComponent(q)}`}>
+              ouvrir au passage →
+            </Link>
           </div>
           <div className="meta">
             <span className="apx-prox" title="proximité relative">
@@ -690,8 +693,10 @@ function ExhaustivePanel({ q, res }: { q: string; res: ExhaustiveResult }) {
         <div key={r.piece_id} className="apx-hit">
           <div className="name">
             {r.piece_id} <span className="apx-hint">· {r.matter}</span>
-            <span className="apx-hint" title="Le viewer ouvre au passage — Story 3.5"
-              style={{ marginLeft: ".5rem" }}>ouvrir au passage →</span>
+            <Link className="apx-open" style={{ marginLeft: ".5rem" }}
+              to={`/piece/${encodeURIComponent(r.piece_id)}?passage=${encodeURIComponent(q)}`}>
+              ouvrir au passage →
+            </Link>
           </div>
           <div className="snip">{r.snippet}</div>
         </div>

@@ -242,3 +242,61 @@ export async function recallReview(
   if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }
+
+// ── Story 3.5d — the pièce viewer ─────────────────────────────────────────────────────────
+// Reading a pièce is the job: the server RENDERS each format inside the tenant boundary (3.5a–c),
+// and the client reads these endpoints and NEVER sends a pièce byte to a third party. Out-of-scope
+// OR absent is always the SAME non-disclosing 404 (FR-14/FR-44), carried on ApiError.status so the
+// viewer can tell a denial (404) from a degraded blob (409). `filename`/`title` are UNTRUSTED text
+// metadata — render as text nodes, never as HTML.
+
+export type PieceMeta = {
+  piece_id: string; matter: string; filename: string; media_kind: string;
+  ocr: boolean; byte_size: number | null; renderable_inline: boolean;
+};
+export type PieceRender = {
+  piece_id: string; renderable: boolean; format: string | null;
+  title: string | null; html: string | null; truncated: boolean; reason: string | null;
+};
+// The stored OCR layout (kind=ocr-layout) served by /layout — compact keys mirror the at-rest blob:
+// t=text, l=left, o=top, w=width, h=height, c=confidence (all in the page IMAGE's pixel space).
+export type OcrWord = { t: string; l: number; o: number; w: number; h: number; c: number };
+export type OcrPage = { width: number; height: number; words: OcrWord[] };
+export type OcrLayout = { dpi: number; pages: OcrPage[] };
+
+// The viewer's metadata peek — a peek, NOT an audited read (the content fetch is the audited open).
+// 404 = out-of-scope OR absent (the same, non-disclosing) → surfaces as ApiError(404).
+export async function getPiece(pieceId: string): Promise<PieceMeta> {
+  const res = await fetch(`/api/pieces/${encodeURIComponent(pieceId)}`);
+  if (!res.ok) return fail(res);
+  return res.json();
+}
+
+// Render an office/email pièce to SANITISED inline HTML (audited when renderable). `renderable:false`
+// (over the bound, an unhandled format, an unavailable blob) → the client offers the original.
+export async function getRender(pieceId: string): Promise<PieceRender> {
+  const res = await fetch(`/api/pieces/${encodeURIComponent(pieceId)}/render`);
+  if (!res.ok) return fail(res);
+  return res.json();
+}
+
+// The stored OCR layout for a SCAN (the overlay coordinates). After getPiece has passed (in scope),
+// a 404 means "not a scan" (a born-digital / non-OCR pièce) → null; a 409 (tampered) throws so the
+// viewer degrades to offer-the-original.
+export async function getLayout(pieceId: string): Promise<OcrLayout | null> {
+  const res = await fetch(`/api/pieces/${encodeURIComponent(pieceId)}/layout`);
+  if (res.status === 404) return null;
+  if (!res.ok) return fail(res);
+  return res.json();
+}
+
+// The retained ORIGINAL bytes — fetching this IS the audited open (server-side). Same-origin; used as
+// an <a download> for the fallback and as the blob source for an inline image.
+export function pieceOriginalUrl(pieceId: string): string {
+  return `/api/pieces/${encodeURIComponent(pieceId)}/original`;
+}
+
+// One rasterised PAGE image of a scan (0-indexed). Fetching a page is an audited serve (server-side).
+export function piecePageUrl(pieceId: string, page: number): string {
+  return `/api/pieces/${encodeURIComponent(pieceId)}/page/${page}`;
+}
