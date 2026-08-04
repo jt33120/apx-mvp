@@ -285,6 +285,9 @@ The configuration keys (each editable as data, no redeploy):
 | `taxonomy` | list | `[]` | the tenant's classification taxonomy (seeded at provisioning) |
 | `off_corpus_refusal_enabled` | bool | `true` | the honest "not in the corpus" refusal (AD-20) — **on by default** |
 | `cascade_stage3_max_share` | float | `0.5` | the ceiling on the share of a matter reaching the LLM (AD-18) |
+| `cascade_uncertain_low` | float | `0.35` | the stage-2 score at/below which a pièce is confident-discard; between this and `cascade_uncertain_high` is the uncertain band the LLM judges (FR-38/AD-18). Value awaits Epic-4 gold tuning. |
+| `cascade_uncertain_high` | float | `0.65` | the stage-2 score at/above which a pièce is confident-relevant (FR-38/AD-18); must exceed `cascade_uncertain_low` |
+| `cascade_calibration_sample` | int | `20` | confident-band pièces sampled into the LLM stage per run so the cascade's calibration is measurable (FR-38/AD-18) — a mandatory sample |
 | `similarity_threshold` | float | `0.3` | the minimum cosine similarity a semantic (suggestive) result must meet, recorded on every result set (FR-12/AD-20); a default of `1.0` would disable retrieval |
 | `import_unit_max_bytes` | int | `209715200` | the per-unit size ceiling above which an import unit is `resource-exhausted` rather than read whole into memory (AD-17) |
 | `import_max_attempts` | int | `3` | attempts after which a unit that keeps killing the worker is quarantined and the job proceeds (AD-17) |

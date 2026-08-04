@@ -259,6 +259,39 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         preserves_guarantee=lambda v: v < 1.0,
         affects_retrieval=True,
     ),
+    # ── the relevance-cascade stage-2 band boundaries (Story 4.2, FR-38/AD-18): config-as-data.
+    # Stage 2 scores each representative pièce (cosine to the case-theory vector) and bands it:
+    # score ≥ HIGH → confident-relevant, ≤ LOW → confident-discard, between → the UNCERTAIN band the
+    # LLM judges. LOW < HIGH is asserted where the config is read (a cross-key relation a single-key
+    # predicate cannot express). The VALUES await the Epic-4 gold-set tuning. ──
+    ConfigKey(
+        "cascade_uncertain_low", "float", 0.35,
+        governs="the stage-2 score at/below which a pièce is confident-discard; between this and "
+                "cascade_uncertain_high is the uncertain band the LLM judges (FR-38/AD-18)",
+        valid=lambda v: -1.0 <= v <= 1.0,  # a cosine threshold
+        # DEFAULT keeps an interior band (not collapsed onto a cosine extreme, which would band
+        # everything one way and defeat the cascade's cost guarantee).
+        preserves_guarantee=lambda v: -1.0 < v < 1.0,
+        affects_retrieval=True,
+    ),
+    ConfigKey(
+        "cascade_uncertain_high", "float", 0.65,
+        governs="the stage-2 score at/above which a pièce is confident-relevant; below it and "
+                "above cascade_uncertain_low is the uncertain band the LLM judges (FR-38/AD-18)",
+        valid=lambda v: -1.0 <= v <= 1.0,
+        preserves_guarantee=lambda v: -1.0 < v < 1.0,
+        affects_retrieval=True,
+    ),
+    ConfigKey(
+        "cascade_calibration_sample", "int", 20,
+        governs="the number of confident-band pièces sampled INTO the LLM stage per run so the "
+                "cascade's own calibration is measurable (FR-38/AD-18) — a mandatory sample",
+        valid=lambda v: 0 <= v <= 100_000,
+        # DEFAULT keeps the mandatory sample non-empty: calibration cannot be measured from zero
+        # confident-band judgements. A tenant may not silently switch it off.
+        preserves_guarantee=lambda v: v > 0,
+        affects_retrieval=True,
+    ),
 )
 
 # Keys provisioning may seed as part of establishing a tenant (AD-25 names the taxonomy).
@@ -320,6 +353,57 @@ def expansion_bounds(get: Callable[[str], Any]) -> ExpansionBounds:
         max_members=int(get("container_max_members")),
         max_expansion_ratio=int(get("container_max_expansion_ratio")),
         attachments_per_message_max=int(get("attachments_per_message_max")),
+    )
+
+
+@dataclass(frozen=True)
+class CascadeConfig:
+    """The relevance-cascade's stage boundaries (Story 4.2, FR-38/AD-18) as one value object, built
+    from a tenant's configuration-as-data — so the cascade orchestrator and any future ranking act
+    share exactly the configured numbers, never a hard-coded constant. ``defaults()`` gives the
+    freshly-provisioned values for callers with no tenant in hand (tests)."""
+
+    uncertain_low: float
+    uncertain_high: float
+    calibration_sample: int
+    stage3_max_share: float
+
+    def __post_init__(self) -> None:
+        # LOW < HIGH is a cross-key relation a single-key ``preserves_guarantee`` cannot express:
+        # a degenerate band (low ≥ high) would leave no uncertain band OR invert the confident
+        # bands. Refuse it here, where the config is assembled (AD-25: never a silent nonsense).
+        if not self.uncertain_low < self.uncertain_high:
+            raise ConfigError(
+                f"cascade band inverted: cascade_uncertain_low ({self.uncertain_low}) must be "
+                f"strictly below cascade_uncertain_high ({self.uncertain_high})")
+
+    def band_of(self, score: float) -> str:
+        """The stage-2 band a score falls in: 'confident-relevant' at/above HIGH, 'confident-
+        discard' at/below LOW, else 'uncertain' (the band the LLM judges)."""
+        if score >= self.uncertain_high:
+            return "confident-relevant"
+        if score <= self.uncertain_low:
+            return "confident-discard"
+        return "uncertain"
+
+    @classmethod
+    def defaults(cls) -> CascadeConfig:
+        return cls(
+            uncertain_low=default_of("cascade_uncertain_low"),
+            uncertain_high=default_of("cascade_uncertain_high"),
+            calibration_sample=default_of("cascade_calibration_sample"),
+            stage3_max_share=default_of("cascade_stage3_max_share"),
+        )
+
+
+def cascade_config(get: Callable[[str], Any]) -> CascadeConfig:
+    """Build the cascade's stage boundaries from a per-key getter (e.g.
+    ``lambda k: store.get_config(tenant, k)``)."""
+    return CascadeConfig(
+        uncertain_low=float(get("cascade_uncertain_low")),
+        uncertain_high=float(get("cascade_uncertain_high")),
+        calibration_sample=int(get("cascade_calibration_sample")),
+        stage3_max_share=float(get("cascade_stage3_max_share")),
     )
 
 
