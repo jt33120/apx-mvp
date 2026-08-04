@@ -140,6 +140,23 @@ def test_security_headers_are_present() -> None:
     assert "frame-ancestors 'none'" in r.headers["content-security-policy"]
 
 
+def test_csp_admits_the_offline_pdf_viewer_without_opening_egress() -> None:
+    """The Story 3.5d viewer runs the PDF.js worker + WASM decoders and shows decrypted pièces from
+    same-origin blobs — the CSP must admit exactly that, and NOTHING that lets a byte leave: no
+    external origin ever enters connect-src (the offline / tenant-boundary guarantee, AD-29)."""
+    with TestClient(app) as c:
+        csp = c.get("/api/health").headers["content-security-policy"]
+    # the minimum the in-browser viewer needs
+    assert "worker-src 'self' blob:" in csp          # the bundled PDF.js worker
+    assert "'wasm-unsafe-eval'" in csp               # PDF.js WASM image decoders (WASM only)
+    assert "img-src 'self' data: blob:" in csp       # a decrypted pièce from a same-origin blob
+    # and the guardrails that keep the promise: no eval, no external egress origin
+    assert "'unsafe-eval'" not in csp.replace("'wasm-unsafe-eval'", "")  # JS eval stays barred
+    assert "connect-src 'self'" in csp
+    assert "http://" not in csp and "https://" not in csp  # no external host anywhere in the policy
+    assert "default-src 'self'" in csp and "frame-ancestors 'none'" in csp
+
+
 def test_login_is_rate_limited_after_repeated_failures(tmp_path: Path, monkeypatch) -> None:
     store = _prepare(tmp_path, monkeypatch)
     store.create_user("t", "me@cab.fr", "right-pass", "Me", {"wall-A"})

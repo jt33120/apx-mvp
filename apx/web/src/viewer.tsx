@@ -4,6 +4,7 @@ import {
   ApiError, getLayout, getPiece, getRender, me, pieceOriginalUrl, piecePageUrl,
   type Identity, type OcrLayout, type OcrWord, type PieceMeta, type PieceRender,
 } from "./api";
+import { findPassagePage, openPdf, passageRectOnPage, type PdfDoc } from "./pdf";
 
 /** Story 3.5d-1 — the pièce viewer surface. A lawyer reads the ACTUAL document, at the passage the
  *  tool sent her to, inside the cabinet — no byte leaves for a third party (the render happens
@@ -80,13 +81,14 @@ function Viewer({ pieceId, passage, page, onClose }: {
   return <PieceView meta={meta} passage={passage} page={page} onClose={onClose} />;
 }
 
-type Route = "scan" | "html" | "image" | "fallback";
+type Route = "scan" | "pdf" | "html" | "image" | "fallback";
 
 function classify(meta: PieceMeta): Route {
   if (meta.media_kind === "pdf" && meta.ocr) return "scan";       // a scanned PDF (has an OCR layer)
+  if (meta.media_kind === "pdf" && meta.renderable_inline) return "pdf";  // born-digital, in-bound (PDF.js)
   if (["document", "spreadsheet", "email"].includes(meta.media_kind)) return "html";
   if (meta.media_kind === "image" && meta.renderable_inline) return "image";
-  return "fallback";  // born-digital PDF (pdf ∧ ¬ocr), over-bound, or an un-renderable format
+  return "fallback";  // an over-bound PDF, or an un-renderable format → offer the original
 }
 
 function PieceView({ meta, passage, page, onClose }: {
@@ -101,14 +103,18 @@ function PieceView({ meta, passage, page, onClose }: {
   const [rail, setRail] = useState<React.ReactNode>(null);
   const showOriginal = route !== "fallback";  // the fallback's canvas already carries the original CTA
 
-  const canvas =
-    route === "scan"
-      ? <ScanCanvas meta={meta} passage={passage} page={page} onOpened={onOpened} setRail={setRail} />
-      : route === "html"
-        ? <HtmlCanvas meta={meta} passage={passage} onOpened={onOpened} />
-        : route === "image"
-          ? <ImageCanvas meta={meta} onOpened={onOpened} />
-          : <FallbackCanvas meta={meta} />;
+  let canvas: React.ReactNode;
+  if (route === "scan") {
+    canvas = <ScanCanvas meta={meta} passage={passage} page={page} onOpened={onOpened} setRail={setRail} />;
+  } else if (route === "pdf") {
+    canvas = <PdfCanvas meta={meta} passage={passage} page={page} onOpened={onOpened} setRail={setRail} />;
+  } else if (route === "html") {
+    canvas = <HtmlCanvas meta={meta} passage={passage} onOpened={onOpened} />;
+  } else if (route === "image") {
+    canvas = <ImageCanvas meta={meta} onOpened={onOpened} />;
+  } else {
+    canvas = <FallbackCanvas meta={meta} />;
+  }
 
   return (
     <Frame meta={meta} openedAt={openedAt} showOriginal={showOriginal} rail={rail} onClose={onClose}
@@ -234,6 +240,26 @@ function ScanCanvas({ meta, passage, page, onOpened, setRail }: {
   );
 }
 
+/** The page rail, shared by the scan and PDF viewers. `current`/`onGo` are 1-indexed. Page numbers,
+ *  not fetched thumbnails — so the rail costs no extra content fetch (one /page audit per page shown). */
+function PageThumbs({ count, current, onGo }: {
+  count: number; current: number; onGo: (page1: number) => void;
+}) {
+  return (
+    <>
+      <p className="rk">Pages · {count}</p>
+      <div className="thumbs">
+        {Array.from({ length: count }, (_, i) => i + 1).map((n) => (
+          <button key={n} className={`thumb ${n === current ? "on" : ""}`} onClick={() => onGo(n)}
+            aria-current={n === current ? "page" : undefined} aria-label={`Page ${n}`}>
+            {n === current && <span className="marker" aria-hidden>▸</span>}{n}
+          </button>
+        ))}
+      </div>
+    </>
+  );
+}
+
 function ScanRail({ layout, current, onGo }: {
   layout: OcrLayout; current: number; onGo: (p: number) => void;
 }) {
@@ -241,15 +267,7 @@ function ScanRail({ layout, current, onGo }: {
   const mean = confs.length ? Math.round(confs.reduce((a, b) => a + b, 0) / confs.length) : null;
   return (
     <>
-      <p className="rk">Pages · {layout.pages.length}</p>
-      <div className="thumbs">
-        {layout.pages.map((_, i) => (
-          <button key={i} className={`thumb ${i === current ? "on" : ""}`} onClick={() => onGo(i)}
-            aria-current={i === current} aria-label={`Page ${i + 1}`}>
-            {i === current && <span className="marker" aria-hidden>▸</span>}{i + 1}
-          </button>
-        ))}
-      </div>
+      <PageThumbs count={layout.pages.length} current={current + 1} onGo={(n) => onGo(n - 1)} />
       {mean != null && (
         <>
           <p className="rk" style={{ marginTop: "1rem" }}>Qualité OCR</p>
@@ -316,6 +334,135 @@ function ScanPage({ pieceId, pageIndex, layoutPage, box, regionLabel, onOpened }
   );
 }
 
+// ── the born-digital PDF canvas (screen 1): PDF.js renders the pages inline, at the passage ─────
+type FracBox = { left: number; top: number; width: number; height: number };  // fractions 0..1 of the canvas
+
+function PdfCanvas({ meta, passage, page: pageParam, onOpened, setRail }: {
+  meta: PieceMeta; passage?: string; page?: number; onOpened: () => void;
+  setRail: (r: React.ReactNode) => void;
+}) {
+  const [doc, setDoc] = useState<PdfDoc | null>(null);
+  const [current, setCurrent] = useState(1);              // 1-indexed (PDF.js convention)
+  const [passagePage, setPassagePage] = useState<number | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "unavailable">("loading");
+  const [box, setBox] = useState<FracBox | null>(null);
+  const [pageFailed, setPageFailed] = useState(false);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const hitRef = useRef<HTMLDivElement>(null);
+  const destroyRef = useRef<(() => void) | null>(null);
+  const renderRef = useRef<{ cancel(): void } | null>(null);
+
+  // open the document — the /original fetch that feeds PDF.js IS the audited open (server-side)
+  useEffect(() => {
+    let live = true;
+    setState("loading");
+    setBox(null);
+    fetch(pieceOriginalUrl(meta.piece_id))
+      .then((r) => { if (!r.ok) throw new Error("indisponible"); return r.arrayBuffer(); })
+      .then((buf) => openPdf(buf))
+      .then(async ({ doc: d, destroy }) => {
+        if (!live) { destroy(); return; }
+        const start = pageParam != null
+          ? Math.min(Math.max(pageParam + 1, 1), d.numPages)    // ?page= is 0-indexed (as the scan)
+          : await findPassagePage(d, passage);
+        if (!live) { destroy(); return; }
+        destroyRef.current = destroy;
+        setDoc(d);
+        setPassagePage(passage ? start : null);
+        setCurrent(start);
+        setState("ready");
+        onOpened();
+      })
+      .catch(() => { if (live) setState("unavailable"); });   // corrupt/undecodable → offer the original
+    return () => {
+      live = false;
+      if (destroyRef.current) { destroyRef.current(); destroyRef.current = null; }
+    };
+  }, [meta.piece_id]);
+
+  // the rail is navigable as soon as the document opens; a page renders on demand (one at a time)
+  useEffect(() => {
+    if (!doc) { setRail(null); return; }
+    setRail(<PageThumbs count={doc.numPages} current={current} onGo={setCurrent} />);
+  }, [doc, current, setRail]);
+  useEffect(() => () => setRail(null), [setRail]);
+
+  // Render the current page to the canvas, then locate the passage box (on its page only). A page
+  // change SUPERSEDES an in-flight render — its RenderTask is cancelled (pdfjs forbids two renders on
+  // one canvas, so the newest page always wins); the stale passage box is cleared first; an interior
+  // page that fails to decode degrades to offer-the-original (never an unhandled rejection).
+  useEffect(() => {
+    if (!doc || state !== "ready") return;
+    let cancelled = false;
+    setBox(null);
+    setPageFailed(false);
+    const run = async () => {
+      try {
+        const page = await doc.getPage(current);
+        if (cancelled) return;
+        const scale = Math.min(2, 1400 / page.getViewport({ scale: 1 }).width);  // crisp, capped
+        const viewport = page.getViewport({ scale });
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const ctx = canvas.getContext("2d");
+        if (!ctx) return;
+        canvas.width = Math.ceil(viewport.width);
+        canvas.height = Math.ceil(viewport.height);
+        renderRef.current?.cancel();                          // abort any still-running prior render
+        const task = page.render({ canvas, canvasContext: ctx, viewport });
+        renderRef.current = task;
+        await task.promise;
+        if (cancelled) return;
+        const wantBox = passage != null && current === passagePage;
+        const rect = wantBox ? await passageRectOnPage(page, viewport, scale, passage) : null;
+        if (cancelled) return;
+        setBox(rect ? {
+          left: rect.left / viewport.width, top: rect.top / viewport.height,
+          width: rect.width / viewport.width, height: rect.height / viewport.height,
+        } : null);
+      } catch {
+        // a cancelled/superseded render is expected and silent; a genuine decode/getPage failure of
+        // this page offers the original (the rail stays navigable to the other pages).
+        if (!cancelled) setPageFailed(true);
+      }
+    };
+    void run();
+    return () => { cancelled = true; renderRef.current?.cancel(); };
+  }, [doc, current, state, passage, passagePage]);
+
+  // bring the passage into view + give it focus — the passage is the first focus stop (a11y)
+  useEffect(() => {
+    if (box && hitRef.current) { hitRef.current.scrollIntoView({ block: "center" }); hitRef.current.focus(); }
+  }, [box]);
+
+  if (state === "loading") return <LoadingCanvas label="Ouverture du PDF…" />;
+  if (state === "unavailable" || !doc) return <FallbackCanvas meta={meta} />;
+  if (pageFailed) {
+    return (
+      <Centre glyph="⚠" tone="review" title="Cette page ne peut pas être rendue">
+        <p>Cette page n'a pas pu être rendue. Ouvrez l'original, ou essayez une autre page.</p>
+        <div className="pv-row"><a className="pv-btn" href={pieceOriginalUrl(meta.piece_id)}>⤓ Ouvrir
+          l'original</a></div>
+      </Centre>
+    );
+  }
+  const regionLabel = `${meta.filename}, ${formatLabel(meta)}${box ? ", ouvert au passage" : ""}`;
+  return (
+    <div className="scan-wrap" role="region" aria-label={regionLabel}>
+      <div className="scan">
+        {/* the page, rasterised by PDF.js in-browser (tenant boundary); the passage boxed over it */}
+        <canvas ref={canvasRef} className="scan-img" />
+        {box && (
+          <div ref={hitRef} className="ocr hit" tabIndex={0} aria-label="Passage" style={{
+            left: `${box.left * 100}%`, top: `${box.top * 100}%`,
+            width: `${box.width * 100}%`, height: `${box.height * 100}%`,
+          }} />
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── the office/email canvas (screens 3 + 4): SANITISED html in a SANDBOXED frame ──────────
 function HtmlCanvas({ meta, passage, onOpened }: {
   meta: PieceMeta; passage?: string; onOpened: () => void;
@@ -373,7 +520,8 @@ function ImageCanvas({ meta, onOpened }: { meta: PieceMeta; onOpened: () => void
   if (!url) return <LoadingCanvas label="Ouverture de l'image…" />;
   return (
     <div className="pv-imgwrap" role="region" aria-label={`${meta.filename}, ${formatLabel(meta)}`}>
-      <img className="pv-image" src={url} alt={meta.filename} />
+      {/* onError → the honest fallback (a decode failure, or a CSP/blob block, never a broken pane) */}
+      <img className="pv-image" src={url} alt={meta.filename} onError={() => setFailed(true)} />
     </div>
   );
 }

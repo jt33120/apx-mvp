@@ -102,10 +102,19 @@ SESSION_COOKIE = "apx_session"
 
 # ── hardening ──────────────────────────────────────────────────────────────────
 _MAX_UPLOAD_BYTES = 500 * 1024 * 1024
+# The viewer (Story 3.5d) renders pièces IN THE BROWSER inside the tenant boundary. The additions to
+# the base policy are the minimum that lets the offline PDF.js viewer run while the offline/tenant
+# guarantee stays intact:
+#   - worker-src 'self' blob: — the bundled, same-origin PDF.js worker (never a CDN).
+#   - 'wasm-unsafe-eval' in script-src — PDF.js's WASM image decoders (WASM only, NOT JS eval;
+#     'unsafe-eval' is still barred).
+#   - blob: in img-src — a decrypted pièce from a same-origin in-memory blob (the inline image; the
+#     old 'self' data: silently blocked it).
+# connect-src stays 'self' — NO external origin is ever added, so no pièce byte leaves the cabinet.
 _CSP = (
-    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-    "img-src 'self' data:; connect-src 'self'; font-src 'self'; base-uri 'self'; "
-    "form-action 'self'; frame-ancestors 'none'"
+    "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; style-src 'self' 'unsafe-inline'; "
+    "img-src 'self' data: blob:; connect-src 'self'; font-src 'self'; worker-src 'self' blob:; "
+    "base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
 )
 
 
