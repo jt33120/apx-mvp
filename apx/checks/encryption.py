@@ -45,6 +45,12 @@ _PLAINTEXT_ALLOWLIST = {
     "model_id", "model_version",  # the embedder identity (AD-11) — categorical, non-content (2.8)
     "error_class", "resolution_state", "cardinality", "action", "chain", "label", "judge",
     "outcome",
+    # Story 4.3 — the ranked order + ranking version. Identity hashes (like piece_id/content_hash)
+    # and categorical enums (like error_class/label/outcome): none is content or PII.
+    # (``fingerprint`` is table-qualified below — the bare name is generic enough to plausibly recur
+    # with a sensitive meaning, so it is NOT allowed globally.)
+    "ranking_version_id", "case_theory_version_id", "family_id",
+    "band", "rejection_class",
     "email", "password_hash", "display_name",
     "full_text",  # the AD-31 exempt deterministic text index (also asserted un-encrypted below)
     "full_text_normalized",  # the fr-fold-v1 search index (Story 3.2) — same AD-31 exemption
@@ -71,6 +77,16 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     ("ImportJob", "state"),
     ("ImportJob", "spool_path"),
     ("ImportUnit", "state"),
+    # Story 4.3 — the ranking version's structural metadata, kept plaintext by conscious decision.
+    # ``basis`` is a categorical enum (case-theory | intrinsic). ``identity_json`` is the AD-23
+    # ranking-version identity (model/embedder/chunking/schema/prompt/config identities + hashes) —
+    # NFR-56 REQUIRES it readable in the interface and the content-free projection, and it holds no
+    # PII or client content. ``failure_reason`` is a content-FREE redacted diagnostic (the exception
+    # type name only, ``redacted_diagnostic``) — the same shape as the plaintext ``error_class``.
+    ("RankingVersion", "basis"),
+    ("RankingVersion", "identity_json"),
+    ("RankingVersion", "fingerprint"),  # a sha256 identity hash — non-content, table-scoped
+    ("RankedEntry", "failure_reason"),
 }
 
 

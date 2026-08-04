@@ -45,6 +45,8 @@ from apx.checks import (
     payload_schema,
     perf_gate,
     projection,
+    ranking_ownership,
+    ranking_sets_are_views,
     read_path,
     register_ownership,
     renders_sanitized,
@@ -448,6 +450,14 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("case-theory-append-only", "FR-37", "AD-37", "case theory versions append-only, one owner",
        case_theory_ownership.case_theory_version_is_append_only,
        "CaseTheoryVersion construction + UPDATE/DELETE of case_theory_version across apx/**"),
+    # ── story 4.3: the ranked order — versions append-only (AD-37/AD-7); sets are views (AD-39) ──
+    _p("ranking-append-only", "FR-39", "AD-37", "ranking versions append-only, one owner",
+       ranking_ownership.ranking_version_is_append_only,
+       "RankingVersion/RankedEntry construction + UPDATE/DELETE of ranking_version/ranked_entry "
+       "across apx/**"),
+    _p("no-retained-discarded-set", "FR-16", "AD-39", "no retained/discarded set is stored",
+       ranking_sets_are_views.no_retained_or_discarded_set_column,
+       "table + column names across the ORM models (no retained/discarded set membership)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

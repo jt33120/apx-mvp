@@ -438,6 +438,8 @@ could contain is an inflated claim about what the suite proves).
 | `rendered-html-is-sanitized` | FR-44 | AD-29 | structural | rendered_html_is_sanitized | the render_html package builds a RenderedDocument at one site (inside _rendered, which nh3-sanitises) so no render path — office or .msg — emits unsanitised HTML + a behavioural XSS-battery and adversarial-.xlsx probe (Story 3.5c-2/3) |
 | `register-state-written-once` | FR-5 | AD-37 | structural | register_state_written_once | Failure.resolution_state writes across apx/** |
 | `case-theory-append-only` | FR-37 | AD-37 | structural | case_theory_version_is_append_only | CaseTheoryVersion construction outside the store adapter + any UPDATE/DELETE of case_theory_version across apx/** (append-only, one owner — Story 4.1) |
+| `ranking-append-only` | FR-39 | AD-37 | structural | ranking_version_is_append_only | RankingVersion/RankedEntry construction outside the store adapter + any UPDATE/DELETE of ranking_version/ranked_entry across apx/** (append-only, one owner — Story 4.3) |
+| `no-retained-discarded-set` | FR-16 | AD-39 | structural | no_retained_or_discarded_set_column | table + column names across the ORM models — no table/column names a retained/discarded set membership; those sets are views over the order + the line + pins (Story 4.3) |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |
 | `meta-property-has-check` | FR-56 | AD-33 | structural | every_structural_property_has_a_registered_check | this manifest vs CHECKS |

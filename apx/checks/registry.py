@@ -29,6 +29,8 @@ from apx.checks import (
     payload_schema,
     perf_gate,
     projection,
+    ranking_ownership,
+    ranking_sets_are_views,
     read_path,
     register_ownership,
     renders_sanitized,
@@ -118,6 +120,11 @@ CHECKS: list[Callable[[], CheckResult]] = [
     register_ownership.register_state_written_once,
     # story 4.1 — the case theory: the version table is append-only, one owning module (AD-37/AD-7).
     case_theory_ownership.case_theory_version_is_append_only,
+    # story 4.3 — the ranked order: the version/entry tables are append-only, one owner
+    # (AD-37/AD-7);
+    # no table or column names a retained/discarded set — those are views (AD-39).
+    ranking_ownership.ranking_version_is_append_only,
+    ranking_sets_are_views.no_retained_or_discarded_set_column,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

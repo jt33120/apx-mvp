@@ -16,6 +16,7 @@ from sqlalchemy import (
     Boolean,
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -554,3 +555,83 @@ class RecallReview(Base):
     # the reviewer's display name (PII), never a SQL predicate → application-encrypted (AD-31)
     reviewer: Mapped[str] = mapped_column(EncryptedText("recall_review.reviewer"), nullable=False)
     reviewed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RankingVersion(Base):
+    """One *ranking version* of a *matter* (FR-39, Story 4.3) — the complete immutable identity of
+    what produced one ranked order (AD-23). APPEND-ONLY and NEVER mutated after creation (AD-37 —
+    the
+    ranking use case owns its creation; asserted by ``ranking_version_is_append_only``). The version
+    + its ranked rows + one audit entry are written atomically by exactly one owning use case
+    (AD-22).
+
+    ``version_no`` is a per-*matter* monotonic counter (AD-49's ordering; the audit ``seq`` carries
+    the record's monotonic order). ``id`` (= ``version_id``) is the referenceable
+    ``sha256(tenant \\x00 matter \\x00 version_no \\x00 fingerprint)`` (AD-23 — referenceable +
+    immutable). ``identity_json`` is the canonical AD-23 identity — **plaintext**: it is structural
+    version metadata readable in the interface and the content-free projection (NFR-56), carrying no
+    PII or content (like ``schema_version``). ``case_theory_version_id`` names the referenced 4.1
+    version so the conditional commit (AD-23/AD-37) can verify it is unchanged at write time. No
+    cascade FK (AD-7): a *matter* is retired, never hard-deleted out from under its rankings."""
+
+    __tablename__ = "ranking_version"
+    __table_args__ = (
+        # a per-matter monotonic version_no; a concurrent double-write collides here and fails
+        # loudly (AD-37 conditional commit), never a silent overwrite. Also indexes (tenant,matter).
+        UniqueConstraint("tenant", "matter", "version_no", name="uq_ranking_version"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # = version_id (AD-23)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    version_no: Mapped[int] = mapped_column(Integer, nullable=False)  # per-matter, 1-based
+    fingerprint: Mapped[str] = mapped_column(String(64), nullable=False)  # "same version" identity
+    basis: Mapped[str] = mapped_column(String, nullable=False)  # case-theory | intrinsic
+    # the complete AD-23 identity, canonical JSON — plaintext structural metadata (NFR-56), no PII.
+    identity_json: Mapped[str] = mapped_column(Text, nullable=False)
+    # the referenced case-theory version (NULL on the intrinsic path) — the conditional-commit
+    # input.
+    case_theory_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    stage3_share: Mapped[float] = mapped_column(Float, nullable=False)  # SM-18, recorded on the run
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RankedEntry(Base):
+    """One *pièce*'s recorded row in a *ranking version* (AD-23's per-*pièce* output, Story 4.3).
+    APPEND-ONLY with its version (asserted by ``ranking_version_is_append_only``); no cascade FK
+    (AD-7). ``rank`` is 1-based for a pièce IN the order (judged or rejected) and **NULL for an
+    UNSCORED pièce** — out of the order, never ranked last, never dropped (AD-19). It carries its
+    ``score`` OR its ``rejection_class`` (AD-36), its near-duplicate ``family_id`` and
+    ``is_representative`` (the estimator needs the family), and its ``supersedes`` state.
+
+    **All columns plaintext** — none is content or PII: ``band``/``label``/``outcome``/
+    ``rejection_class`` are categorical, ``score`` a float, ``family_id`` a text_key hash,
+    ``failure_reason`` an already-redacted diagnostic. Like ``LabelRecord`` (which encrypts only its
+    rationale). **No ``retained``/``discarded`` column** — those sets are views, never a membership
+    (AD-39, asserted by ``no_retained_or_discarded_set_column``)."""
+
+    __tablename__ = "ranked_entry"
+    __table_args__ = (
+        UniqueConstraint("ranking_version_id", "piece_id", name="uq_ranked_entry"),
+        Index("ix_ranked_entry_version_rank", "ranking_version_id", "rank"),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(version_id \0 piece_id)
+    ranking_version_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ranking_version.id"), nullable=False, index=True)  # no ondelete
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    piece_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    rank: Mapped[int | None] = mapped_column(Integer, nullable=True)  # NULL = unscored (AD-19)
+    outcome: Mapped[str] = mapped_column(String, nullable=False)  # judged | rejected | unscored
+    score: Mapped[float | None] = mapped_column(Float, nullable=True)  # never imputed (AD-19)
+    band: Mapped[str | None] = mapped_column(String, nullable=True)
+    label: Mapped[str | None] = mapped_column(String, nullable=True)
+    rejection_class: Mapped[str | None] = mapped_column(String, nullable=True)  # AD-36
+    failure_reason: Mapped[str | None] = mapped_column(String, nullable=True)  # redacted (AD-19)
+    family_id: Mapped[str] = mapped_column(String(64), nullable=False)  # the near-duplicate key
+    is_representative: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    supersedes: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)

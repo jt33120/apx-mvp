@@ -45,12 +45,16 @@ from apx.adapters.store_postgres.models import (
     Piece,
     PieceCustodian,
     PieceProvenance,
+    RankedEntry,
     RecallReview,
     SessionRecord,
     TenantSetting,
     TruncationMarker,
     User,
     UserScope,
+)
+from apx.adapters.store_postgres.models import (
+    RankingVersion as RankingVersionRow,
 )
 from apx.adapters.store_postgres.semantic_query import results_from_rows, semantic_search_stmt
 from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
@@ -78,6 +82,11 @@ from apx.core.domain.failures import ErrorClass, cardinality_for
 from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.normalization import normalize
+from apx.core.domain.ranking import (
+    RankedOrder,
+    RankingIdentity,
+    RankingVersion,
+)
 from apx.core.domain.retrieval import DeterministicResult, SemanticResult
 from apx.core.domain.search import snippet
 from apx.core.domain.triage import TriageOutcome
@@ -113,6 +122,13 @@ class ScopeConflict(Exception):
 class TenantAlreadyProvisioned(Exception):
     """Provisioning was asked to establish a tenant that already has an administrator. Fail
     closed — never silently take over a live firm (AD-25)."""
+
+
+class StaleRankingInput(Exception):
+    """The conditional commit refused a ranking whose recorded identity input changed under it
+    (AD-23/AD-37): the *matter*'s latest *case-theory* version at commit time differs from the one
+    the ranking recorded. Nothing is written — a ranking is never silently committed over a case
+    theory that moved while it was being produced."""
 
 
 @dataclass(frozen=True)
@@ -369,6 +385,41 @@ class CaseTheory:
     present: bool
     withdrawn: bool
     current: CaseTheoryVersionView | None
+
+
+@dataclass(frozen=True)
+class RankingVersionView:
+    """One readable *ranking version* of a *matter* (Story 4.3, AD-23). ``version_id`` is the
+    referenceable identity; ``fingerprint`` decides "the same ranking version"; the counts summarise
+    the recorded order without hydrating every row."""
+
+    version_no: int
+    version_id: str
+    fingerprint: str
+    basis: str
+    case_theory_version_id: str | None
+    stage3_share: float
+    ranked_count: int
+    unscored_count: int
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class RankedEntryView:
+    """One *pièce*'s recorded row in a ranking (AD-23's per-*pièce* output). ``rank`` is None for an
+    UNSCORED pièce (out of the order, never ranked last — AD-19)."""
+
+    piece_id: str
+    rank: int | None
+    outcome: str
+    score: float | None
+    band: str | None
+    label: str | None
+    rejection_class: str | None
+    failure_reason: str | None
+    family_id: str
+    is_representative: bool
+    supersedes: bool
 
 
 @dataclass(frozen=True)
@@ -2683,3 +2734,176 @@ class SqlStore:
                 .where(CaseTheoryVersion.tenant == tenant, CaseTheoryVersion.matter == matter)
                 .order_by(CaseTheoryVersion.version_no.asc())).all()
             return [self._version_view(r) for r in rows]
+
+    # ── Story 4.3: the ranked order + the reproducible ranking version ─────────────────────────
+    def _operative_case_theory_version_id(
+        self, session: Session, tenant: str, matter: str
+    ) -> str | None:
+        """The id of the matter's OPERATIVE case-theory version — the conditional-commit input
+        (AD-23/AD-37). None when none was ever set OR the latest version is a *withdrawal* (text
+        NULL), MIRRORING ``_case_theory_state`` (a withdrawn theory is absent, present=False). This
+        matters: an intrinsic ranking records ``case_theory_version_id=None``, so comparing against
+        the raw latest-row id would treat a *withdrawn* matter (latest row present but NULL-text) as
+        forever stale and permanently refuse every ranking on it. The ``text IS NULL`` check is a DB
+        predicate — the ciphertext is never decrypted here."""
+        row = session.execute(
+            select(CaseTheoryVersion.id, CaseTheoryVersion.text.is_(None))
+            .where(CaseTheoryVersion.tenant == tenant, CaseTheoryVersion.matter == matter)
+            .order_by(CaseTheoryVersion.version_no.desc())
+            .limit(1)).first()
+        if row is None or row[1]:  # no version, or the latest is a withdrawal → operative is absent
+            return None
+        return row[0]
+
+    def record_ranking(
+        self, *, tenant: str, matter: str, actor: str, identity: RankingIdentity, order: RankedOrder
+    ) -> RankingVersion:
+        """The ONE owning use case (AD-37) for a *ranking version* — APPEND-ONLY (FR-39). Mints the
+        per-matter monotonic ``version_no`` and the referenceable ``version_id`` (AD-23), persists
+        the
+        version + one :class:`~apx.adapters.store_postgres.models.RankedEntry` per pièce (the ranked
+        order plus the unscored tail — the whole population, AD-36), and writes ONE
+        ``ranking_recorded``
+        audit entry ATOMIC with the write (AD-22). The commit is CONDITIONAL (AD-23/AD-37): it
+        re-reads
+        the matter's latest case-theory version inside the transaction and raises
+        :class:`StaleRankingInput` (nothing written) if it differs from the recorded
+        ``case_theory_version_id``. The ``(tenant, matter, version_no)`` unique constraint makes a
+        concurrent double-write fail loudly and retry, never overwrite. Raises ``ValueError`` for an
+        unknown matter. Returns the minted domain :class:`RankingVersion`."""
+        box: list[RankingVersion] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            ms = session.get(MatterScope, {"tenant": tenant, "matter": matter})
+            if ms is None:
+                raise ValueError("unknown matter")
+            # conditional commit — a case theory that moved under the ranking invalidates it
+            # (AD-23). Compared against the OPERATIVE id (None for a withdrawn/absent theory), so a
+            # withdrawn matter's intrinsic ranking (recorded None) still commits.
+            current_ct = self._operative_case_theory_version_id(session, tenant, matter)
+            if current_ct != identity.case_theory_version_id:
+                raise StaleRankingInput(
+                    f"case theory changed under the ranking (recorded "
+                    f"{identity.case_theory_version_id}, now {current_ct})")
+            prev = session.scalar(
+                select(func.max(RankingVersionRow.version_no))
+                .where(RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter))
+            version_no = (prev or 0) + 1
+            version = RankingVersion.build(
+                tenant=tenant, matter=matter, version_no=version_no, identity=identity)
+            session.add(RankingVersionRow(
+                id=version.version_id, tenant=tenant, matter=matter, version_no=version_no,
+                fingerprint=identity.fingerprint, basis=identity.basis,
+                identity_json=identity.canonical_json(),
+                case_theory_version_id=identity.case_theory_version_id,
+                stage3_share=order.stage3_share, created_at=now))
+            for row in order.all_rows:
+                session.add(RankedEntry(
+                    id=hashlib.sha256(
+                        f"{version.version_id}\x00{row.piece_id}".encode()).hexdigest(),
+                    ranking_version_id=version.version_id, tenant=tenant, matter=matter,
+                    piece_id=row.piece_id, rank=row.rank, outcome=row.outcome.value,
+                    score=row.score, band=row.band.value if row.band is not None else None,
+                    label=row.label,
+                    rejection_class=(
+                        row.rejection_class.value if row.rejection_class is not None else None),
+                    failure_reason=row.failure_reason, family_id=row.family_id,
+                    is_representative=row.is_representative, supersedes=row.supersedes))
+            self._append_audit(
+                session, tenant, matter, actor, "ranking_recorded",
+                f"version={version_no} fingerprint={identity.fingerprint[:12]} "
+                f"ranked={len(order.rows)} unscored={len(order.unscored_rows)} "
+                f"stage3_share={order.stage3_share:.4f}", now)
+            box.append(version)
+
+        self._audited_tx(_work)
+        return box[-1]
+
+    def _ranking_version_view(
+        self, session: Session, row: RankingVersionRow
+    ) -> RankingVersionView:
+        ranked = session.scalar(
+            select(func.count()).select_from(RankedEntry).where(
+                RankedEntry.ranking_version_id == row.id, RankedEntry.rank.isnot(None))) or 0
+        unscored = session.scalar(
+            select(func.count()).select_from(RankedEntry).where(
+                RankedEntry.ranking_version_id == row.id, RankedEntry.rank.is_(None))) or 0
+        return RankingVersionView(
+            version_no=row.version_no, version_id=row.id, fingerprint=row.fingerprint,
+            basis=row.basis, case_theory_version_id=row.case_theory_version_id,
+            stage3_share=row.stage3_share, ranked_count=ranked, unscored_count=unscored,
+            created_at=row.created_at)
+
+    def _matter_held(self, session: Session, tenant: str, matter: str, scopes: set[str]) -> bool:
+        """Whether the matter's wall is within ``scopes`` (AD-13). A False is indistinguishable from
+        an absent matter to the caller (non-disclosing, FR-14)."""
+        return session.scalar(
+            select(MatterScope.matter).where(
+                MatterScope.tenant == tenant, MatterScope.matter == matter,
+                MatterScope.scope.in_(sorted(scopes)))) is not None
+
+    def read_ranking(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> RankingVersionView | None:
+        """The matter's latest ranking version — scope pre-filtered (AD-13). Returns None when the
+        matter is out of scope OR absent OR has no ranking yet (indistinguishable — non-disclosing,
+        FR-14). Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            row = session.scalar(
+                select(RankingVersionRow)
+                .where(RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter)
+                .order_by(RankingVersionRow.version_no.desc()).limit(1))
+            return self._ranking_version_view(session, row) if row is not None else None
+
+    def list_ranking_versions(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> list[RankingVersionView] | None:
+        """The matter's full ranking-version history, ascending by ``version_no`` (AD-23 — every
+        version is retained and referenceable). Scope pre-filtered; None when out of scope or
+        absent."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            rows = session.scalars(
+                select(RankingVersionRow)
+                .where(RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter)
+                .order_by(RankingVersionRow.version_no.asc())).all()
+            return [self._ranking_version_view(session, r) for r in rows]
+
+    def read_ranked_order(
+        self, *, tenant: str, matter: str, scopes: set[str], version_no: int | None = None
+    ) -> list[RankedEntryView] | None:
+        """The ordered rows of a ranking version (the latest when ``version_no`` is None) — scope
+        pre-filtered. Ordered BY the integer ``rank`` (collation-independent, AC-3); the UNSCORED
+        rows (rank NULL) come as a named tail ordered by ``piece_id``, never interleaved into the
+        order (AD-19). Returns None when the matter is out of scope or absent; ``[]`` when the
+        matter
+        is held but has no such ranking version."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            pinned = (
+                [RankingVersionRow.version_no == version_no] if version_no is not None else [])
+            target = session.scalar(
+                select(RankingVersionRow.id)
+                .where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter, *pinned)
+                .order_by(RankingVersionRow.version_no.desc()).limit(1))
+            if target is None:
+                return []  # held, but no such ranking version — distinguishable from out-of-scope
+            rows = session.scalars(
+                select(RankedEntry)
+                .where(RankedEntry.ranking_version_id == target)
+                # ranked rows first (rank not NULL) in rank order, then the unscored tail by
+                # piece_id
+                # — never SQL collation, portable NULL placement (AC-3/AD-19).
+                .order_by(RankedEntry.rank.is_(None), RankedEntry.rank, RankedEntry.piece_id)).all()
+            return [
+                RankedEntryView(
+                    piece_id=r.piece_id, rank=r.rank, outcome=r.outcome, score=r.score,
+                    band=r.band, label=r.label, rejection_class=r.rejection_class,
+                    failure_reason=r.failure_reason, family_id=r.family_id,
+                    is_representative=r.is_representative, supersedes=r.supersedes)
+                for r in rows]
