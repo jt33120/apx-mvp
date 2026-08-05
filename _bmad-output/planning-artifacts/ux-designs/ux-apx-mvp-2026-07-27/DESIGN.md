@@ -1,8 +1,8 @@
 ---
 name: APX
-description: The visual identity of a law-firm instrument for mass-document triage — navy ink, one restrained gold, warm paper. Ratified from apx/web/src/tokens.css (AD-29); this is the source of truth for how APX looks, product-wide. Extended 2026-07-30 with the Epic-3 truth-status vocabulary (Story 3.4) and the pièce-viewer vocabulary (Story 3.5).
+description: The visual identity of a law-firm instrument for mass-document triage — navy ink, one restrained gold, warm paper. Ratified from apx/web/src/tokens.css (AD-29); this is the source of truth for how APX looks, product-wide. Extended 2026-07-30 with the Epic-3 truth-status vocabulary (Story 3.4) and the pièce-viewer vocabulary (Story 3.5); extended 2026-08-05 with the Epic-4 triage-surface vocabulary (Stories 4.6–4.11).
 status: final
-updated: 2026-07-30
+updated: 2026-08-05
 sources:
   - apx/web/src/tokens.css            # the implemented design system — this file formalises it
   - docs/context/03-design-and-ux-inventory.md  # salvage verdicts; the three legacy systems reconciled here
@@ -181,6 +181,57 @@ components:
     radius: '{rounded.DEFAULT}'
     ink: '{colors.ink-2}'
     over-bound-tone: '{colors.review}'
+  triage-table:
+    note: 'Epic 4 (Story 4.10). The ranked working set as a table — one row per pièce in rank order, columns rang / pièce / confiance / étiquette / côté. The corpus is COMPLETE (its denominator sits above as {components.equation}); the ORDER is a judgement, not a proof. A cell edit changes that cell and nothing else — rows NEVER reorder on an edit. THE LINE is drawn BETWEEN two rows, never on one.'
+    border: '1px solid {colors.line}'
+    radius: '{rounded.DEFAULT}'
+    row-divider: '1px solid {colors.line-2}'
+    header-eyebrow: '{typography.eyebrow}'
+  rank-cell:
+    note: 'Epic 4. The rank ordinal — serif, tabular-nums, right-aligned (the count is the hero). Rank is the pièce''s position in ONE ranked order; it is never changed by a label edit or a pin.'
+    numeral: '{typography.numeral-row}'
+  confidence-cell:
+    note: 'Epic 4 (Story 4.4/4.6). The DERIVED confidence read — a band word (élevée / moyenne / faible) with a small derived-meter and a DERIVED marker, so it can never read as an editable self-report. NOT a dropdown, NOT a text field: confidence is computed from observables, never typed. Expands to the {components.justification}. Deliberately shaped UNLIKE the editable {components.label-cell} — the affordance difference IS the FR-42 honesty.'
+    band-high: { color: '{colors.kept}', background: '{colors.kept-bg}' }
+    band-mid: { color: '{colors.review}', background: '{colors.review-bg}' }
+    band-low: { color: '{colors.ink-3}', background: '{colors.line-2}' }
+    derived-marker: { color: '{colors.ink-3}', note: 'a small uppercase "dérivée" eyebrow — the derived-not-declared rule made visible' }
+  label-cell:
+    note: 'Epic 4 (Story 4.5). The taxonomy label as an EDITABLE cell — a select drawn from the tenant taxonomy or the explicit `unlabelled`, never null/blank/default. Editing appends to the append-only ledger and writes a {components.change-log-entry}; it NEVER reorders the row or moves the pièce across the line. Reads as editable (a select affordance) — the deliberate visual opposite of the read-only {components.confidence-cell}.'
+    radius: '{rounded.sm}'
+    border: '1px solid {colors.line}'
+    unlabelled: { color: '{colors.ink-3}', background: '{colors.surface-2}', note: 'the explicit `unlabelled` — stated, never an empty cell' }
+  side-badge:
+    note: 'Epic 4 (Story 4.7). The retenue / écartée side as a DERIVED VIEW — a chip in the kept/discard tier, NEVER a checkbox that stores membership. It is a read of (the line, the pins) over one ranked order. The pinned variant carries the {components.pin-marker} — this side is a human override of the line, not the line''s own placement.'
+    radius: '{rounded.full}'
+    retained: { label: 'Retenue', color: '{colors.kept}', background: '{colors.kept-bg}' }
+    discarded: { label: 'Écartée', color: '{colors.discard}', background: '{colors.discard-bg}' }
+    unscored: { label: 'Non scorée', color: '{colors.ink-3}', background: '{colors.line-2}' }
+  the-line:
+    note: 'Epic 4 (Story 4.8) — THE north-star. An ordinal cut drawn BETWEEN two rows (retained above, discarded below), full-bleed across the table. It STATES the commitment in words ("À mon sens, tout ce qui précède") with its stated basis (the case-theory version, or the named intrinsic signals), and is LABELLED BY THE LAST RETAINED PIÈCE identity — never a bare integer, never merely a divider. Carries the ranking version it cuts. A single gold hairline (the sanctioned structural flourish) marks it.'
+    rule: '2px solid {colors.gold}'
+    label: '{typography.body}'
+    basis-eyebrow: '{typography.eyebrow}'
+  line-price:
+    note: 'Epic 4 (Story 4.9). The PRICED move — considering a candidate line position states Δ pièces-to-read and Δ estimated prevalence of relevant material in the resulting discarded set. DELIBERATELY a DIFFERENT visual register from the sampling bound / verdict seal: an ink-toned PROJECTION panel with a dashed edge, explicitly labelled "projection du classement — rien n''a été échantillonné", so a model estimate is NEVER mistaken for a proven bound (FR-19). Never states a "risque d''avoir manqué".'
+    radius: '{rounded.DEFAULT}'
+    border: '1px dashed {colors.line}'
+    ink: '{colors.ink-2}'
+    projection-eyebrow: { color: '{colors.ink-3}', note: 'PROJECTION — not a bound; the safeguard is the label' }
+  pin-marker:
+    note: 'Epic 4 (Story 4.11). The épingle — a single pièce forced across the line, overriding it for that ONE pièce (the line does not move, the order does not change, no other membership changes). Carries the side it forces and expands to its MANDATORY one-line reason (recorded as an override, FR-25). Reversible; a removal is itself a recorded act. A small gold pin glyph on the {components.side-badge}.'
+    color: '{colors.gold}'
+    glyph: 'an inline gold épingle glyph'
+  change-log-entry:
+    note: 'Epic 4 (Story 4.10/4.5). An append-only per-row diff shown BESIDE the row and in the matter change-log: previous value → new value, author, timestamp. It never mutates or deletes a prior entry; a reversal is a NEW entry, not an erasure. Human-set values it records survive re-ranking marked as such.'
+    divider: '1px solid {colors.line-2}'
+    arrow: 'previous → new, in {colors.ink-3}'
+    author: '{typography.hint}'
+  justification:
+    note: 'Epic 4 (Story 4.6). The one-line justification DERIVED FROM NAMED EVIDENCE — the named retained extracts (each by chunk id, resolvable to a source position), not a free-text opinion. Every extract passes exact-containment verification AT SHOW TIME; a justification whose extracts do not resolve is shown as UNVERIFIED (review-toned), never as ordinary. Expands into the audit drawer showing the extracts; reversible in one recorded act. States the source language where it differs from the interface.'
+    verified: { color: '{colors.kept}', background: '{colors.kept-bg}' }
+    unverified: { color: '{colors.review}', background: '{colors.review-bg}' }
+    extract-id: '{typography.mono}'
 ---
 
 # APX — Design System
@@ -416,6 +467,69 @@ empty pane** (FR-44): it states the limit and **offers the original**. The **out
 variant discloses **nothing** — byte-identical to "does not exist"; the **over-bound** variant is
 `review`-toned and offers the original or a page-by-page read.
 
+### Epic-4 additions — the triage-surface vocabulary (Stories 4.6–4.11)
+
+Epic 4 is the product's **north-star surface**: a ranked working set the lawyer keeps control
+of. Its whole visual argument is that **judgement and record are two acts** — the tool *proposes*
+an order and *commits* to a line; the lawyer *corrects* without the tool undoing her, and every
+correction is *recorded, reversible, never destructive*. The vocabulary encodes three honesties
+the substrate already enforces (Stories 4.3–4.7): the corpus is **complete**, the order is a
+**judgement not a proof**, and retained/discarded are **derived views, never stored memberships**.
+
+**Triage table** — `{components.triage-table}`. One row per pièce in rank order. Above it sits the
+permanent-denominator **equation** (`{components.equation}`) — but now the terms are
+*retenue + écartée + non-scorée = le corpus*, and its **verdict** seal
+(`{components.verdict}`) states *nothing left the corpus*: the same accounting shape as Epic-2,
+proving the triage sets **partition** the whole matter and delete nothing. A cell edit changes one
+cell; rows never reorder on an edit.
+
+**Rank cell** — `{components.rank-cell}`. The ordinal in serif `tabular-nums`, right-aligned. Rank
+is a pièce's place in **one** ranked order; a label edit or a pin never changes it.
+
+**Confidence cell** — `{components.confidence-cell}`. A **read-only derived** band (élevée /
+moyenne / faible) carrying a small `dérivée` marker. It is deliberately shaped **unlike** an
+editable cell: confidence is *computed from observables, never typed* (FR-42), and the affordance
+must say so at a glance. It expands to the **justification**.
+
+**Label cell** — `{components.label-cell}`. The taxonomy label as an **editable** select — the
+tenant taxonomy or the explicit `unlabelled`, never a blank. It reads as editable precisely where
+the confidence cell reads as derived: the two cells are the visual statement that *classifying and
+scoring are different acts*. Editing appends to the ledger and writes a change-log entry; it never
+moves the row or crosses the line.
+
+**Side badge** — `{components.side-badge}`. *Retenue / Écartée / Non-scorée* as a **derived view**
+chip in the kept/discard tier — **never a checkbox**. It is a read of *(the line, the pins)* over
+the order; making it look storable would be a lie about how triage works. Its pinned variant
+carries the pin marker.
+
+**The line** — `{components.the-line}`. The north-star. An ordinal cut drawn **between two rows**,
+full-bleed, retained above and discarded below. It **speaks** — *"À mon sens, tout ce qui
+précède"* with its stated basis — and is **named by the last retained pièce**, never a bare
+integer. A single gold hairline (the sanctioned structural flourish) marks the cut; the kept→discard
+tier shift carries the meaning. The **unscored** pièces are their **own zone** below the discarded
+set — never folded into it (a pièce the cascade could not score is not silently discarded).
+
+**Line price** — `{components.line-price}`. Moving the line is **priced before it commits**: Δ
+pièces to read, Δ estimated prevalence of relevant material in the resulting discarded set. It is a
+**projection**, and its visual register is deliberately **not** the verdict/absence seal — an
+ink-toned, dashed-edge panel labelled *projection du classement — rien n'a été échantillonné*, so
+a model estimate is never mistaken for a sampling bound (FR-19). It never says *risque d'avoir
+manqué*.
+
+**Pin marker** — `{components.pin-marker}`. The épingle. One pièce forced across the line, the line
+unmoved and the order unchanged, with a **mandatory one-line reason** recorded as an override
+(FR-25). Reversible; the removal is itself recorded.
+
+**Change-log entry** — `{components.change-log-entry}`. An append-only *previous → new · author ·
+time* line beside the row and in the matter log. A reversal is a **new** entry, never an erasure —
+the log only grows. This is the surface the *"the document is the source of truth, the AI only
+proposes"* principle lives on.
+
+**Justification** — `{components.justification}`. One line, **derived from named evidence** — the
+retained extracts by chunk id, each verified by exact containment *at show time*. An extract that
+no longer resolves makes the justification **unverified** (review-toned), never ordinary. It
+expands into the audit drawer and is reversible in one recorded act.
+
 ## Do's and Don'ts
 
 **Do**
@@ -434,3 +548,11 @@ variant discloses **nothing** — byte-identical to "does not exist"; the **over
   no "· 1 not indexed". Unknown cardinality is stated in words.
 - Don't use a gradient anywhere but the two sanctioned hairline/fill flourishes.
 - Don't render a decision as destructive. Nothing in this system deletes; it changes state.
+- (Epic 4) Don't render *retenue / écartée* as a checkbox or a stored toggle — it is a **derived
+  view** of the line and the pins. A storable-looking control would lie about how triage works.
+- (Epic 4) Don't make the confidence cell look editable, or the label cell look derived — the
+  affordance difference is the honesty that scoring and classifying are different acts.
+- (Epic 4) Don't give the priced move the verdict/absence-seal shape. A **projection** is not a
+  **bound**; keep them in different visual registers so a lawyer never confuses the two (FR-19).
+- (Epic 4) Don't draw the line *on* a row or as a bare integer position. It is a cut **between**
+  two rows, named by the last retained pièce, and it speaks its commitment in words.

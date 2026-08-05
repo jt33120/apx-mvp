@@ -1,0 +1,636 @@
+<title>APX — Maquette Epic 4 (la surface de triage : la table, la ligne, l'épingle)</title>
+<style>
+  /* ============================================================================
+     APX design tokens — lifted verbatim from apx/web/src/tokens.css (AD-29),
+     extended 2026-08-05 with the Epic-4 triage-surface vocabulary (Stories 4.6–4.11).
+     Faithful, offline, self-contained. Forces the warm-paper light world.
+     ============================================================================ */
+  :root {
+    color-scheme: light;
+    --apx-ink: #0b1f3a; --apx-ink-2: #33425a; --apx-ink-3: #5b6678;
+    --apx-paper: #f7f4ee; --apx-surface: #ffffff; --apx-surface-2: #fbf9f5;
+    --apx-line: #e6e0d5; --apx-line-2: #efeae0;
+    --apx-gold: #9a7a34; --apx-gold-2: #b8944a; --apx-muted: #6b7280;
+    --apx-kept: #2f6f4f; --apx-kept-bg: #e8f1eb;
+    --apx-review: #9a5a12; --apx-review-bg: #f6ecdd;
+    --apx-discard: #6f6858; --apx-discard-bg: #eeece5;
+    --apx-danger: #a3161c; --apx-danger-bg: #fbeceb;
+    --apx-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --apx-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --apx-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --apx-radius: 12px; --apx-radius-sm: 8px;
+    --apx-ring: 0 0 0 3px rgba(154,122,52,.28);
+    --apx-shadow: 0 1px 2px rgba(11,31,58,.05), 0 12px 30px rgba(11,31,58,.08);
+    --apx-shadow-sm: 0 1px 2px rgba(11,31,58,.06);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0;
+    background: radial-gradient(1200px 480px at 50% -8%, rgba(154,122,52,.06), transparent 60%), var(--apx-paper);
+    color: var(--apx-ink); font-family: var(--apx-sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  h1,h2,h3 { font-family: var(--apx-serif); color: var(--apx-ink); font-weight: 600; letter-spacing: .01em; text-wrap: balance; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.2rem; margin: 0 0 .5rem; }
+  a { color: var(--apx-gold); text-underline-offset: 2px; }
+  button { font: inherit; cursor: pointer; }
+
+  /* ---- meta chrome for the mock itself (not part of the product) ---- */
+  .mock-bar { position: sticky; top: 0; z-index: 20; display: flex; gap: .5rem; align-items: center;
+    flex-wrap: wrap; padding: .6rem 1rem; background: #101f37; color: #e9e3d5; border-bottom: 3px solid var(--apx-gold); }
+  .mock-bar b { font-family: var(--apx-serif); letter-spacing: .04em; }
+  .mock-bar b i { color: var(--apx-gold-2); font-style: normal; }
+  .mock-tabs { display: flex; gap: .25rem; margin-left: auto; flex-wrap: wrap; }
+  .mock-tabs button { background: transparent; color: #cfc8b8; border: 1px solid #2a3a54; border-radius: 999px;
+    padding: .25rem .8rem; font-size: .82rem; }
+  .mock-tabs button[aria-selected="true"] { background: var(--apx-gold); color: #10203a; border-color: var(--apx-gold); font-weight: 600; }
+  .mock-note { max-width: 74rem; margin: .9rem auto -.2rem; padding: 0 1.25rem; color: var(--apx-ink-3); font-size: .82rem; }
+  .mock-note code { font-family: var(--apx-mono); font-size: .92em; }
+
+  /* ---- product shell (wider than 60rem: the triage table is the one dense working grid) ---- */
+  .apx-shell { max-width: 74rem; margin: 0 auto; padding: 1.4rem 1.25rem 4rem; }
+  .apx-appbar { display: flex; align-items: center; justify-content: space-between; gap: 1rem; flex-wrap: wrap;
+    padding-bottom: .9rem; border-bottom: 1px solid var(--apx-line); }
+  .apx-wordmark { font-family: var(--apx-serif); font-weight: 600; letter-spacing: .06em; color: var(--apx-ink); font-size: 1.3rem; }
+  .apx-wordmark b { color: var(--apx-gold); font-weight: 600; }
+  .apx-wordmark .tag { font-family: var(--apx-sans); font-size: .68rem; letter-spacing: .14em; text-transform: uppercase; color: var(--apx-ink-3); margin-left: .35rem; }
+  .apx-who { font-size: .85rem; color: var(--apx-ink-2); display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; }
+  .apx-badge { background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: 999px; padding: .1rem .6rem; color: var(--apx-ink-3); }
+  .apx-ghost { color: var(--apx-ink); background: transparent; border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .35rem .8rem; font-size: .85rem; }
+  .apx-ghost:hover { background: #efeadf; }
+  .btn { color: #fff; background: var(--apx-ink); border: 1px solid var(--apx-ink); border-radius: var(--apx-radius-sm); padding: .55rem 1rem; font-weight: 560; }
+  .btn:hover { background: #12294a; }
+  .apx-num { font-variant-numeric: tabular-nums; }
+  .apx-mono { font-family: var(--apx-mono); font-size: .82em; word-break: break-all; color: var(--apx-ink-3); }
+  .apx-hint { color: var(--apx-muted); font-size: .88rem; }
+  .eyebrow { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); }
+  .crumbs { font-size: .82rem; color: var(--apx-ink-3); margin: 1.1rem 0 .2rem; }
+  .crumbs b { color: var(--apx-ink-2); font-weight: 560; }
+  :focus-visible { outline: none; box-shadow: var(--apx-ring); border-radius: var(--apx-radius-sm); }
+  .panel { display: none; }
+  .panel.on { display: block; }
+
+  /* ---- version header ---- */
+  .verhead { display: flex; align-items: flex-end; justify-content: space-between; gap: 1rem; flex-wrap: wrap; margin: 1.2rem 0 .4rem; }
+  .verhead .ver { display: inline-flex; align-items: center; gap: .5rem; background: var(--apx-surface); border: 1px solid var(--apx-line);
+    border-radius: 999px; padding: .18rem .7rem; font-size: .82rem; color: var(--apx-ink-2); box-shadow: var(--apx-shadow-sm); }
+  .verhead .ver b { font-family: var(--apx-serif); color: var(--apx-ink); font-weight: 600; }
+  .verhead .ver .dot { color: var(--apx-ink-3); }
+  .verhead .acts { display: flex; gap: .5rem; flex-wrap: wrap; }
+
+  /* ---- the denominator equation (reused from Epic 2) : retenue + écartée + non-scorée = corpus ---- */
+  .apx-equation { display: grid; grid-template-columns: auto 1fr; gap: 1.5rem; align-items: center; padding: 1.1rem 1.4rem .3rem;
+    background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: var(--apx-radius); box-shadow: var(--apx-shadow); }
+  .apx-eq-total { text-align: center; padding-right: 1.4rem; border-right: 1px solid var(--apx-line); }
+  .apx-eq-total .n { font-family: var(--apx-serif); font-size: 2.6rem; line-height: 1; font-variant-numeric: tabular-nums; }
+  .apx-eq-total .l { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-muted); }
+  .apx-eq-rows { display: flex; flex-direction: column; gap: .4rem; }
+  .apx-eq-row { display: grid; grid-template-columns: 4.6rem 1fr; gap: .85rem; align-items: baseline; }
+  .apx-eq-row .n { font-family: var(--apx-serif); font-size: 1.3rem; text-align: right; font-variant-numeric: tabular-nums; }
+  .apx-eq-row .c { color: var(--apx-ink-2); font-size: .95rem; }
+  .apx-eq-row .c small { color: var(--apx-muted); }
+  .apx-eq-row .n.kept { color: var(--apx-kept); } .apx-eq-row .n.disc { color: var(--apx-discard); } .apx-eq-row .n.uns { color: var(--apx-ink-3); }
+  .verdict { display: inline-flex; align-items: center; gap: .5rem; margin: .7rem 1.4rem 1rem; padding: .4rem .8rem; border-radius: 999px;
+    font-size: .85rem; }
+  .verdict.ok { color: var(--apx-kept); background: var(--apx-kept-bg); }
+  .verdict .g { font-family: var(--apx-serif); font-weight: 600; }
+
+  /* ---- the honesty banner (Epic-3 truth axis, carried onto the triage surface) ---- */
+  .honesty { display: flex; gap: .6rem; align-items: flex-start; margin: .8rem 0 .2rem; padding: .7rem .9rem;
+    background: var(--apx-surface-2); border: 1px solid var(--apx-line-2); border-left: 2px dashed var(--apx-line); border-radius: var(--apx-radius-sm);
+    font-size: .9rem; color: var(--apx-ink-2); }
+  .honesty .k { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); white-space: nowrap; padding-top: .1rem; }
+
+  /* ---- the triage table ---- */
+  .tablewrap { margin-top: .9rem; border: 1px solid var(--apx-line); border-radius: var(--apx-radius); overflow: hidden; background: var(--apx-surface); box-shadow: var(--apx-shadow); }
+  .tscroll { overflow-x: auto; }
+  .thead, .trow { display: grid; grid-template-columns: 3.2rem minmax(15rem,1fr) 8.5rem 10rem 8.2rem 5rem; gap: .8rem; align-items: center; }
+  .thead { padding: .6rem 1rem; border-bottom: 1px solid var(--apx-line); background: var(--apx-surface-2); position: sticky; top: 0; }
+  .thead .h { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); }
+  .thead .h.r { text-align: right; }
+  .trow { padding: .55rem 1rem; border-top: 1px solid var(--apx-line-2); }
+  .trow:hover { background: var(--apx-surface-2); }
+  .zone-hd { padding: .5rem 1rem; display: flex; align-items: center; gap: .6rem; font-size: .78rem; letter-spacing: .06em; text-transform: uppercase; }
+  .zone-hd.kept { color: var(--apx-kept); background: var(--apx-kept-bg); }
+  .zone-hd.disc { color: var(--apx-discard); background: var(--apx-discard-bg); }
+  .zone-hd.uns  { color: var(--apx-ink-3); background: var(--apx-line-2); border-top: 1px solid var(--apx-line); }
+  .zone-hd b { font-family: var(--apx-serif); font-variant-numeric: tabular-nums; font-weight: 600; }
+  .zone-hd .sub { text-transform: none; letter-spacing: 0; color: inherit; opacity: .82; font-size: .82rem; margin-left: .1rem; }
+
+  .rank { font-family: var(--apx-serif); font-size: 1.4rem; text-align: right; font-variant-numeric: tabular-nums; color: var(--apx-ink); }
+  .pc .nm { font-weight: 560; color: var(--apx-ink); }
+  .pc .nm .open { color: var(--apx-gold); font-size: .8rem; font-weight: 500; margin-left: .45rem; }
+  .pc .id { font-family: var(--apx-mono); font-size: .74rem; color: var(--apx-ink-3); word-break: break-all; }
+
+  /* confidence: READ-ONLY DERIVED — never a field. band word + meter + "dérivée" eyebrow */
+  .conf { display: inline-flex; flex-direction: column; gap: .18rem; }
+  .conf .band { display: inline-flex; align-items: center; gap: .4rem; font-size: .82rem; font-weight: 560; border-radius: 999px; padding: .08rem .55rem; width: max-content; }
+  .conf .band.hi { color: var(--apx-kept); background: var(--apx-kept-bg); }
+  .conf .band.mid { color: var(--apx-review); background: var(--apx-review-bg); }
+  .conf .band.lo { color: var(--apx-ink-3); background: var(--apx-line-2); }
+  .conf .meter { display: inline-flex; gap: 2px; }
+  .conf .meter i { width: 12px; height: 4px; border-radius: 2px; background: var(--apx-line-2); }
+  .conf .band.hi .meter i.on { background: var(--apx-kept); } .conf .band.mid .meter i.on { background: var(--apx-review); } .conf .band.lo .meter i.on { background: var(--apx-ink-3); }
+  .conf .der { font-size: .64rem; letter-spacing: .09em; text-transform: uppercase; color: var(--apx-ink-3); cursor: pointer; }
+  .conf .der:hover { color: var(--apx-gold); }
+
+  /* label: EDITABLE — a real select affordance (the deliberate opposite of confidence) */
+  .lbl { width: 100%; }
+  .lbl select { width: 100%; font: inherit; font-size: .86rem; color: var(--apx-ink); background: var(--apx-surface);
+    border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .34rem .5rem; box-shadow: var(--apx-shadow-sm); }
+  .lbl select.unl { color: var(--apx-ink-3); background: var(--apx-surface-2); font-style: italic; }
+  .lbl .edited { display: inline-flex; align-items: center; gap: .3rem; font-size: .68rem; color: var(--apx-ink-3); margin-top: .16rem; }
+  .lbl .edited b { color: var(--apx-ink-2); font-weight: 560; }
+
+  /* côté: a DERIVED VIEW chip — never a checkbox */
+  .side { display: inline-flex; align-items: center; gap: .35rem; border-radius: 999px; padding: .12rem .6rem; font-size: .78rem; font-weight: 560; width: max-content; }
+  .side.kept { color: var(--apx-kept); background: var(--apx-kept-bg); }
+  .side.disc { color: var(--apx-discard); background: var(--apx-discard-bg); }
+  .side.uns { color: var(--apx-ink-3); background: var(--apx-line-2); }
+  .side .pin { display: inline-flex; }
+  .side .pin svg { display: block; }
+  .side.pinned { box-shadow: inset 0 0 0 1px var(--apx-gold); }
+  .rowacts { display: flex; gap: .3rem; justify-content: flex-end; }
+  .iact { border: 1px solid var(--apx-line); background: var(--apx-surface); border-radius: var(--apx-radius-sm); padding: .22rem .4rem; color: var(--apx-ink-2); font-size: .74rem; }
+  .iact:hover { background: #efeadf; }
+
+  /* ---- THE LINE — an ordinal cut BETWEEN two rows (the north-star) ---- */
+  .theline { position: relative; margin: 0; padding: .95rem 1rem 1rem; background: linear-gradient(180deg, var(--apx-kept-bg) 0%, rgba(255,255,255,0) 46%, rgba(255,255,255,0) 54%, var(--apx-discard-bg) 100%);
+    border-top: 2px solid var(--apx-gold); border-bottom: 2px solid var(--apx-gold); }
+  .theline .cap { display: flex; align-items: baseline; gap: .6rem; flex-wrap: wrap; }
+  .theline .cap .say { font-family: var(--apx-serif); font-size: 1.08rem; color: var(--apx-ink); }
+  .theline .cap .say b { color: var(--apx-ink); }
+  .theline .basis { font-size: .72rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); }
+  .theline .meta { margin-top: .35rem; font-size: .84rem; color: var(--apx-ink-2); display: flex; gap: .8rem; flex-wrap: wrap; align-items: center; }
+  .theline .meta .lastpc { display: inline-flex; align-items: center; gap: .4rem; background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: 999px; padding: .1rem .6rem; }
+  .theline .meta .lastpc b { color: var(--apx-ink); font-weight: 560; }
+  .theline .grab { margin-left: auto; }
+  .theline .grab button { border: 1px solid var(--apx-gold); color: var(--apx-gold); background: var(--apx-surface); border-radius: 999px; padding: .28rem .8rem; font-size: .82rem; font-weight: 560; }
+  .theline .grab button:hover { background: #fbf3e2; }
+
+  /* ---- the priced move (Story 4.9) : a PROJECTION register, deliberately NOT the verdict seal ---- */
+  .price { margin: .9rem 0 0; border: 1px dashed var(--apx-line); border-radius: var(--apx-radius); background: var(--apx-surface-2); overflow: hidden; }
+  .price .ph { display: flex; align-items: center; gap: .6rem; padding: .6rem .95rem; border-bottom: 1px dashed var(--apx-line); }
+  .price .ph .k { font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; color: var(--apx-ink-3); }
+  .price .ph .k b { color: var(--apx-ink-2); }
+  .price .pbody { display: grid; grid-template-columns: 1fr 1fr; gap: 0; }
+  .price .cell { padding: .9rem 1rem; }
+  .price .cell + .cell { border-left: 1px dashed var(--apx-line); }
+  .price .cell .lab { font-size: .78rem; color: var(--apx-ink-3); }
+  .price .cell .big { font-family: var(--apx-serif); font-size: 1.5rem; font-variant-numeric: tabular-nums; color: var(--apx-ink); margin-top: .2rem; }
+  .price .cell .arrow { color: var(--apx-ink-2); font-size: 1.02rem; margin-top: .2rem; font-variant-numeric: tabular-nums; }
+  .price .cell .arrow em { font-style: normal; color: var(--apx-ink-3); }
+  .price .foot { padding: .6rem .95rem; border-top: 1px dashed var(--apx-line); font-size: .82rem; color: var(--apx-ink-3); background: var(--apx-surface); }
+  .price .foot.unavail { color: var(--apx-review); }
+  .price .pacts { display: flex; gap: .5rem; padding: .2rem .95rem .8rem; }
+
+  /* ---- the pin form (Story 4.11) : mandatory reason, recorded as override ---- */
+  .card { background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: var(--apx-radius); box-shadow: var(--apx-shadow); padding: 1.1rem 1.2rem; }
+  .card + .card { margin-top: 1rem; }
+  .pinform label { display: block; font-size: .8rem; color: var(--apx-ink-2); margin: .8rem 0 .3rem; }
+  .pinform .req { color: var(--apx-danger); }
+  .segside { display: inline-flex; background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: 999px; padding: 3px; }
+  .segside button { border: 0; background: transparent; border-radius: 999px; padding: .35rem .9rem; font-size: .85rem; color: var(--apx-ink-2); }
+  .segside button[aria-pressed="true"] { background: var(--apx-ink); color: #fff; font-weight: 560; }
+  .pinform textarea { width: 100%; font: inherit; font-size: .92rem; color: var(--apx-ink); background: var(--apx-surface); border: 1px solid var(--apx-line);
+    border-radius: var(--apx-radius-sm); padding: .55rem .7rem; resize: vertical; min-height: 3rem; }
+  .pinform .hintline { font-size: .78rem; color: var(--apx-muted); margin-top: .3rem; }
+  .override { display: inline-flex; align-items: center; gap: .4rem; font-size: .74rem; color: var(--apx-review); background: var(--apx-review-bg); border-radius: 999px; padding: .1rem .6rem; }
+
+  /* ---- the justification drawer (Story 4.6) ---- */
+  .just .jline { display: flex; gap: .6rem; align-items: flex-start; }
+  .just .jstate { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; border-radius: 999px; padding: .1rem .55rem; white-space: nowrap; }
+  .just .jstate.ok { color: var(--apx-kept); background: var(--apx-kept-bg); }
+  .just .jstate.no { color: var(--apx-review); background: var(--apx-review-bg); }
+  .just .jtext { color: var(--apx-ink); font-size: .98rem; }
+  .just .src { font-size: .78rem; color: var(--apx-ink-3); margin-top: .2rem; }
+  .extract { border: 1px solid var(--apx-line-2); border-left: 2px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .6rem .8rem; margin-top: .7rem; background: var(--apx-surface-2); }
+  .extract .q { color: var(--apx-ink-2); font-size: .94rem; }
+  .extract .q mark { background: rgba(154,122,52,.18); color: inherit; border-radius: 3px; padding: 0 .12em; }
+  .extract .em { display: flex; gap: .7rem; align-items: center; flex-wrap: wrap; margin-top: .4rem; font-size: .76rem; color: var(--apx-ink-3); }
+  .extract .em .cid { font-family: var(--apx-mono); }
+  .extract .em .ver { color: var(--apx-kept); } .extract .em .ver.no { color: var(--apx-review); }
+  .extract .em a.goto { color: var(--apx-gold); }
+  .extract.no { border-left-color: var(--apx-review); background: var(--apx-review-bg); }
+
+  /* ---- the change log (Story 4.10) : append-only ---- */
+  .clog { display: flex; flex-direction: column; }
+  .clog .ce { display: grid; grid-template-columns: 1fr auto; gap: .3rem 1rem; padding: .7rem 0; border-top: 1px solid var(--apx-line-2); }
+  .clog .ce:first-child { border-top: 0; }
+  .clog .ce .what { color: var(--apx-ink); font-size: .92rem; }
+  .clog .ce .what .col { color: var(--apx-ink-3); font-size: .72rem; letter-spacing: .06em; text-transform: uppercase; margin-right: .4rem; }
+  .clog .ce .what .from { color: var(--apx-ink-3); } .clog .ce .what .to { color: var(--apx-ink); font-weight: 560; }
+  .clog .ce .what .arr { color: var(--apx-ink-3); margin: 0 .35rem; }
+  .clog .ce .who { text-align: right; font-size: .78rem; color: var(--apx-muted); font-variant-numeric: tabular-nums; }
+  .clog .ce .who .rev { color: var(--apx-gold); cursor: pointer; }
+  .clog .ce.reversal .what .col { color: var(--apx-gold); }
+  .clog .banner { font-size: .8rem; color: var(--apx-ink-3); margin-bottom: .4rem; }
+
+  .lead { color: var(--apx-ink-2); max-width: 46rem; }
+  .grid2 { display: grid; grid-template-columns: 1.3fr 1fr; gap: 1.1rem; align-items: start; }
+  @media (max-width: 60rem){ .grid2 { grid-template-columns: 1fr; } }
+  .kbd { font-family: var(--apx-mono); font-size: .78rem; background: var(--apx-surface); border: 1px solid var(--apx-line); border-bottom-width: 2px; border-radius: 6px; padding: .05rem .35rem; color: var(--apx-ink-2); }
+</style>
+
+<div class="mock-bar">
+  <b>APX <i>·</i> Maquette Epic 4</b> <span style="opacity:.7">la surface de triage — l'outil trace la ligne, l'avocate garde la main</span>
+  <div class="mock-tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-t="p1">La table + la ligne</button>
+    <button role="tab" aria-selected="false" data-t="p2">Déplacer la ligne (chiffré)</button>
+    <button role="tab" aria-selected="false" data-t="p3">L'épingle</button>
+    <button role="tab" aria-selected="false" data-t="p4">La justification</button>
+    <button role="tab" aria-selected="false" data-t="p5">Le journal</button>
+  </div>
+</div>
+
+<!-- ======================================================================== -->
+<!-- SCREEN 1 — the table + the line -->
+<!-- ======================================================================== -->
+<section class="panel on" id="p1">
+  <p class="mock-note">Story 4.10 + 4.8 + 4.7 + 4.5 + 4.4. La table classée, la <code>ligne</code> tracée <em>entre</em> deux
+    lignes, les zones <em>retenue / écartée / non-scorée</em>. La confiance est <code>dérivée</code> (lecture, jamais un champ) ;
+    l'étiquette est <code>éditable</code> ; le côté est une <code>vue dérivée</code>, jamais une case à cocher.</p>
+  <div class="apx-shell">
+    <div class="apx-appbar">
+      <div class="apx-wordmark">A P <b>X</b><span class="tag">Triage</span></div>
+      <div class="apx-who"><span>Claire Fontaine</span><span class="apx-badge">Cabinet Lambert</span><span class="apx-badge">Périmètre : Cession Lambert</span></div>
+    </div>
+
+    <div class="crumbs">Dossiers &nbsp;›&nbsp; <b>Cession Lambert</b> &nbsp;›&nbsp; Classement</div>
+
+    <div class="verhead">
+      <div>
+        <h1>Cession Lambert — le jeu de travail classé</h1>
+        <div class="apx-hint">Un ordre proposé par l'outil. Vous gardez la main : rien n'est figé, rien n'est supprimé.</div>
+      </div>
+      <div class="acts">
+        <span class="ver"><b>Classement v3</b> <span class="dot">·</span> 2026-08-05 <span class="dot">·</span> théorie du cas v2</span>
+        <button class="apx-ghost">Re-classer…</button>
+        <button class="btn">Exporter le jeu retenu</button>
+      </div>
+    </div>
+
+    <!-- the denominator : retenue + écartée + non-scorée = corpus -->
+    <div class="apx-equation" aria-label="Dénominateur du dossier">
+      <div class="apx-eq-total"><div class="n apx-num">1&nbsp;240</div><div class="l">pièces au dossier</div></div>
+      <div class="apx-eq-rows">
+        <div class="apx-eq-row"><div class="n kept apx-num">142</div><div class="c">Retenues <small>— au-dessus de la ligne</small></div></div>
+        <div class="apx-eq-row"><div class="n disc apx-num">1&nbsp;075</div><div class="c">Écartées <small>— sous la ligne, toujours retrouvables par la recherche exhaustive</small></div></div>
+        <div class="apx-eq-row"><div class="n uns apx-num">23</div><div class="c">Non scorées <small>— la cascade n'a pas pu les départager</small></div></div>
+      </div>
+    </div>
+    <div class="verdict ok"><span class="g">=</span> 142 + 1 075 + 23 = 1 240 — <b style="font-weight:560;margin-left:.15rem">rien n'a quitté le corpus</b>. Le triage partitionne le dossier ; il ne supprime rien.</div>
+
+    <div class="honesty">
+      <span class="k">Ce que c'est</span>
+      <span><b style="font-weight:560">Ordre proposé par l'outil, révisable — ce n'est pas une preuve.</b> Rien n'est supprimé : une pièce écartée
+      reste retrouvable par la <a href="#">recherche exhaustive</a>. La confiance est dérivée d'observables, jamais déclarée par le modèle.</span>
+    </div>
+
+    <div class="tablewrap">
+      <div class="tscroll">
+        <div class="thead" role="row">
+          <div class="h r">Rang</div><div class="h">Pièce</div><div class="h">Confiance</div><div class="h">Étiquette</div><div class="h">Côté</div><div class="h r">Actions</div>
+        </div>
+
+        <div class="zone-hd kept">Retenues <b class="apx-num">·&nbsp;142</b> <span class="sub">— au-dessus de la ligne</span></div>
+
+        <div class="trow" role="row">
+          <div class="rank">1</div>
+          <div class="pc"><div class="nm">Protocole de cession — projet annoté <a class="open" href="#">ouvrir ›</a></div><div class="id">piece:7fa1c… · custodian: M. Lambert</div></div>
+          <div class="conf"><span class="band hi">élevée <span class="meter"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i></span></span><span class="der">▾ dérivée — voir la justification</span></div>
+          <div class="lbl"><select><option>Contrat</option><option>Correspondance</option><option>Pièce comptable</option><option>Note interne</option><option>unlabelled</option></select></div>
+          <div class="side kept">Retenue</div>
+          <div class="rowacts"><button class="iact" title="Épingler">épingler</button><button class="iact" title="Historique">hist.</button></div>
+        </div>
+
+        <div class="trow" role="row">
+          <div class="rank">2</div>
+          <div class="pc"><div class="nm">Courriel — accord sur le périmètre <a class="open" href="#">ouvrir ›</a></div><div class="id">piece:1b0e9… · custodian: Me Fontaine</div></div>
+          <div class="conf"><span class="band hi">élevée <span class="meter"><i class="on"></i><i class="on"></i><i class="on"></i><i></i></span></span><span class="der">▾ dérivée — voir la justification</span></div>
+          <div class="lbl"><select><option>Correspondance</option><option>Contrat</option><option>Pièce comptable</option><option>Note interne</option><option>unlabelled</option></select></div>
+          <div class="side kept">Retenue</div>
+          <div class="rowacts"><button class="iact">épingler</button><button class="iact">hist.</button></div>
+        </div>
+
+        <div class="trow" role="row">
+          <div class="rank">57</div>
+          <div class="pc"><div class="nm">Avenant — clause de garantie <a class="open" href="#">ouvrir ›</a></div><div class="id">piece:9c22a… · custodian: M. Lambert</div></div>
+          <div class="conf"><span class="band mid">moyenne <span class="meter"><i class="on"></i><i class="on"></i><i></i><i></i></span></span><span class="der">▾ dérivée — voir la justification</span></div>
+          <div class="lbl"><select><option>Contrat</option><option>Correspondance</option><option>Pièce comptable</option><option>Note interne</option><option>unlabelled</option></select>
+            <div class="edited"><span>modifiée</span> · <b>Correspondance → Contrat</b> · 14:22</div></div>
+          <div class="side kept">Retenue</div>
+          <div class="rowacts"><button class="iact">épingler</button><button class="iact">hist.</button></div>
+        </div>
+
+        <div class="trow" role="row">
+          <div class="rank">142</div>
+          <div class="pc"><div class="nm">Contrat de cession — 2019 <a class="open" href="#">ouvrir ›</a></div><div class="id">piece:142ff… · custodian: M. Lambert</div></div>
+          <div class="conf"><span class="band mid">moyenne <span class="meter"><i class="on"></i><i class="on"></i><i></i><i></i></span></span><span class="der">▾ dérivée — voir la justification</span></div>
+          <div class="lbl"><select><option>Contrat</option><option>Correspondance</option><option>Pièce comptable</option><option>Note interne</option><option>unlabelled</option></select></div>
+          <div class="side kept">Retenue</div>
+          <div class="rowacts"><button class="iact">épingler</button><button class="iact">hist.</button></div>
+        </div>
+
+        <!-- ================= THE LINE ================= -->
+        <div class="theline" role="separator" aria-orientation="horizontal" tabindex="0"
+             aria-label="La ligne — dernière pièce retenue : pièce n°142, Contrat de cession 2019. Utilisez les flèches pour la déplacer.">
+          <div class="cap">
+            <span class="say">« À mon sens, tout ce qui précède — jusqu'à la <b>pièce n°142</b>. »</span>
+            <span class="basis">Fondé sur la théorie du cas v2</span>
+          </div>
+          <div class="meta">
+            <span class="lastpc">Dernière pièce retenue : <b>n°142 — Contrat de cession — 2019</b></span>
+            <span>Coupe ordinale sur le <b>Classement v3</b> · tracée par Claire Fontaine · 2026-08-05 14:05</span>
+            <span class="grab"><button>Déplacer la ligne…</button></span>
+          </div>
+        </div>
+        <!-- =========================================== -->
+
+        <div class="zone-hd disc">Écartées <b class="apx-num">·&nbsp;1&nbsp;075</b> <span class="sub">— sous la ligne, jamais supprimées</span></div>
+
+        <div class="trow" role="row">
+          <div class="rank">143</div>
+          <div class="pc"><div class="nm">Relance — facture impayée <a class="open" href="#">ouvrir ›</a></div><div class="id">piece:0aa71… · custodian: Compta</div></div>
+          <div class="conf"><span class="band lo">faible <span class="meter"><i class="on"></i><i></i><i></i><i></i></span></span><span class="der">▾ dérivée — voir la justification</span></div>
+          <div class="lbl"><select><option>Pièce comptable</option><option>Correspondance</option><option>Contrat</option><option>Note interne</option><option>unlabelled</option></select></div>
+          <div class="side disc">Écartée</div>
+          <div class="rowacts"><button class="iact">épingler</button><button class="iact">hist.</button></div>
+        </div>
+
+        <div class="trow" role="row">
+          <div class="rank">804</div>
+          <div class="pc"><div class="nm">Courriel interne — §4 « on savait » <a class="open" href="#">ouvrir ›</a></div><div class="id">piece:804bd… · custodian: Direction</div></div>
+          <div class="conf"><span class="band lo">faible <span class="meter"><i class="on"></i><i></i><i></i><i></i></span></span><span class="der">▾ dérivée — voir la justification</span></div>
+          <div class="lbl"><select class="unl"><option>unlabelled</option><option>Correspondance</option><option>Contrat</option><option>Pièce comptable</option><option>Note interne</option></select></div>
+          <div class="side disc">Écartée</div>
+          <div class="rowacts"><button class="iact" style="border-color:var(--apx-gold);color:var(--apx-gold)">épingler</button><button class="iact">hist.</button></div>
+        </div>
+
+        <div class="zone-hd uns">Non scorées <b class="apx-num">·&nbsp;23</b> <span class="sub">— la cascade n'a pas pu les départager ; ce n'est pas « écarté »</span></div>
+
+        <div class="trow" role="row">
+          <div class="rank" style="color:var(--apx-ink-3)">—</div>
+          <div class="pc"><div class="nm">Archive .zip — contenu partiellement lisible <a class="open" href="#">ouvrir ›</a></div><div class="id">piece:zz014… · custodian: inconnu</div></div>
+          <div class="conf"><span class="band lo" style="opacity:.7">indéterminée</span><span class="der" style="cursor:default">non scorée par la cascade</span></div>
+          <div class="lbl"><select class="unl"><option>unlabelled</option><option>Correspondance</option><option>Contrat</option><option>Pièce comptable</option></select></div>
+          <div class="side uns">Non scorée</div>
+          <div class="rowacts"><button class="iact">épingler</button><button class="iact">hist.</button></div>
+        </div>
+      </div>
+    </div>
+
+    <p class="apx-hint" style="margin-top:.9rem">Éditer une cellule change <b>cette cellule et rien d'autre</b> — aucune ligne ne se re-classe, ne se
+      régénère ni ne change de rang. Le re-classement est un acte séparé, explicite, qui produit une <b>nouvelle version</b> et
+      <b>conserve</b> vos valeurs saisies, marquées « saisie humaine ».</p>
+  </div>
+</section>
+
+<!-- ======================================================================== -->
+<!-- SCREEN 2 — moving the line is priced -->
+<!-- ======================================================================== -->
+<section class="panel" id="p2">
+  <p class="mock-note">Story 4.9. Déplacer la ligne est <em>chiffré avant l'engagement</em> : Δ pièces à lire + Δ prévalence estimée
+    de pertinents dans l'écarté. C'est une <code>projection</code> — registre visuel <em>délibérément distinct</em> de la borne
+    d'échantillonnage (Epic 5). Jamais « risque d'avoir manqué ».</p>
+  <div class="apx-shell">
+    <div class="apx-appbar">
+      <div class="apx-wordmark">A P <b>X</b><span class="tag">Triage</span></div>
+      <div class="apx-who"><span class="ver" style="font-size:.82rem"><b style="font-family:var(--apx-serif)">Classement v3</b></span><span class="apx-badge">Périmètre : Cession Lambert</span></div>
+    </div>
+
+    <div class="crumbs" style="margin-top:1.2rem">Déplacement de <b>la ligne</b> — position candidate</div>
+    <h1 style="margin-top:.3rem">Vous déplacez la ligne vers le bas</h1>
+    <p class="lead">Vous envisagez de faire passer la ligne de la pièce n°142 à la pièce n°542. Voici le prix — avant de vous engager.</p>
+
+    <div style="display:flex; gap:.7rem; align-items:center; margin:.8rem 0; font-size:.9rem; color:var(--apx-ink-2)">
+      <span class="side kept">Ligne actuelle · n°142</span>
+      <span style="color:var(--apx-ink-3)">→</span>
+      <span class="side" style="color:var(--apx-gold); background:#fbf3e2; box-shadow:inset 0 0 0 1px var(--apx-gold)">Position candidate · n°542</span>
+    </div>
+
+    <!-- the PROJECTION panel — NOT the verdict seal -->
+    <div class="price">
+      <div class="ph"><span class="k"><b>PROJECTION DU CLASSEMENT</b> — rien n'a été échantillonné</span></div>
+      <div class="pbody">
+        <div class="cell">
+          <div class="lab">Pièces à lire</div>
+          <div class="big apx-num">+ 400</div>
+          <div class="arrow apx-num">142 <em>→</em> 542 pièces retenues</div>
+        </div>
+        <div class="cell">
+          <div class="lab">Part estimée de pertinents dans l'écarté</div>
+          <div class="big apx-num">≈ 3 % → ≈ 0,4 %</div>
+          <div class="arrow"><em>estimation issue du classement, non mesurée</em></div>
+        </div>
+      </div>
+      <div class="foot">Une <b>projection</b> du classement, pas une borne : rien n'a été tiré au sort ni mesuré. Une borne
+        d'échantillonnage (Epic 5), elle, portera le sceau de vérité — un registre visuel différent, pour qu'on ne les confonde jamais.</div>
+      <div class="pacts">
+        <button class="btn">Déplacer la ligne à n°542</button>
+        <button class="apx-ghost">Annuler</button>
+      </div>
+    </div>
+
+    <div class="grid2" style="margin-top:1.4rem">
+      <div class="card">
+        <div class="eyebrow">Ce que la projection ne dit jamais</div>
+        <p style="margin:.5rem 0 0; color:var(--apx-ink-2)">Elle ne dit pas « <s>risque de 3 % d'avoir manqué une pièce</s> » — cette
+          formule est bannie (FR-23) : ce n'est pas ce qu'un estimateur produit ici. Elle parle de <b>prévalence estimée</b>, pas de
+          <b>risque de manque</b>.</p>
+      </div>
+      <div class="card">
+        <div class="eyebrow">Cas d'échec — projection indisponible</div>
+        <div class="price" style="margin-top:.6rem">
+          <div class="ph"><span class="k"><b>PROJECTION</b> — position n°901</span></div>
+          <div class="pbody" style="grid-template-columns:1fr">
+            <div class="cell"><div class="lab">Pièces à lire</div><div class="big apx-num">+ 759</div></div>
+          </div>
+          <div class="foot unavail">Projection de prévalence <b>indisponible</b> pour cette position — l'outil ne l'invente pas.
+            Le changement du nombre de pièces à lire, lui, reste affiché.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================== -->
+<!-- SCREEN 3 — the pin -->
+<!-- ======================================================================== -->
+<section class="panel" id="p3">
+  <p class="mock-note">Story 4.11. Épingler fait traverser la ligne à <em>exactement une</em> pièce — la ligne ne bouge pas, l'ordre
+    ne change pas, aucune autre appartenance ne change. Un <code>motif</code> d'une ligne est <em>obligatoire</em> ; c'est un
+    <code>override</code> (FR-25). Réversible.</p>
+  <div class="apx-shell">
+    <div class="apx-appbar">
+      <div class="apx-wordmark">A P <b>X</b><span class="tag">Triage</span></div>
+      <div class="apx-who"><span class="apx-badge">Classement v3</span><span class="apx-badge">Pins en vigueur : 0</span></div>
+    </div>
+
+    <div class="crumbs" style="margin-top:1.2rem">Pièce n°804 &nbsp;›&nbsp; <b>Épingler dans le retenu</b></div>
+
+    <div class="grid2" style="margin-top:.4rem">
+      <div class="card pinform">
+        <h2>Épingler une pièce à travers la ligne</h2>
+        <p class="apx-hint" style="margin-top:0">Pièce <b>n°804 — Courriel interne « on savait »</b>, actuellement <span class="side disc" style="display:inline-flex">Écartée</span>. Vous la faites passer dans le retenu — elle seule.</p>
+
+        <label>Côté forcé</label>
+        <div class="segside" role="group" aria-label="Côté forcé">
+          <button aria-pressed="true">Retenir</button><button aria-pressed="false">Écarter</button>
+        </div>
+
+        <label for="motif">Motif <span class="req">(obligatoire)</span> — pourquoi cette pièce traverse la ligne</label>
+        <textarea id="motif">Aveu implicite au §4 (« on savait ») — décisif malgré le rang faible.</textarea>
+        <div class="hintline">L'épingle contredit une assertion de la machine : elle ne peut être posée sans motif, et sera consignée comme <b>override</b>.</div>
+
+        <div style="display:flex; gap:.5rem; margin-top:1rem; align-items:center">
+          <button class="btn">Épingler dans le retenu</button>
+          <button class="apx-ghost">Annuler</button>
+          <span class="override" style="margin-left:auto">override · consigné</span>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="eyebrow">Ce qui change — et ce qui ne change pas</div>
+        <ul style="margin:.6rem 0 0; padding-left:1.1rem; color:var(--apx-ink-2)">
+          <li>Le jeu retenu change de <b>exactement une</b> pièce (142 → 143).</li>
+          <li><b>La ligne ne bouge pas</b> — les 661 pièces entre le rang 142 et le rang 804 <b>ne sont pas</b> entraînées avec.</li>
+          <li>L'<b>ordre classé ne change pas</b> ; le rang de n°804 reste 804.</li>
+          <li>Le badge porte l'épingle — un <b>override humain</b>, distinct du placement de la ligne.</li>
+        </ul>
+        <div style="margin-top:.9rem; padding-top:.8rem; border-top:1px solid var(--apx-line-2)">
+          <div class="eyebrow">Après l'épingle — la pièce n°804, à son rang, côté épinglé</div>
+          <div style="display:flex; gap:.7rem; align-items:center; margin-top:.5rem; flex-wrap:wrap">
+            <span class="rank" style="font-size:1.1rem">804</span>
+            <span style="font-weight:560">Courriel interne — §4 « on savait »</span>
+            <span class="side kept pinned">
+              <span class="pin" aria-hidden="true"><svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="#9a7a34" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.8V4h6v6.8l2 3.2H7z"/></svg></span>
+              Retenue · épinglée
+            </span>
+          </div>
+          <div class="apx-hint" style="margin-top:.5rem">Pins en vigueur : <b>1</b> · n°804 (retenue) — Claire Fontaine, motif consigné.
+            Les épingles survivent au re-classement, marquées « saisie humaine », jusqu'à retrait — un retrait est lui-même un acte consigné et réversible.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================== -->
+<!-- SCREEN 4 — the justification -->
+<!-- ======================================================================== -->
+<section class="panel" id="p4">
+  <p class="mock-note">Story 4.6. La justification est <em>dérivée d'éléments nommés</em> — les extraits retenus, chacun par
+    identifiant de <code>chunk</code>, résolvable à une position source. Chaque extrait est <em>vérifié par containment exact au
+    moment de l'affichage</em> ; sinon la justification est <code>non vérifiée</code>, jamais ordinaire.</p>
+  <div class="apx-shell">
+    <div class="apx-appbar">
+      <div class="apx-wordmark">A P <b>X</b><span class="tag">Triage</span></div>
+      <div class="apx-who"><span class="apx-badge">Classement v3</span></div>
+    </div>
+
+    <div class="crumbs" style="margin-top:1.2rem">Pièce n°1 &nbsp;›&nbsp; <b>Pourquoi elle est là</b> <span style="color:var(--apx-ink-3)">(tiroir d'audit)</span></div>
+
+    <div class="card just" style="margin-top:.4rem">
+      <div class="jline">
+        <span class="jstate ok">vérifiée</span>
+        <div>
+          <div class="jtext">Retenue au rang 1 — <b>porte sur la période de la théorie du cas</b> (cession 2019) et <b>nomme les parties</b>.</div>
+          <div class="src">Dérivée de : théorie du cas <b>v2</b> · signaux : marge de score, accord inter-étages. Langue source : français (= langue d'interface).</div>
+        </div>
+      </div>
+
+      <div class="extract">
+        <div class="q">« … le présent <mark>protocole de cession</mark> conclu entre M. <mark>Lambert</mark> et la société … le 14 mars <mark>2019</mark> … »</div>
+        <div class="em"><span class="cid">chunk:7fa1c-004</span> · <span>p. 1, §2</span> · <span class="ver">✓ containment vérifié</span> · <a class="goto" href="#">ouvrir à ce passage ›</a></div>
+      </div>
+      <div class="extract">
+        <div class="q">« … les parties reconnaissent la <mark>garantie de passif</mark> visée à l'article 4 … »</div>
+        <div class="em"><span class="cid">chunk:7fa1c-011</span> · <span>p. 3, §4</span> · <span class="ver">✓ containment vérifié</span> · <a class="goto" href="#">ouvrir à ce passage ›</a></div>
+      </div>
+
+      <div style="display:flex; gap:.5rem; margin-top:1rem">
+        <button class="apx-ghost">Annuler cette justification <span style="color:var(--apx-ink-3)">— acte consigné, réversible</span></button>
+      </div>
+    </div>
+
+    <div class="card just" style="border-color:var(--apx-review-bg)">
+      <div class="jline">
+        <span class="jstate no">non vérifiée</span>
+        <div>
+          <div class="jtext">Une justification dont un extrait cité <b>ne se retrouve plus</b> à sa source est montrée comme <b>non vérifiée</b> — jamais comme ordinaire.</div>
+          <div class="src">L'extrait ci-dessous a échoué au containment exact à l'instant de l'affichage (source ré-extraite depuis le classement).</div>
+        </div>
+      </div>
+      <div class="extract no">
+        <div class="q">« … clause de non-concurrence sur cinq ans … »</div>
+        <div class="em"><span class="cid">chunk:33ab9-002</span> · <span>position introuvable</span> · <span class="ver no">✗ containment échoué</span> · <a class="goto" href="#">ouvrir la pièce ›</a></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================================================================== -->
+<!-- SCREEN 5 — the change log -->
+<!-- ======================================================================== -->
+<section class="panel" id="p5">
+  <p class="mock-note">Story 4.10 + 4.5. Le journal des modifications est <em>append-only</em> : chaque édition apparaît à côté de la
+    ligne et dans le journal du dossier — <code>valeur précédente → nouvelle valeur · auteur · horodatage</code>. Une annulation est
+    une <em>nouvelle</em> entrée, jamais un effacement.</p>
+  <div class="apx-shell" style="max-width:60rem">
+    <div class="apx-appbar">
+      <div class="apx-wordmark">A P <b>X</b><span class="tag">Triage</span></div>
+      <div class="apx-who"><span class="apx-badge">Classement v3</span></div>
+    </div>
+
+    <div class="crumbs" style="margin-top:1.2rem">Cession Lambert &nbsp;›&nbsp; <b>Journal des modifications</b></div>
+    <h1 style="margin-top:.3rem">Le journal ne fait que croître</h1>
+    <p class="lead">Chaque correction est consignée à côté de sa ligne, à l'instant. Corriger la machine ne vous coûte jamais la
+      correction faite une minute plus tôt. Une annulation ajoute une entrée ; elle n'en efface aucune.</p>
+
+    <div class="card clog" style="margin-top:.6rem">
+      <div class="banner">7 entrées · les plus récentes en premier · aucune ne peut être éditée ni supprimée</div>
+
+      <div class="ce reversal">
+        <div class="what"><span class="col">annulation · étiquette</span> pièce n°57 — <span class="from">Contrat</span> <span class="arr">→</span> <span class="to">Correspondance</span> <span style="color:var(--apx-ink-3)">(retour à l'état précédent)</span></div>
+        <div class="who">Claire Fontaine<br>14:31:02</div>
+      </div>
+      <div class="ce">
+        <div class="what"><span class="col">épingle</span> pièce n°804 — <span class="to">Retenue · épinglée</span> <span style="color:var(--apx-ink-3)">— motif : « aveu §4, décisif »</span></div>
+        <div class="who">Claire Fontaine<br>14:28:44</div>
+      </div>
+      <div class="ce">
+        <div class="what"><span class="col">la ligne</span> déplacée — dernière pièce retenue <span class="from">n°118</span> <span class="arr">→</span> <span class="to">n°142</span></div>
+        <div class="who">Claire Fontaine<br>14:05:10</div>
+      </div>
+      <div class="ce">
+        <div class="what"><span class="col">étiquette</span> pièce n°58 — <span class="from">unlabelled</span> <span class="arr">→</span> <span class="to">Pièce comptable</span></div>
+        <div class="who">Claire Fontaine<br>14:23:19 <span class="rev">annuler</span></div>
+      </div>
+      <div class="ce">
+        <div class="what"><span class="col">étiquette</span> pièce n°57 — <span class="from">Correspondance</span> <span class="arr">→</span> <span class="to">Contrat</span></div>
+        <div class="who">Claire Fontaine<br>14:22:05 <span class="rev">annuler</span></div>
+      </div>
+      <div class="ce">
+        <div class="what"><span class="col">re-classement</span> nouvelle version <span class="to">v3</span> <span style="color:var(--apx-ink-3)">— 2 valeurs saisies conservées, marquées « saisie humaine »</span></div>
+        <div class="who">système / Claire<br>2026-08-05 09:12</div>
+      </div>
+      <div class="ce">
+        <div class="what"><span class="col">théorie du cas</span> <span class="from">v1</span> <span class="arr">→</span> <span class="to">v2</span> <span style="color:var(--apx-ink-3)">— re-rang proposé, non automatique</span></div>
+        <div class="who">Claire Fontaine<br>2026-08-04 17:40</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  // mock-only tab switching — not part of the product
+  var tabs = document.querySelectorAll('.mock-tabs button');
+  var panels = document.querySelectorAll('.panel');
+  tabs.forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      tabs.forEach(function (b) { b.setAttribute('aria-selected', b === btn ? 'true' : 'false'); });
+      panels.forEach(function (p) { p.classList.toggle('on', p.id === btn.getAttribute('data-t')); });
+      window.scrollTo(0, 0);
+    });
+  });
+</script>
