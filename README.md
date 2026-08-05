@@ -295,6 +295,7 @@ The configuration keys (each editable as data, no redeploy):
 | `container_max_members` | int | `5000` | maximum members expanded from one top-level unit, so a container fan-out cannot exhaust the machine (AD-17) |
 | `container_max_expansion_ratio` | int | `100` | maximum ratio of expanded bytes to a container's size; over it is a zip-bomb `container-unopenable` entry (AD-17) |
 | `attachments_per_message_max` | int | `1000` | maximum attachments expanded from one message before it is a `container-unopenable` entry (AD-17) |
+| `retained_ranking_versions_max` | int | `20` | the number of ranking versions retained per matter before old, unreferenced ones may be retired (FR-16) — a never-delete-safe capacity bound |
 
 <!-- config-keys:end -->
 
@@ -443,6 +444,7 @@ could contain is an inflated claim about what the suite proves).
 | `confidence-one-derivation` | FR-42 | AD-19 | structural | confidence_has_one_derivation | Confidence(...) construction sites across apx/** — the per-pièce confidence is built only in core/domain/piece_confidence.py, so it has one auditable derivation, never a self-reported figure (Story 4.4) |
 | `taxonomy-label-append-only` | FR-40 | AD-37 | structural | taxonomy_label_is_append_only | TaxonomyLabelEntry construction outside the store adapter + any UPDATE/DELETE of taxonomy_label_entry across apx/** — an assignment and its reversal are always new entries (append-only, one owner — Story 4.5) |
 | `label-not-a-ranking-input` | FR-43 | AD-39 | structural | ranking_order_ignores_the_taxonomy_label | core/domain/ranking.py + core/app/rank.py import/reference of the taxonomy-label axis — a label is never an ordering input, so it never moves a pièce or the line (Story 4.5) |
+| `triage-sets-one-derivation` | FR-16 | AD-39 | structural | triage_sets_have_one_derivation | TriageSets(...) construction sites across apx/** — the retained/discarded sets are one derived view built only in core/domain/triage_sets.py, never a hand-rolled or stored membership (Story 4.7) |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |
 | `meta-property-has-check` | FR-56 | AD-33 | structural | every_structural_property_has_a_registered_check | this manifest vs CHECKS |

@@ -234,6 +234,16 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
                 "`container-unopenable` entry (AD-17)",
         valid=lambda v: 1 <= v <= 100_000,
     ),
+    # ── the retained-ranking-versions bound (Story 4.7, FR-16): unbounded versioning against a
+    # never-delete rule (AD-7) is unbounded state, so retention is bounded by config. Versions
+    # referenced by a bound/pin/export/audit are EXEMPT; the retirement of over-bound versions is a
+    # `retired` state transition through AD-7's one admin entry point (deferred, never a DELETE). ──
+    ConfigKey(
+        "retained_ranking_versions_max", "int", 20,
+        governs="the number of ranking versions retained per matter before old, unreferenced ones "
+                "may be retired (FR-16) — a never-delete-safe capacity bound",
+        valid=lambda v: 1 <= v <= 100_000,  # at least one version kept; a sane ceiling
+    ),
     # ── the two switchable guarantees — the v1 defects, encoded as build-checked predicates ──
     ConfigKey(
         "off_corpus_refusal_enabled", "bool", True,

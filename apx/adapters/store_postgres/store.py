@@ -98,6 +98,7 @@ from apx.core.domain.taxonomy_label import (
     validate_label,
 )
 from apx.core.domain.triage import TriageOutcome
+from apx.core.domain.triage_sets import Line, Pin, TriageSets, derive_triage_sets
 from apx.core.ports.read import ExactSearch, PieceView
 from apx.core.projection import Snapshot
 
@@ -480,6 +481,19 @@ class LabelCoverage:
     unlabelled_share: float
     out_of_taxonomy: int
     without_label: int
+
+
+@dataclass(frozen=True)
+class VersionRetentionView:
+    """The retained-ranking-versions bound status for a *matter* (Story 4.7, FR-16). ``total`` is
+    the number of *ranking versions* held; ``bound`` the configured maximum; ``over_bound`` how many
+    exceed the most-recent-``bound`` window. Informational only — 4.7 **retires nothing** (AD-7's
+    `retired` transition through the one admin entry point, and the full referenced-by exemption
+    — bound/pin/export/audit — are deferred), so nothing is ever deleted from this count."""
+
+    total: int
+    bound: int
+    over_bound: int
 
 
 @dataclass(frozen=True)
@@ -3146,3 +3160,55 @@ class SqlStore:
             total=total, labelled=labelled, unlabelled=unlabelled,
             unlabelled_share=(unlabelled / total) if total else 0.0,
             out_of_taxonomy=out_of_taxonomy, without_label=0)
+
+    # ── Story 4.7: the retained/discarded sets are VIEWS derived from the order + line + pins ─────
+    def read_triage_sets(
+        self, *, tenant: str, matter: str, scopes: set[str], line: Line | None = None,
+        pins: tuple[Pin, ...] = (), version_no: int | None = None,
+    ) -> TriageSets | None:
+        """The *retained*/*discarded*/*unscored* sets for a *ranking version*, DERIVED at read time
+        from the persisted order + the given line cut + pins (FR-16/AD-39) — **never a stored
+        membership**. The view names its ``version_id`` (AD-23 — no unqualified reference). ``line``
+        and ``pins`` are INPUTS (their owning use cases are Story 4.8/4.11); ``line=None`` means no
+        split yet. Scope pre-filtered (AD-13); returns None when out of scope, absent, or with no
+        such ranking version (non-disclosing). Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            pinned = (
+                [RankingVersionRow.version_no == version_no] if version_no is not None else [])
+            target = session.execute(
+                select(RankingVersionRow.id, RankingVersionRow.version_no)
+                .where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter, *pinned)
+                .order_by(RankingVersionRow.version_no.desc()).limit(1)).first()
+            if target is None:
+                return None  # held, but no such ranking version — nothing to derive a view over
+            version_id = target[0]
+            rows = session.execute(
+                select(RankedEntry.piece_id, RankedEntry.rank)
+                .where(RankedEntry.ranking_version_id == version_id)
+                .order_by(RankedEntry.rank.is_(None), RankedEntry.rank, RankedEntry.piece_id)).all()
+        ranked = [pid for pid, rank in rows if rank is not None]
+        unscored = [pid for pid, rank in rows if rank is None]
+        return derive_triage_sets(
+            ranked=ranked, unscored=unscored, line=line, pins=pins, version_id=version_id)
+
+    def read_version_retention(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> VersionRetentionView | None:
+        """The retained-ranking-versions bound status for a *matter* (FR-16) — the count of held
+        versions against the configured ``retained_ranking_versions_max``. Scope pre-filtered; None
+        when out of scope or absent. **Retires nothing** (AD-7): the report is informational; the
+        retirement transition and the referenced-by exemption are deferred. Not audited (a read)."""
+        spec = require_key("retained_ranking_versions_max")
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            total = session.scalar(
+                select(func.count()).select_from(RankingVersionRow).where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter)) or 0
+            row = session.get(
+                TenantSetting, {"tenant": tenant, "key": "retained_ranking_versions_max"})
+        bound = int(loads_value(row.value)) if row is not None else int(spec.default)
+        return VersionRetentionView(total=total, bound=bound, over_bound=max(0, total - bound))

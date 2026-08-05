@@ -40,6 +40,7 @@ from apx.checks import (
     secrets,
     taxonomy_label_ownership,
     tenant_isolation,
+    triage_sets_one_derivation,
     truth_status,
     truth_status_surface,
 )
@@ -135,6 +136,9 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # (FR-40/FR-43/AD-39).
     taxonomy_label_ownership.taxonomy_label_is_append_only,
     label_not_a_ranking_input.ranking_order_ignores_the_taxonomy_label,
+    # story 4.7 — the retained/discarded sets are a single derived view, never a stored membership
+    # (FR-16/AD-39).
+    triage_sets_one_derivation.triage_sets_have_one_derivation,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

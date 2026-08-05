@@ -56,6 +56,7 @@ from apx.checks import (
     secrets,
     taxonomy_label_ownership,
     tenant_isolation,
+    triage_sets_one_derivation,
     truth_status,
     truth_status_surface,
 )
@@ -474,6 +475,11 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        label_not_a_ranking_input.ranking_order_ignores_the_taxonomy_label,
        "core/domain/ranking.py + core/app/rank.py import/reference of the taxonomy-label axis — a "
        "label is never an ordering input, so it never moves a pièce or the line (Story 4.5)"),
+    # ── story 4.7: the retained/discarded sets are one derived view, never a stored membership ────
+    _p("triage-sets-one-derivation", "FR-16", "AD-39", "the triage sets have one derivation",
+       triage_sets_one_derivation.triage_sets_have_one_derivation,
+       "TriageSets(...) construction sites across apx/** — the retained/discarded sets are one "
+       "derived view (core/domain/triage_sets.py), never a stored membership (Story 4.7)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),
