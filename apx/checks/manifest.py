@@ -32,6 +32,7 @@ from pathlib import Path
 
 from apx.checks import (
     case_theory_ownership,
+    confidence_derivation,
     configuration,
     credential_storage,
     encryption,
@@ -458,6 +459,10 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("no-retained-discarded-set", "FR-16", "AD-39", "no retained/discarded set is stored",
        ranking_sets_are_views.no_retained_or_discarded_set_column,
        "table + column names across the ORM models (no retained/discarded set membership)"),
+    # ── story 4.4: confidence is derived by one implementation, never self-reported (FR-42) ──────
+    _p("confidence-one-derivation", "FR-42", "AD-19", "confidence has one derivation",
+       confidence_derivation.confidence_has_one_derivation,
+       "Confidence(...) construction sites across apx/** (built only in piece_confidence.py)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

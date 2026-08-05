@@ -420,6 +420,8 @@ class RankedEntryView:
     family_id: str
     is_representative: bool
     supersedes: bool
+    confidence: float | None       # Story 4.4 — None == not derived (AD-19)
+    confidence_signals: str | None  # the comma-joined observable signals, None when not derived
 
 
 @dataclass(frozen=True)
@@ -2808,7 +2810,11 @@ class SqlStore:
                     rejection_class=(
                         row.rejection_class.value if row.rejection_class is not None else None),
                     failure_reason=row.failure_reason, family_id=row.family_id,
-                    is_representative=row.is_representative, supersedes=row.supersedes))
+                    is_representative=row.is_representative, supersedes=row.supersedes,
+                    confidence=row.confidence,  # Story 4.4 — None == not derived (AD-19)
+                    confidence_signals=(
+                        ",".join(s.value for s in row.confidence_signals)
+                        if row.confidence_signals else None)))
             self._append_audit(
                 session, tenant, matter, actor, "ranking_recorded",
                 f"version={version_no} fingerprint={identity.fingerprint[:12]} "
@@ -2905,5 +2911,6 @@ class SqlStore:
                     piece_id=r.piece_id, rank=r.rank, outcome=r.outcome, score=r.score,
                     band=r.band, label=r.label, rejection_class=r.rejection_class,
                     failure_reason=r.failure_reason, family_id=r.family_id,
-                    is_representative=r.is_representative, supersedes=r.supersedes)
+                    is_representative=r.is_representative, supersedes=r.supersedes,
+                    confidence=r.confidence, confidence_signals=r.confidence_signals)
                 for r in rows]

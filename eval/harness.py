@@ -9,6 +9,9 @@ ranker; the merge gate (``apx/checks/gold_gate.py``) makes Epic 4 unable to merg
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from dataclasses import dataclass
+
 from apx.adapters.extraction.composite import CompositeExtractor
 from apx.adapters.extraction.files import FileExtractor
 from apx.adapters.extraction.msg import MsgExtractor
@@ -57,3 +60,70 @@ def recall_at_the_line(ranker: object) -> float:
     raise NotImplementedError(
         "recall_at_the_line needs a ranker and *the line* (Epic 3/4); the merge gate (AD-34) blocks"
         " ranking code from merging until this is wired and executed in CI")
+
+
+@dataclass(frozen=True)
+class BandCalibration:
+    """One confidence band's calibration against the gold set (SM-17): the mean claimed
+    **probability of relevance** the derivation asserted for the band vs the relevant share actually
+    OBSERVED, and the overconfidence gap (positive when the claim exceeds reality)."""
+
+    band: str
+    claimed_p_relevant: float
+    observed_share: float
+    relevant: int
+    total: int
+
+    @property
+    def overconfidence_gap(self) -> float:
+        return self.claimed_p_relevant - self.observed_share
+
+
+@dataclass(frozen=True)
+class CalibrationResult:
+    bands: tuple[BandCalibration, ...]
+    systematically_overconfident: bool
+
+
+def confidence_calibration(
+    observations: Mapping[str, tuple[float, int, int]], *, tolerance: float = 0.1
+) -> CalibrationResult:
+    """Calibrate the per-pièce confidence derivation against the gold set (SM-17, FR-42): among the
+    *pièces* in each confidence band, compare the derivation's claimed mean **probability of
+    relevance** to the OBSERVED relevant share, and flag the derivation **systematically
+    overconfident** when any band's claim exceeds its observed share beyond ``tolerance``.
+
+    ``observations`` maps a band label to ``(claimed_p_relevant, relevant_count, total_count)`` —
+    the
+    derivation's claim as a **P(relevant)** and the gold ground truth for that band. **Direction
+    matters:** the derivation's confidence is the certainty of the *assessment* (symmetric — a deep
+    confident-DISCARD pièce is HIGH confidence that it is *irrelevant*), so a caller MUST convert a
+    directional confidence to a probability of relevance before bucketing — ``p_relevant = c`` for a
+    relevant-direction band, ``p_relevant = 1 - c`` for a discard-direction band. Comparing a raw
+    discard confidence against the relevant share would spuriously read as overconfident; this
+    contract makes the conversion the caller's explicit responsibility.
+
+    This computes the calibration MATH (exercised in CI now); the FULL gold-corpus run — ingest the
+    gold corpus, run the cascade, derive each confidence, convert to P(relevant), bucket by band
+    against ``eval.gold_mapping.mapped_gold`` — **defers exactly like** :func:`recall_at_the_line`
+    (it
+    needs the ranking pipeline over the gold corpus). A build-gate property test asserts the
+    derivation is not overconfident by construction; when the gold pipeline lands, this same
+    function
+    measures it for real and ratchets SM-17."""
+    bands: list[BandCalibration] = []
+    overconfident = False
+    for band, (claimed_p_relevant, relevant, total) in sorted(observations.items()):
+        if total <= 0:
+            raise ValueError(f"band {band!r}: total must be positive, got {total}")
+        if not 0 <= relevant <= total:
+            raise ValueError(f"band {band!r}: relevant {relevant} out of [0, {total}]")
+        if not 0.0 <= claimed_p_relevant <= 1.0:
+            raise ValueError(
+                f"band {band!r}: claimed_p_relevant {claimed_p_relevant} out of [0, 1] — convert a "
+                "directional confidence to a probability of relevance before calibrating")
+        share = relevant / total
+        bands.append(BandCalibration(band, claimed_p_relevant, share, relevant, total))
+        if claimed_p_relevant - share > tolerance:  # claimed more relevance than reality supports
+            overconfident = True
+    return CalibrationResult(bands=tuple(bands), systematically_overconfident=overconfident)

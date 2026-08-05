@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-08-04  # Epic 4: 4-1, 4-2, 4-3 (ranked order + ranking version) DONE. Epic 3 done
+last_updated: 2026-08-05  # Epic 4: 4-1..4-4 (confidence derived) DONE. Epic 3 done
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -82,7 +82,7 @@ development_status:
   4-1-the-optional-case-theory: done  # the versioned/audited/referenceable case theory + append-only gate (Julian, 2026-08-04)
   4-2-the-relevance-judgement-a-cascade-cheap-filters-first: done  # the 3-stage scored cascade compute engine (Julian, 2026-08-04)
   4-3-the-ranked-order-and-the-reproducible-ranking-version: done  # the ranked order + reproducible ranking version identity + persistence (Julian, 2026-08-04)
-  4-4-confidence-is-derived-never-self-reported: backlog
+  4-4-confidence-is-derived-never-self-reported: done  # per-pièce confidence derived from observables, method in the ranking version, SM-17 calibration (Julian, 2026-08-05)
   4-5-per-pi-ce-labelling-against-the-taxonomy: backlog
   4-6-per-pi-ce-confidence-and-a-justification-derived-from-named-evidence: backlog
   4-7-one-ranked-order-nothing-deleted-nothing-categorised: backlog

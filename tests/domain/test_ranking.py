@@ -15,6 +15,8 @@ import pytest
 
 from apx.core.domain.cascade import Band, CascadeResult, Outcome, PieceJudgement, Stage
 from apx.core.domain.cascade import RejectionClass as RC
+from apx.core.domain.config import CascadeConfig
+from apx.core.domain.piece_confidence import CONFIDENCE_METHOD, ConfidenceSignal
 from apx.core.domain.ranking import (
     GROUPING_IDENTITY,
     TIE_BREAK,
@@ -26,6 +28,9 @@ from apx.core.domain.ranking import (
     assemble_identity,
     rank_cascade,
 )
+
+_CFG = CascadeConfig(uncertain_low=0.35, uncertain_high=0.65, calibration_sample=20,
+                     stage3_max_share=0.5)
 
 
 # ── identity fixtures ───────────────────────────────────────────────────────────────────────────
@@ -107,6 +112,10 @@ def _result(judgements: list[PieceJudgement], *, unscored: tuple[str, ...] = (),
         unscored=unscored, stage3_share=0.25, over_stage3_floor=False, basis=basis)
 
 
+def _rank(judgements: list[PieceJudgement], **kw: object) -> RankedOrder:
+    return rank_cascade(_result(judgements, **kw), _CFG)  # type: ignore[arg-type]
+
+
 def test_the_relevance_ladder_orders_bands_then_the_uncertain_label() -> None:
     # one pièce per family, one per tier — the honest ladder: CR > uncertain-relevant >
     # uncertain-uncertain > uncertain-discard > CD (band first, the label refines the uncertain
@@ -118,7 +127,7 @@ def test_the_relevance_ladder_orders_bands_then_the_uncertain_label() -> None:
         _judged("uu", "f-uu", Band.UNCERTAIN, score=0.5, label="uncertain", stage=Stage.STAGE_3),
         _judged("ur", "f-ur", Band.UNCERTAIN, score=0.5, label="relevant", stage=Stage.STAGE_3),
     ]
-    order = rank_cascade(_result(js))
+    order = _rank(js)
     assert [r.piece_id for r in order.rows] == ["cr", "ur", "uu", "ud", "cd"]
     assert order.is_consistent() and [r.rank for r in order.rows] == [1, 2, 3, 4, 5]
 
@@ -129,7 +138,7 @@ def test_within_a_tier_score_descends_then_the_piece_id_breaks_the_tie() -> None
         _judged("aaa", "f-a", Band.CONFIDENT_RELEVANT, score=0.9),
         _judged("ccc", "f-c", Band.CONFIDENT_RELEVANT, score=0.8),
     ]
-    order = rank_cascade(_result(js))
+    order = _rank(js)
     assert [r.piece_id for r in order.rows] == ["aaa", "bbb", "ccc"]  # 0.9 tie → id asc, then 0.8
 
 
@@ -139,7 +148,7 @@ def test_a_near_duplicate_family_is_contiguous_representative_first() -> None:
         _rejected("dup_b", "fam1"), _rejected("dup_a", "fam1"),
         _judged("rep2", "fam2", Band.CONFIDENT_DISCARD, score=0.1),
     ]
-    order = rank_cascade(_result(js))
+    order = _rank(js)
     ids = [r.piece_id for r in order.rows]
     assert ids == ["rep1", "dup_a", "dup_b", "rep2"]  # family1 contiguous, rep first, members asc
     dup = next(r for r in order.rows if r.piece_id == "dup_a")
@@ -151,7 +160,7 @@ def test_a_near_duplicate_family_is_contiguous_representative_first() -> None:
 def test_an_unscored_piece_is_out_of_the_order_and_collected_never_ranked() -> None:
     js = [_judged("ok", "f-ok", Band.UNCERTAIN, score=0.5, label="relevant", stage=Stage.STAGE_3),
           _unscored("bad", "f-bad")]
-    order = rank_cascade(_result(js, unscored=("bad",)))
+    order = _rank(js, unscored=("bad",))
     assert [r.piece_id for r in order.rows] == ["ok"]           # the unscored pièce is NOT ranked
     assert order.unscored == ("bad",)
     (u,) = order.unscored_rows
@@ -163,7 +172,7 @@ def test_an_unscored_representative_keeps_its_duplicates_in_the_order() -> None:
     # REJECTED and stay IN the order (AD-36) — recall-first never buries them.
     js = [_unscored("rep", "fam"), _rejected("dup", "fam"),
           _judged("cr", "f-cr", Band.CONFIDENT_RELEVANT, score=0.9)]
-    order = rank_cascade(_result(js, unscored=("rep",)))
+    order = _rank(js, unscored=("rep",))
     assert "rep" in order.unscored and "rep" not in [r.piece_id for r in order.rows]
     dup = next(r for r in order.rows if r.piece_id == "dup")
     assert dup.rank is not None  # the duplicate of an un-judgeable document is still in the order
@@ -177,13 +186,13 @@ def test_the_order_is_identical_under_two_lc_collate_settings() -> None:
     # locales.
     js = [_judged("aaa", "f-a", Band.CONFIDENT_RELEVANT, score=0.9),
           _judged("bbb", "f-b", Band.CONFIDENT_RELEVANT, score=0.9)]
-    baseline = [r.piece_id for r in rank_cascade(_result(js)).rows]
+    baseline = [r.piece_id for r in _rank(js).rows]
     for loc in ("C", "en_US.UTF-8"):
         try:
             locale.setlocale(locale.LC_COLLATE, loc)
         except locale.Error:
             continue  # the locale is not installed on this box — skip, never fail the build
-        assert [r.piece_id for r in rank_cascade(_result(js)).rows] == baseline
+        assert [r.piece_id for r in _rank(js).rows] == baseline
     locale.setlocale(locale.LC_COLLATE, "C")
 
 
@@ -215,8 +224,8 @@ def test_a_non_finite_score_stays_deterministic_over_the_identity_hash() -> None
            _judged("bbb", "f-b", Band.UNCERTAIN, score=nan, label="uncertain", stage=Stage.STAGE_3),
            _judged("ccc", "f-c", Band.UNCERTAIN, score=nan, label="uncertain", stage=Stage.STAGE_3)]
     rev = list(reversed(fwd))
-    order_fwd = [r.piece_id for r in rank_cascade(_result(fwd)).rows]
-    order_rev = [r.piece_id for r in rank_cascade(_result(rev)).rows]
+    order_fwd = [r.piece_id for r in _rank(fwd).rows]
+    order_rev = [r.piece_id for r in _rank(rev).rows]
     assert order_fwd == order_rev == ["aaa", "bbb", "ccc"]  # id-ascending, input-order-independent
 
 
@@ -224,6 +233,29 @@ def test_the_intrinsic_path_has_no_scores_and_orders_by_the_identity_hash() -> N
     # no case theory → every rep has score None; the order falls through purely to the id tie-break.
     js = [_judged("z", "f-z", Band.UNCERTAIN, score=None, label="uncertain", stage=Stage.STAGE_3),
           _judged("a", "f-a", Band.UNCERTAIN, score=None, label="uncertain", stage=Stage.STAGE_3)]
-    order = rank_cascade(_result(js, basis="intrinsic"))
+    order = _rank(js, basis="intrinsic")
     assert [r.piece_id for r in order.rows] == ["a", "z"]  # id ascending, no score to separate
     assert all(r.score is None for r in order.rows)
+
+
+# ── Story 4.4: the derived confidence rides on the row + the identity records the method ──────────
+def test_the_identity_records_the_confidence_method_and_a_change_flips_the_fingerprint() -> None:
+    ident = _identity()
+    assert ident.confidence_method == CONFIDENCE_METHOD
+    import dataclasses
+    moved = dataclasses.replace(ident, confidence_method="margin-agreement-v2")
+    assert moved.fingerprint != ident.fingerprint  # a derivation-method change is a new version
+
+
+def test_rank_cascade_attaches_a_derived_confidence_never_for_unscored_or_rejected() -> None:
+    js = [_judged("cr", "f-cr", Band.CONFIDENT_RELEVANT, score=0.9),
+          _judged("rep", "fam", Band.CONFIDENT_RELEVANT, score=0.9),
+          _rejected("dup", "fam"), _unscored("bad", "f-bad")]
+    order = _rank(js, unscored=("bad",))
+    by = {r.piece_id: r for r in order.all_rows}
+    assert by["cr"].confidence is not None and 0.0 <= by["cr"].confidence <= 1.0
+    assert ConfidenceSignal.SCORE_MARGIN in by["cr"].confidence_signals
+    assert by["dup"].confidence is None and by["dup"].confidence_signals == ()  # duplicate (AD-19)
+    assert by["bad"].confidence is None and by["bad"].confidence_signals == ()  # unscored (AD-19)
+    # confidence never reorders — the order is 4.3's relevance ladder, unchanged
+    assert [r.rank for r in order.rows] == [1, 2, 3]

@@ -70,7 +70,9 @@ def test_produce_ranking_records_one_order_and_the_full_identity() -> None:
     (identity, order) = rec.calls[-1]
     assert identity.basis == "case-theory" and identity.case_theory_version_id == "ct-v1"
     assert identity.model_name == "mistral-small-latest" and identity.tie_break == "piece-id-hash"
+    assert identity.confidence_method == "margin-agreement-v1"  # Story 4.4 — in the identity
     assert [r.piece_id for r in order.rows] == ["rel", "dis"]  # confident-relevant ranks first
+    assert all(r.confidence is not None for r in order.rows)  # a derived confidence rides on each
     assert version.version_no == 1 and version.identity.fingerprint == identity.fingerprint
 
 

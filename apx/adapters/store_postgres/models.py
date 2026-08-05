@@ -635,3 +635,9 @@ class RankedEntry(Base):
     family_id: Mapped[str] = mapped_column(String(64), nullable=False)  # the near-duplicate key
     is_representative: Mapped[bool] = mapped_column(Boolean, nullable=False)
     supersedes: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Story 4.4: the DERIVED per-pièce confidence — NULL == not derived (AD-19, never a
+    # zero/default).
+    # Plaintext: a float + a categorical signal list (like band/label), no content. The derivation
+    # METHOD lives in ranking_version.identity_json (AD-23), so the number is reconstructible.
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    confidence_signals: Mapped[str | None] = mapped_column(String, nullable=True)  # comma-joined

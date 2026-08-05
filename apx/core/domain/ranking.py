@@ -32,6 +32,12 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from apx.core.domain.cascade import Band, CascadeResult, Outcome, PieceJudgement, RejectionClass
+from apx.core.domain.config import CascadeConfig
+from apx.core.domain.piece_confidence import (
+    CONFIDENCE_METHOD,
+    ConfidenceSignal,
+    derive_confidence,
+)
 
 # The near-duplicate grouping identity (AD-23: "a change to the grouping threshold produces a new
 # version"). Story 4.2 groups by exact ``dedup.text_key`` (sha256 of normalised text); when a fuzzy
@@ -107,6 +113,7 @@ class RankingIdentity:
     schema_version: str
     grouping_identity: str
     tie_break: str
+    confidence_method: str  # the per-pièce confidence derivation method (Story 4.4, AD-23)
 
     def __post_init__(self) -> None:
         # A blank required identity input would make the version dishonest (AD-23: the identity is
@@ -116,7 +123,7 @@ class RankingIdentity:
         for field_name in (
             "basis", "model_provider", "model_endpoint", "model_name", "prompt_version",
             "embedder_model_id", "embedder_model_version", "chunking_config_version",
-            "schema_version", "grouping_identity", "tie_break",
+            "schema_version", "grouping_identity", "tie_break", "confidence_method",
         ):
             value = getattr(self, field_name)
             if not isinstance(value, str) or not value.strip():
@@ -146,6 +153,7 @@ class RankingIdentity:
             "schema_version": self.schema_version,
             "grouping_identity": self.grouping_identity,
             "tie_break": self.tie_break,
+            "confidence_method": self.confidence_method,
         }
 
     def canonical_json(self) -> str:
@@ -201,7 +209,8 @@ def assemble_identity(
         embedder_model_version=inputs.embedder_model_version,
         chunking_config_version=inputs.chunking_config_version,
         schema_version=inputs.schema_version,
-        grouping_identity=GROUPING_IDENTITY, tie_break=TIE_BREAK)
+        grouping_identity=GROUPING_IDENTITY, tie_break=TIE_BREAK,
+        confidence_method=CONFIDENCE_METHOD)
 
 
 @dataclass(frozen=True)
@@ -250,6 +259,10 @@ class RankedRow:
     rejection_class: RejectionClass | None = None
     failure_reason: str | None = None
     supersedes: bool = False
+    # Story 4.4: the DERIVED confidence — None == not derived (AD-19, never imputed); the observable
+    # signals it came from (empty when not derived). Does NOT affect the rank (the order is 4.3's).
+    confidence: float | None = None
+    confidence_signals: tuple[ConfidenceSignal, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -297,19 +310,23 @@ class RankedOrder:
         return True
 
 
-def _to_row(j: PieceJudgement, rank: int | None) -> RankedRow:
+def _to_row(j: PieceJudgement, rank: int | None, config: CascadeConfig) -> RankedRow:
+    conf = derive_confidence(j, config)  # Story 4.4 — None when not derivable (AD-19)
     return RankedRow(
         piece_id=j.piece_id, rank=rank, family_id=j.family_id,
         is_representative=j.is_representative, outcome=j.outcome, score=j.score, band=j.band,
-        label=j.label, rejection_class=j.rejection_class, failure_reason=j.failure_reason)
+        label=j.label, rejection_class=j.rejection_class, failure_reason=j.failure_reason,
+        confidence=conf.value if conf is not None else None,
+        confidence_signals=conf.signals if conf is not None else ())
 
 
-def rank_cascade(result: CascadeResult) -> RankedOrder:
-    """Turn a cascade result into ONE deterministic ranked order (AD-23). Pure and reproducible: the
-    same result yields the same order, and every tie is broken by the *pièce* identity hash in byte
-    order (never collated text). Near-duplicate families are contiguous (representative first); a
-    REJECTED member stays in the order (AD-36); an UNSCORED pièce is excluded and collected into the
-    unscored set (AD-19)."""
+def rank_cascade(result: CascadeResult, config: CascadeConfig) -> RankedOrder:
+    """Turn a cascade result into ONE deterministic ranked order (AD-23), attaching each *pièce*'s
+    DERIVED confidence (Story 4.4 — from observables, None when not derivable; it never affects the
+    rank). Pure and reproducible: the same result yields the same order, and every tie is broken by
+    the *pièce* identity hash in byte order (never collated text). Near-duplicate families are
+    contiguous (representative first); a REJECTED member stays in the order (AD-36); an UNSCORED
+    pièce is excluded and collected into the unscored set (AD-19)."""
     by_id = {j.piece_id: j for j in result.judgements}
     # the representative judgement of each family (exactly one per family carries
     # is_representative);
@@ -340,9 +357,9 @@ def rank_cascade(result: CascadeResult) -> RankedOrder:
                 j.piece_id)
 
     ordered = sorted(result.in_order, key=_sort_key)
-    rows = tuple(_to_row(j, rank) for rank, j in enumerate(ordered, start=1))
+    rows = tuple(_to_row(j, rank, config) for rank, j in enumerate(ordered, start=1))
     unscored_rows = tuple(
-        _to_row(by_id[pid], None) for pid in sorted(result.unscored))
+        _to_row(by_id[pid], None, config) for pid in sorted(result.unscored))
     return RankedOrder(
         rows=rows, unscored_rows=unscored_rows,
         stage3_share=result.stage3_share, over_stage3_floor=result.over_stage3_floor)

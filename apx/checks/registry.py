@@ -15,6 +15,7 @@ from collections.abc import Callable
 
 from apx.checks import (
     case_theory_ownership,
+    confidence_derivation,
     configuration,
     credential_storage,
     encryption,
@@ -125,6 +126,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # no table or column names a retained/discarded set — those are views (AD-39).
     ranking_ownership.ranking_version_is_append_only,
     ranking_sets_are_views.no_retained_or_discarded_set_column,
+    # story 4.4 — confidence is derived by one implementation, never self-reported (FR-42/AD-19).
+    confidence_derivation.confidence_has_one_derivation,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

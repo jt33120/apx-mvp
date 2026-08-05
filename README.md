@@ -440,6 +440,7 @@ could contain is an inflated claim about what the suite proves).
 | `case-theory-append-only` | FR-37 | AD-37 | structural | case_theory_version_is_append_only | CaseTheoryVersion construction outside the store adapter + any UPDATE/DELETE of case_theory_version across apx/** (append-only, one owner — Story 4.1) |
 | `ranking-append-only` | FR-39 | AD-37 | structural | ranking_version_is_append_only | RankingVersion/RankedEntry construction outside the store adapter + any UPDATE/DELETE of ranking_version/ranked_entry across apx/** (append-only, one owner — Story 4.3) |
 | `no-retained-discarded-set` | FR-16 | AD-39 | structural | no_retained_or_discarded_set_column | table + column names across the ORM models — no table/column names a retained/discarded set membership; those sets are views over the order + the line + pins (Story 4.3) |
+| `confidence-one-derivation` | FR-42 | AD-19 | structural | confidence_has_one_derivation | Confidence(...) construction sites across apx/** — the per-pièce confidence is built only in core/domain/piece_confidence.py, so it has one auditable derivation, never a self-reported figure (Story 4.4) |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |
 | `meta-property-has-check` | FR-56 | AD-33 | structural | every_structural_property_has_a_registered_check | this manifest vs CHECKS |

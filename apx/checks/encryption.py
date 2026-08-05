@@ -87,6 +87,9 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     ("RankingVersion", "identity_json"),
     ("RankingVersion", "fingerprint"),  # a sha256 identity hash — non-content, table-scoped
     ("RankedEntry", "failure_reason"),
+    # Story 4.4 — the derived-confidence signal list (comma-joined categorical enums, like
+    # band/label); NULL when not derived. Non-content, non-PII.
+    ("RankedEntry", "confidence_signals"),
 }
 
 

@@ -20,6 +20,7 @@ from apx.adapters.store_postgres.models import RankingVersion as RankingVersionR
 from apx.adapters.store_postgres.store import SqlStore, StaleRankingInput
 from apx.core.app.ingest import IngestionResult
 from apx.core.domain.cascade import Band, CascadeResult, PieceJudgement, Stage
+from apx.core.domain.config import CascadeConfig
 from apx.core.domain.ranking import RankingIdentityInputs, assemble_identity, rank_cascade
 
 
@@ -54,6 +55,10 @@ def _identity(basis: str, ct_id: str | None = None):  # noqa: ANN202
         calibration_sample=20, stage3_max_share=0.5)
 
 
+_CFG = CascadeConfig(uncertain_low=0.35, uncertain_high=0.65, calibration_sample=20,
+                     stage3_max_share=0.5)
+
+
 def _order(judgements: list[PieceJudgement], *, unscored: tuple[str, ...] = ()):  # noqa: ANN202
     families: dict[str, list[str]] = {}
     for j in judgements:
@@ -61,7 +66,7 @@ def _order(judgements: list[PieceJudgement], *, unscored: tuple[str, ...] = ()):
     result = CascadeResult(
         judgements=tuple(judgements), families={k: tuple(v) for k, v in families.items()},
         unscored=unscored, stage3_share=0.5, over_stage3_floor=False, basis="case-theory")
-    return rank_cascade(result)
+    return rank_cascade(result, _CFG)
 
 
 def _judged(pid: str, band: Band, score: float) -> PieceJudgement:
@@ -205,3 +210,19 @@ def test_the_version_no_unique_constraint_forbids_a_silent_overwrite(store: SqlS
 def store_now():  # noqa: ANN201
     from datetime import UTC, datetime
     return datetime.now(UTC)
+
+
+def test_the_derived_confidence_is_persisted_and_read_back(store: SqlStore) -> None:
+    # Story 4.4: a confident-relevant pièce carries a derived confidence; an unscored one is NULL
+    # (not derived, AD-19). The round-trip preserves the NULL-vs-value distinction.
+    order = _order(
+        [_judged("rel", Band.CONFIDENT_RELEVANT, 0.9),
+         PieceJudgement.unscored(piece_id="bad", family_id="fam-bad", is_representative=True,
+                                 failure_reason="RuntimeError")],
+        unscored=("bad",))
+    store.record_ranking(tenant="t", matter="m", actor="a", identity=_identity("intrinsic"),
+                         order=order)
+    rows = {r.piece_id: r for r in store.read_ranked_order(tenant="t", matter="m", scopes={"w"})}
+    assert rows["rel"].confidence is not None and 0.0 <= rows["rel"].confidence <= 1.0
+    assert "score-margin" in rows["rel"].confidence_signals
+    assert rows["bad"].confidence is None and rows["bad"].confidence_signals is None  # not derived

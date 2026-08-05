@@ -54,6 +54,6 @@ def produce_ranking(
         inputs=resolved, basis=result.basis,
         uncertain_low=config.uncertain_low, uncertain_high=config.uncertain_high,
         calibration_sample=config.calibration_sample, stage3_max_share=config.stage3_max_share)
-    order = rank_cascade(result)
+    order = rank_cascade(result, config)
     return recorder.record_ranking(
         tenant=tenant, matter=matter, actor=actor, identity=identity, order=order)
