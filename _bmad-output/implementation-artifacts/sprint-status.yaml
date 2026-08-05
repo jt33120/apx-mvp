@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-08-05  # Epic 4: 4-1..4-5, 4-7, 4-8 DONE; triage UX pass done (EXPERIENCE-EPIC4). Epic 3 done
+last_updated: 2026-08-05  # Epic 4: 4-1..4-5, 4-7, 4-8, 4-9 DONE; triage UX pass done (EXPERIENCE-EPIC4). Epic 3 done
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -87,7 +87,7 @@ development_status:
   4-6-per-pi-ce-confidence-and-a-justification-derived-from-named-evidence: backlog
   4-7-one-ranked-order-nothing-deleted-nothing-categorised: done  # retained/discarded as VIEWS (derive_triage_sets, never stored); discard≠deletion proven via exhaustive search (FR-13); sets name their version; retained-versions bound = config (retirement deferred, AD-7); line/pins are typed inputs (4.8/4.11) (Julian, 2026-08-05)
   4-8-the-tool-draws-the-line-and-commits: done  # the tool draws the line (FR-17): recall-first system placement, stored by last-retained-pièce identity (never a bare integer), append-only version-bound line_placement ledger; import can't move it; placing never reorders; port+use-case seam; 2 structural checks (Julian, 2026-08-05)
-  4-9-moving-the-line-is-priced: backlog
+  4-9-moving-the-line-is-priced: done  # moving the line is priced (FR-19): Δ pièces + projected discarded-set prevalence — a projection from the ranking, NEVER a sampling bound (structural check line-projection-not-a-bound); retain-everything says no bound applies (never 0%); counts-only fallback; the human move is serialised (StaleLine) + audited with the priced statement shown (Julian, 2026-08-05)
   4-10-the-editable-cell-by-cell-table-with-a-live-change-log: backlog
   4-11-the-pin-moving-a-single-pi-ce-across-the-line: backlog
   4-12-never-hard-delete-proven-by-a-bounded-probe: backlog

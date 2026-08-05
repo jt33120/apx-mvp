@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Protocol
 
 from apx.core.domain.line import LinePlacementView
+from apx.core.domain.line_projection import PricedMove
 
 
 class LinePlacementRecorder(Protocol):
@@ -36,4 +37,26 @@ class LinePlacementRecorder(Protocol):
         """The CURRENT line over a *ranking version* — a VIEW (the max-``seq`` placement), naming
         its version (AD-23). Returns ``None`` when out of scope, absent, with no such ranking
         version, or with no line placed yet (non-disclosing). Not audited (a read)."""
+        ...
+
+    def price_line_move(
+        self, *, tenant: str, matter: str, scopes: set[str],
+        candidate_last_retained_piece_id: str, version_no: int | None = None,
+    ) -> PricedMove | None:
+        """Price moving **the line** to a candidate position (FR-19): Δ *pièces*-to-read and the
+        change in the projected discarded-set prevalence — a **projection from the ranking**, never
+        a sampling bound (§0.2). Returns ``None`` when out of scope / absent / no ranking version
+        (non-disclosing). Not audited (a preview)."""
+        ...
+
+    def move_line(
+        self, *, tenant: str, matter: str, actor: str, scopes: set[str],
+        last_retained_piece_id: str, expected_seq: int, priced_statement: str,
+        version_no: int | None = None,
+    ) -> LinePlacementView:
+        """Commit a human move of **the line** to a chosen *pièce* (FR-19), atomically with one
+        audit entry carrying old/new position and the **priced statement that was shown**. The move
+        is serialised — a move against a superseded position raises a stale-line error and writes
+        nothing. Never reorders the order. Raises a typed error for an out-of-scope *matter* or a
+        *pièce* not in the ranked order."""
         ...

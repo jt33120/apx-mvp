@@ -11,8 +11,9 @@ from sqlalchemy.pool import StaticPool
 
 from apx.adapters.store_postgres.models import Base
 from apx.adapters.store_postgres.store import SqlStore
-from apx.core.app.line import place_line, read_current_line
+from apx.core.app.line import move_line, place_line, price_line_move, read_current_line
 from apx.core.domain.line import LinePlacementView
+from apx.core.domain.line_projection import PricedMove
 
 
 class _FakeRecorder:
@@ -33,6 +34,20 @@ class _FakeRecorder:
         self.calls.append(("read", tenant, matter, frozenset(scopes), version_no))
         return self._view
 
+    def price_line_move(self, *, tenant, matter, scopes,  # noqa: ANN001,ANN003
+                        candidate_last_retained_piece_id, version_no=None):
+        self.calls.append(
+            ("price", tenant, matter, frozenset(scopes), candidate_last_retained_piece_id))
+        return PricedMove(pieces_to_read_delta=3, current_prevalence=0.03,
+                          candidate_prevalence=0.004, discarded_empty=False,
+                          prevalence_available=True)
+
+    def move_line(self, *, tenant, matter, actor, scopes,  # noqa: ANN001,ANN003
+                 last_retained_piece_id, expected_seq, priced_statement, version_no=None):
+        self.calls.append(
+            ("move", tenant, matter, actor, last_retained_piece_id, expected_seq, priced_statement))
+        return self._view
+
 
 def test_place_line_forwards_every_argument_and_returns_the_view() -> None:
     rec = _FakeRecorder()
@@ -48,9 +63,27 @@ def test_read_current_line_forwards_every_argument() -> None:
     assert rec.calls == [("read", "t", "m", frozenset({"w"}), None)]
 
 
+def test_price_line_move_forwards_and_returns_the_projection() -> None:
+    rec = _FakeRecorder()
+    move = price_line_move(
+        rec, tenant="t", matter="m", scopes={"w"}, candidate_last_retained_piece_id="p")
+    assert move.pieces_to_read_delta == 3 and move.candidate_prevalence == 0.004
+    assert rec.calls == [("price", "t", "m", frozenset({"w"}), "p")]
+
+
+def test_move_line_forwards_every_argument() -> None:
+    rec = _FakeRecorder()
+    view = move_line(
+        rec, tenant="t", matter="m", actor="a", scopes={"w"}, last_retained_piece_id="p",
+        expected_seq=2, priced_statement="shown")
+    assert view is rec._view
+    assert rec.calls == [("move", "t", "m", "a", "p", 2, "shown")]
+
+
 def test_the_real_store_satisfies_the_recorder_port() -> None:
     # the store is a structural LinePlacementRecorder — the app seam can drive it directly (AD-4)
     e = create_engine("sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(e)
     store = SqlStore(sessionmaker(bind=e, future=True))
     assert callable(store.place_line) and callable(store.read_current_line)
+    assert callable(store.price_line_move) and callable(store.move_line)

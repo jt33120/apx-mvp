@@ -85,6 +85,13 @@ from apx.core.domain.failures import ErrorClass, cardinality_for
 from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.line import LinePlacementView, RankedBand, recommend_line
+from apx.core.domain.line_projection import (
+    PROJECTION_METHOD,
+    PricedMove,
+)
+from apx.core.domain.line_projection import (
+    price_line_move as project_line_move,
+)
 from apx.core.domain.normalization import normalize
 from apx.core.domain.ranking import (
     RankedOrder,
@@ -147,6 +154,20 @@ class StaleLabel(Exception):
     """The conditional commit refused a taxonomy-label edit whose observed ``seq`` no longer holds
     (AD-37): the *pièce*'s label moved under the caller between read and write. Nothing is written —
     a label edit never silently overwrites a change the caller did not see (FR-40 / FR-20)."""
+
+
+class StaleLine(Exception):
+    """The serialised line move was refused because the line moved under the caller (FR-19): a
+    second user's move against a superseded position is rejected, nothing is written, and the
+    CURRENT position (``current_seq`` / ``current_last_retained_piece_id``) is carried so the
+    interface can show it. This keeps the audit from ever storing a priced statement never true."""
+
+    def __init__(self, current_seq: int, current_last_retained_piece_id: str | None) -> None:
+        self.current_seq = current_seq
+        self.current_last_retained_piece_id = current_last_retained_piece_id
+        super().__init__(
+            f"the line moved under the edit (expected a superseded position; current seq "
+            f"{current_seq}, last retained {current_last_retained_piece_id})")
 
 
 @dataclass(frozen=True)
@@ -3324,3 +3345,107 @@ class SqlStore:
                 version_id=version[0], version_no=version[1],
                 last_retained_piece_id=row.last_retained_piece_id, basis=row.basis, seq=row.seq,
                 at=row.at)
+
+    # ── Story 4.9: moving the line is priced — the ranking projection + the serialised move ──────
+    def price_line_move(
+        self, *, tenant: str, matter: str, scopes: set[str],
+        candidate_last_retained_piece_id: str, version_no: int | None = None,
+    ) -> PricedMove | None:
+        """Price moving **the line** to a candidate position (FR-19) — Δ *pièces*-to-read and the
+        change in the estimated prevalence of relevant material in the resulting discarded set, a
+        **projection from the ranking** (never a sampling bound; §0.2). Compares against the CURRENT
+        line (the ledger's current placement, else the system recommendation). Scope pre-filtered
+        (AD-13); returns None when out of scope, absent, or with no such ranking version
+        (non-disclosing). **Not audited** (a preview). Retain-everything → the discarded set is
+        empty, no bound applies (never 0%); no projectable *pièce* → the prevalence unavailable."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            pinned = (
+                [RankingVersionRow.version_no == version_no] if version_no is not None else [])
+            version = session.scalar(
+                select(RankingVersionRow.id)
+                .where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter, *pinned)
+                .order_by(RankingVersionRow.version_no.desc()).limit(1))
+            if version is None:
+                return None
+            rows = session.execute(
+                select(RankedEntry.piece_id, RankedEntry.band, RankedEntry.confidence)
+                .where(RankedEntry.ranking_version_id == version, RankedEntry.rank.isnot(None))
+                .order_by(RankedEntry.rank)).all()
+            placed = session.scalar(
+                select(LinePlacement.last_retained_piece_id)
+                .where(LinePlacement.ranking_version_id == version)
+                .order_by(LinePlacement.seq.desc()).limit(1))
+            retain_bands = self._line_retain_bands(session, tenant)
+        order = [(pid, band, conf) for pid, band, conf in rows]
+        if placed is not None:
+            current_line: Line | None = Line(last_retained_piece_id=placed)
+        else:  # no line placed yet — the system recommendation is the implicit current position
+            current_line = recommend_line(
+                [RankedBand(piece_id=pid, band=band) for pid, band, _ in rows],
+                retain_bands=retain_bands)
+        candidate_line = Line(last_retained_piece_id=candidate_last_retained_piece_id)
+        return project_line_move(order, current_line, candidate_line)
+
+    def move_line(
+        self, *, tenant: str, matter: str, actor: str, scopes: set[str],
+        last_retained_piece_id: str, expected_seq: int, priced_statement: str,
+        version_no: int | None = None,
+    ) -> LinePlacementView:
+        """Commit a human move of **the line** to a chosen *pièce* (FR-19) — appends a
+        ``LinePlacement`` (append-only, AD-7), **CONDITIONAL on ``expected_seq``**: a move against a
+        superseded position raises :class:`StaleLine` with the current position and writes nothing
+        (the serialised-move rule — the line is a single per-*matter* parameter, not a cell). The
+        write is atomic with one ``line_moved`` audit entry recording old position, new position,
+        author, ranking version, the projection method and the **priced statement that was shown**
+        (FR-19). Touches only ``line_placement`` — never the order. Scope-checked (``ScopeDenied``).
+        Raises ``ValueError`` when the chosen *pièce* is not in the version's ranked order."""
+        box: list[LinePlacementView] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            pinned = (
+                [RankingVersionRow.version_no == version_no] if version_no is not None else [])
+            version = session.scalars(
+                select(RankingVersionRow)
+                .where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter, *pinned)
+                .order_by(RankingVersionRow.version_no.desc()).limit(1)).first()
+            if version is None:
+                raise ValueError("no ranking version to move the line over")
+            ranked_ids = set(session.scalars(
+                select(RankedEntry.piece_id).where(
+                    RankedEntry.ranking_version_id == version.id,
+                    RankedEntry.rank.isnot(None))).all())
+            if last_retained_piece_id not in ranked_ids:
+                raise ValueError(
+                    f"the line names a pièce not in the ranked order: {last_retained_piece_id}")
+            current = session.execute(
+                select(LinePlacement.seq, LinePlacement.last_retained_piece_id)
+                .where(LinePlacement.ranking_version_id == version.id)
+                .order_by(LinePlacement.seq.desc()).limit(1)).first()
+            current_seq = current[0] if current is not None else 0
+            current_last = current[1] if current is not None else None
+            if expected_seq != current_seq:  # the line moved under the caller (AD-37) — refuse
+                raise StaleLine(current_seq, current_last)
+            basis = self._line_basis(version)
+            seq = current_seq + 1
+            entry_id = hashlib.sha256(f"{version.id}\x00{seq}".encode()).hexdigest()
+            session.add(LinePlacement(
+                id=entry_id, tenant=tenant, matter=matter, ranking_version_id=version.id, seq=seq,
+                last_retained_piece_id=last_retained_piece_id, basis=basis, placed_by=actor,
+                at=now))
+            self._append_audit(
+                session, tenant, matter, actor, "line_moved",
+                f"version={version.version_no} old={(current_last or 'none')[:12]} "
+                f"new={last_retained_piece_id[:12]} method={PROJECTION_METHOD} "
+                f"priced={priced_statement}", now)
+            box.append(LinePlacementView(
+                version_id=version.id, version_no=version.version_no,
+                last_retained_piece_id=last_retained_piece_id, basis=basis, seq=seq, at=now))
+
+        self._audited_tx(_work)
+        return box[-1]

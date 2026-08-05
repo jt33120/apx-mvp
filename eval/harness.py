@@ -127,3 +127,61 @@ def confidence_calibration(
         if claimed_p_relevant - share > tolerance:  # claimed more relevance than reality supports
             overconfident = True
     return CalibrationResult(bands=tuple(bands), systematically_overconfident=overconfident)
+
+
+@dataclass(frozen=True)
+class BandProjection:
+    """One band's PROJECTION calibration against the gold set (SM-17, FR-19): the mean projected
+    **probability of relevance** the ranking projection asserted for the band vs the relevant share
+    actually OBSERVED, and the optimism gap (positive when reality has MORE relevant material than
+    the projection claimed — the dangerous direction for a priced move)."""
+
+    band: str
+    projected_p_relevant: float
+    observed_share: float
+    relevant: int
+    total: int
+
+    @property
+    def optimism_gap(self) -> float:
+        return self.observed_share - self.projected_p_relevant
+
+
+@dataclass(frozen=True)
+class ProjectionCalibrationResult:
+    bands: tuple[BandProjection, ...]
+    systematically_optimistic: bool
+
+
+def projection_calibration(
+    observations: Mapping[str, tuple[float, int, int]], *, tolerance: float = 0.1
+) -> ProjectionCalibrationResult:
+    """Calibrate the ranking PREVALENCE PROJECTION against the gold set (SM-17, FR-19): among the
+    *pièces* in each band, compare the projection's claimed mean **probability of relevance** to the
+    OBSERVED relevant share, and flag the projection **systematically optimistic** when any band's
+    observed share exceeds its claim beyond ``tolerance`` — i.e. the projection said the set was
+    CLEANER (fewer relevant) than it is. That is the dangerous direction: a priced move that
+    under-states the relevant material left in the discarded set is the single most dangerous
+    artefact the product can emit (FR-19), so the build gate fires on it.
+
+    ``observations`` maps a band label to ``(projected_p_relevant, relevant_count, total_count)`` —
+    the projection's claim as a **P(relevant)** (already converted from any directional confidence,
+    ``p_relevant = c`` for a relevant band, ``1 - c`` for a discard band) and the gold ground truth.
+    This computes the calibration MATH now; the full gold-corpus run defers like
+    :func:`confidence_calibration` and :func:`recall_at_the_line`."""
+    bands: list[BandProjection] = []
+    optimistic = False
+    for band, (projected_p_relevant, relevant, total) in sorted(observations.items()):
+        if total <= 0:
+            raise ValueError(f"band {band!r}: total must be positive, got {total}")
+        if not 0 <= relevant <= total:
+            raise ValueError(f"band {band!r}: relevant {relevant} out of [0, {total}]")
+        if not 0.0 <= projected_p_relevant <= 1.0:
+            raise ValueError(
+                f"band {band!r}: projected_p_relevant {projected_p_relevant} out of [0, 1] — "
+                "convert a directional confidence to a probability of relevance before calibrating")
+        share = relevant / total
+        bands.append(BandProjection(band, projected_p_relevant, share, relevant, total))
+        if share - projected_p_relevant > tolerance:  # reality has more relevant than projected
+            optimistic = True
+    return ProjectionCalibrationResult(bands=tuple(bands), systematically_optimistic=optimistic)

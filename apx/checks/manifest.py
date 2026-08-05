@@ -43,6 +43,7 @@ from apx.checks import (
     isolation_harness,
     label_not_a_ranking_input,
     line_placement_ownership,
+    line_projection_not_a_bound,
     line_stored_by_piece_identity,
     no_truncation,
     originals_encrypted,
@@ -493,6 +494,12 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        line_placement_ownership.line_placement_is_append_only,
        "LinePlacement construction outside the store adapter + any UPDATE/DELETE of line_placement "
        "across apx/** (append-only, one owner — Story 4.8)"),
+    # ── story 4.9: the priced move is a projection from the ranking, never a sampling bound ───────
+    _p("line-projection-not-a-bound", "FR-19", "AD-20",
+       "the priced move is a projection, not a sampling bound",
+       line_projection_not_a_bound.line_projection_is_not_a_sampling_bound,
+       "core/domain/line_projection.py imports/references — it never depends on "
+       "confidence.prevalence_upper_bound, so a projection is never computed by the bound (§0.2)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),
