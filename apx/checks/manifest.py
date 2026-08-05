@@ -41,6 +41,7 @@ from apx.checks import (
     import_contracts,
     inventory_record,
     isolation_harness,
+    label_not_a_ranking_input,
     no_truncation,
     originals_encrypted,
     payload_schema,
@@ -53,6 +54,7 @@ from apx.checks import (
     renders_sanitized,
     scope_admin,
     secrets,
+    taxonomy_label_ownership,
     tenant_isolation,
     truth_status,
     truth_status_surface,
@@ -463,6 +465,15 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
     _p("confidence-one-derivation", "FR-42", "AD-19", "confidence has one derivation",
        confidence_derivation.confidence_has_one_derivation,
        "Confidence(...) construction sites across apx/** (built only in piece_confidence.py)"),
+    # ── story 4.5: per-pièce taxonomy labelling — append-only ledger; the order ignores the label ─
+    _p("taxonomy-label-append-only", "FR-40", "AD-37", "taxonomy labels append-only, one owner",
+       taxonomy_label_ownership.taxonomy_label_is_append_only,
+       "TaxonomyLabelEntry construction outside the store adapter + any UPDATE/DELETE of "
+       "taxonomy_label_entry across apx/** (append-only, one owner — Story 4.5)"),
+    _p("label-not-a-ranking-input", "FR-43", "AD-39", "the ranked order ignores the taxonomy label",
+       label_not_a_ranking_input.ranking_order_ignores_the_taxonomy_label,
+       "core/domain/ranking.py + core/app/rank.py import/reference of the taxonomy-label axis — a "
+       "label is never an ordering input, so it never moves a pièce or the line (Story 4.5)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

@@ -641,3 +641,41 @@ class RankedEntry(Base):
     # METHOD lives in ranking_version.identity_json (AD-23), so the number is reconstructible.
     confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
     confidence_signals: Mapped[str | None] = mapped_column(String, nullable=True)  # comma-joined
+
+
+class TaxonomyLabelEntry(Base):
+    """One change-log entry for a *pièce*'s TAXONOMY label (FR-40, Story 4.5) — a THIRD label axis,
+    orthogonal to the relevance verdict (``piece_label``) and the cascade's ``ranked_entry.label``.
+    **APPEND-ONLY** and **version-INDEPENDENT** (keyed by the *pièce*, not a *ranking version*): an
+    assignment or a reversal is a NEW row, never an overwrite (AD-7; asserted by
+    ``taxonomy_label_is_append_only``). The CURRENT label is a **VIEW** — the max-``seq`` row, or
+    ``unlabelled`` when none (AD-39: never a stored mutable membership; never null, never a default,
+    FR-40). Because it is version-independent, a **human-set** label survives re-ranking untouched.
+
+    ``seq`` is the server-assigned per-*pièce* monotonic order (AD-49). ``label`` is a taxonomy
+    member or the ``unlabelled`` sentinel. ``set_by`` is the actor (PII) → application-encrypted
+    (AD-31); ``source``/``label`` are categorical, plaintext. No cascade FK (AD-7): a *matter* is
+    retired, never hard-deleted out from under its labels."""
+
+    __tablename__ = "taxonomy_label_entry"
+    __table_args__ = (
+        # per-pièce monotonic seq; a concurrent double-write collides here and fails loudly (AD-37
+        # conditional commit), never a silent overwrite.
+        UniqueConstraint("tenant", "matter", "piece_id", "seq", name="uq_taxonomy_label_seq"),
+        Index("ix_taxonomy_label_piece", "tenant", "matter", "piece_id"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(pid \0 seq, tenant-qual)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    piece_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)  # per-pièce monotonic (AD-49)
+    label: Mapped[str] = mapped_column(String, nullable=False)  # a taxonomy member OR 'unlabelled'
+    source: Mapped[str] = mapped_column(String, nullable=False)  # human | machine (reserved)
+    # the actor who set it (PII), never a SQL predicate → application-encrypted (AD-31).
+    set_by: Mapped[str] = mapped_column(
+        EncryptedText("taxonomy_label_entry.set_by"), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -28,6 +28,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from apx.core.domain.taxonomy_label import UNLABELLED
+
 # The value kinds a configuration value may take. Kept small and JSON-serialisable so the store
 # can hold every value in one text column and the surface can validate generically.
 Kind = str  # one of _KINDS below
@@ -186,6 +188,10 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
     ConfigKey(
         "taxonomy", "str_list", [],
         governs="the tenant's classification taxonomy (seeded at provisioning)",
+        # Every label is a non-blank string, and the `unlabelled` sentinel is RESERVED (FR-40): a
+        # real category may never collide with the explicit absence value (per-pièce labelling reads
+        # this list to validate an assignment against it — Story 4.5).
+        valid=lambda v: all(isinstance(x, str) and x.strip() and x != UNLABELLED for x in v),
     ),
     # ── import-job capacity bounds (AD-17): configuration-as-data, never hard-coded, each a
     # failure-register class rather than an outage ──

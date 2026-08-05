@@ -48,6 +48,7 @@ from apx.adapters.store_postgres.models import (
     RankedEntry,
     RecallReview,
     SessionRecord,
+    TaxonomyLabelEntry,
     TenantSetting,
     TruncationMarker,
     User,
@@ -89,6 +90,13 @@ from apx.core.domain.ranking import (
 )
 from apx.core.domain.retrieval import DeterministicResult, SemanticResult
 from apx.core.domain.search import snippet
+from apx.core.domain.taxonomy_label import (
+    LabelEntry,
+    LabelSource,
+    current_label,
+    is_member,
+    validate_label,
+)
 from apx.core.domain.triage import TriageOutcome
 from apx.core.ports.read import ExactSearch, PieceView
 from apx.core.projection import Snapshot
@@ -106,7 +114,7 @@ _HEAD_SCHEMA_VERSION = "slice-a"  # the payload schema version (AD-40) stamped o
 _BACKUP_TABLES = (
     "matter_scope", "user_account", "session", "tenant_setting",
     "piece", "chunk", "failure", "noise_exclusion", "piece_label", "audit_record", "recall_review",
-    "backup_record", "truncation_marker",
+    "backup_record", "truncation_marker", "taxonomy_label_entry",
 )
 
 
@@ -129,6 +137,12 @@ class StaleRankingInput(Exception):
     (AD-23/AD-37): the *matter*'s latest *case-theory* version at commit time differs from the one
     the ranking recorded. Nothing is written — a ranking is never silently committed over a case
     theory that moved while it was being produced."""
+
+
+class StaleLabel(Exception):
+    """The conditional commit refused a taxonomy-label edit whose observed ``seq`` no longer holds
+    (AD-37): the *pièce*'s label moved under the caller between read and write. Nothing is written —
+    a label edit never silently overwrites a change the caller did not see (FR-40 / FR-20)."""
 
 
 @dataclass(frozen=True)
@@ -422,6 +436,50 @@ class RankedEntryView:
     supersedes: bool
     confidence: float | None       # Story 4.4 — None == not derived (AD-19)
     confidence_signals: str | None  # the comma-joined observable signals, None when not derived
+
+
+@dataclass(frozen=True)
+class CurrentLabel:
+    """A *pièce*'s CURRENT taxonomy label (Story 4.5, FR-40) — a VIEW over the append-only ledger.
+    ``label`` is NEVER null: a taxonomy member, or the explicit ``unlabelled`` when the *pièce* has
+    no assignment. ``seq``/``source`` are None only for that never-labelled default.
+    ``in_current_taxonomy`` is False when the label was valid when set but the taxonomy has since
+    changed (FR-40 — such a label is shown as such, never silently remapped or nulled)."""
+
+    piece_id: str
+    label: str
+    source: str | None
+    seq: int | None
+    in_current_taxonomy: bool
+
+
+@dataclass(frozen=True)
+class LabelChangeEntry:
+    """One entry in a *pièce*'s taxonomy-label change log (Story 4.5, FR-40/FR-20) — append-only, in
+    ``seq`` order. An assignment or a reversal is a distinct entry; the history is never rewritten
+    (AD-7). ``set_by``/``at`` make each edit attributable and reversible from the log."""
+
+    seq: int
+    label: str
+    source: str
+    set_by: str
+    at: datetime
+
+
+@dataclass(frozen=True)
+class LabelCoverage:
+    """The SM-19 per-*matter* labelling figures over the *pièces* of the latest *ranking version*:
+    ``total`` pièces, how many carry a real (non-``unlabelled``) label, the ``unlabelled`` share,
+    and how many carry a label no longer in the taxonomy (``out_of_taxonomy`` — the
+    zero-silently-remapped evidence). ``without_label`` is always zero by construction (every pièce
+    has exactly one label — a member or ``unlabelled``), so SM-19's first figure is explicit."""
+
+    total: int
+    labelled: int
+    unlabelled: int
+    unlabelled_share: float
+    out_of_taxonomy: int
+    without_label: int
 
 
 @dataclass(frozen=True)
@@ -2914,3 +2972,177 @@ class SqlStore:
                     is_representative=r.is_representative, supersedes=r.supersedes,
                     confidence=r.confidence, confidence_signals=r.confidence_signals)
                 for r in rows]
+
+    # ── Story 4.5: per-pièce taxonomy labelling — the append-only, version-independent ledger ────
+    def _current_taxonomy(self, session: Session, tenant: str) -> list[str]:
+        """The tenant's configured taxonomy list (config-as-data), read INSIDE the caller's tx so a
+        label is validated against the taxonomy current at write time (AD-24/AD-25)."""
+        spec = require_key("taxonomy")
+        row = session.get(TenantSetting, {"tenant": tenant, "key": "taxonomy"})
+        return list(loads_value(row.value)) if row is not None else list(spec.default)
+
+    def _append_label_entry(
+        self, session: Session, now: datetime, *, tenant: str, matter: str, actor: str,
+        piece_id: str, label: str, source: LabelSource, expected_seq: int | None, note: str,
+    ) -> int:
+        """Validate + append ONE label ledger entry (and its audit) inside the caller's tx (the
+        caller has already scope-checked). Validates ``label`` against the CURRENT taxonomy ∪
+        {unlabelled} — an out-of-taxonomy label can never leak (FR-40). Mints the per-pièce
+        monotonic ``seq`` (AD-49); a conditional commit on ``expected_seq`` fails loudly if it moved
+        (AD-37). Never overwrites — this is always an INSERT (AD-7). Returns the new ``seq``."""
+        validate_label(label, self._current_taxonomy(session, tenant))
+        current_max = session.scalar(
+            select(func.max(TaxonomyLabelEntry.seq)).where(
+                TaxonomyLabelEntry.tenant == tenant, TaxonomyLabelEntry.matter == matter,
+                TaxonomyLabelEntry.piece_id == piece_id)) or 0
+        if expected_seq is not None and current_max != expected_seq:
+            raise StaleLabel(
+                f"label moved under the edit (observed seq {expected_seq}, now {current_max})")
+        seq = current_max + 1
+        entry_id = hashlib.sha256(
+            f"{tenant}\x00{matter}\x00{piece_id}\x00{seq}".encode()).hexdigest()
+        session.add(TaxonomyLabelEntry(
+            id=entry_id, tenant=tenant, matter=matter, piece_id=piece_id, seq=seq,
+            label=label, source=source.value, set_by=actor, at=now))
+        self._append_audit(
+            session, tenant, matter, actor, "piece_labelled",
+            f"piece={piece_id[:12]} label={label} source={source.value} seq={seq} {note}", now)
+        return seq
+
+    def assign_label(
+        self, *, tenant: str, matter: str, actor: str, piece_id: str, label: str,
+        scopes: set[str], expected_seq: int | None = None,
+    ) -> int:
+        """Assign a *pièce*'s taxonomy label — the ONE owning use case (AD-37), APPEND-ONLY (FR-40).
+        Validates against the tenant's current taxonomy ∪ {unlabelled} (out-of-taxonomy can never
+        leak); appends one ledger entry with a server monotonic ``seq`` (AD-49) ATOMIC with
+        one ``piece_labelled`` audit entry (AD-22); NEVER overwrites — a change is a new entry
+        (AD-7). CONDITIONAL on ``expected_seq`` when supplied: a label that moved raises
+        :class:`StaleLabel` (nothing written). Scope-checked (``ScopeDenied``, non-disclosing).
+        Returns the new ``seq``. Touches ONLY the label ledger — never the ranked order, so a label
+        never moves a *pièce* or the line (FR-43)."""
+        box: list[int] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            box.append(self._append_label_entry(
+                session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
+                label=label, source=LabelSource.HUMAN, expected_seq=expected_seq, note="assigned"))
+
+        self._audited_tx(_work)
+        return box[-1]
+
+    def revert_label(
+        self, *, tenant: str, matter: str, actor: str, piece_id: str, to_seq: int,
+        scopes: set[str],
+    ) -> int:
+        """Revert a *pièce*'s taxonomy label to the value it held at ``to_seq`` — reversible from
+        the change log (FR-40/FR-20). A reversal is a NEW human-set entry restoring a prior value,
+        never a destructive undo (AD-7). The restored value is re-validated against the CURRENT
+        taxonomy, so a reversion cannot re-introduce a category the taxonomy no longer contains
+        (revert to ``unlabelled`` is always possible). Scope-checked. Returns the new ``seq``.
+        Raises ``ValueError`` if ``to_seq`` is not an entry of this *pièce*."""
+        box: list[int] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            prior = session.scalar(
+                select(TaxonomyLabelEntry.label).where(
+                    TaxonomyLabelEntry.tenant == tenant, TaxonomyLabelEntry.matter == matter,
+                    TaxonomyLabelEntry.piece_id == piece_id, TaxonomyLabelEntry.seq == to_seq))
+            if prior is None:
+                raise ValueError(f"no label entry at seq {to_seq} for this pièce")
+            box.append(self._append_label_entry(
+                session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
+                label=prior, source=LabelSource.HUMAN, expected_seq=None,
+                note=f"reverted to seq {to_seq}"))
+
+        self._audited_tx(_work)
+        return box[-1]
+
+    def read_current_label(
+        self, *, tenant: str, matter: str, piece_id: str, scopes: set[str]
+    ) -> CurrentLabel | None:
+        """A *pièce*'s CURRENT taxonomy label — a VIEW over the append-only ledger (the max-``seq``
+        entry, or ``unlabelled`` when none — never null, FR-40). ``in_current_taxonomy`` is False
+        for a label the taxonomy no longer contains (shown as such, never remapped). Scope
+        pre-filtered (None when out of scope or absent — non-disclosing). Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            rows = session.execute(
+                select(TaxonomyLabelEntry.piece_id, TaxonomyLabelEntry.seq,
+                       TaxonomyLabelEntry.label, TaxonomyLabelEntry.source)
+                .where(TaxonomyLabelEntry.tenant == tenant, TaxonomyLabelEntry.matter == matter,
+                       TaxonomyLabelEntry.piece_id == piece_id)).all()
+            taxonomy = self._current_taxonomy(session, tenant)
+        view = current_label(
+            LabelEntry(pid, seq, label, LabelSource(src)) for pid, seq, label, src in rows)
+        return CurrentLabel(
+            piece_id=piece_id, label=view.label,
+            source=view.source.value if view.source is not None else None, seq=view.seq,
+            in_current_taxonomy=is_member(view.label, taxonomy))
+
+    def read_label_change_log(
+        self, *, tenant: str, matter: str, piece_id: str, scopes: set[str]
+    ) -> list[LabelChangeEntry] | None:
+        """A *pièce*'s full taxonomy-label change log, ascending by ``seq`` (append-only, FR-40/
+        FR-20 — every assignment and reversal is a distinct entry, never rewritten). Scope
+        pre-filtered; None when out of scope or absent; ``[]`` when no assignment exists."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            rows = session.scalars(
+                select(TaxonomyLabelEntry)
+                .where(TaxonomyLabelEntry.tenant == tenant, TaxonomyLabelEntry.matter == matter,
+                       TaxonomyLabelEntry.piece_id == piece_id)
+                .order_by(TaxonomyLabelEntry.seq.asc())).all()
+            return [
+                LabelChangeEntry(
+                    seq=r.seq, label=r.label, source=r.source, set_by=r.set_by, at=r.at)
+                for r in rows]
+
+    def read_label_coverage(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> LabelCoverage | None:
+        """The SM-19 labelling figures over the *pièces* of the matter's LATEST *ranking version*
+        (FR-40): every pièce carries exactly one label (``without_label`` is zero by construction),
+        the ``unlabelled`` share, and the count carrying a label no longer in the taxonomy
+        (``out_of_taxonomy`` — the zero-silently-remapped evidence). Scope pre-filtered; None when
+        out of scope or absent; zeroed when the matter has no ranking yet. Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            target = session.scalar(
+                select(RankingVersionRow.id)
+                .where(RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter)
+                .order_by(RankingVersionRow.version_no.desc()).limit(1))
+            if target is None:
+                return LabelCoverage(0, 0, 0, 0.0, 0, 0)
+            piece_ids = list(session.scalars(
+                select(RankedEntry.piece_id).where(RankedEntry.ranking_version_id == target)).all())
+            entries = session.execute(
+                select(TaxonomyLabelEntry.piece_id, TaxonomyLabelEntry.seq,
+                       TaxonomyLabelEntry.label, TaxonomyLabelEntry.source)
+                .where(TaxonomyLabelEntry.tenant == tenant,
+                       TaxonomyLabelEntry.matter == matter)).all()
+            taxonomy = self._current_taxonomy(session, tenant)
+        by_piece: dict[str, list[LabelEntry]] = {}
+        for pid, seq, label, src in entries:
+            by_piece.setdefault(pid, []).append(LabelEntry(pid, seq, label, LabelSource(src)))
+        labelled = unlabelled = out_of_taxonomy = 0
+        for pid in piece_ids:
+            view = current_label(by_piece.get(pid, ()))
+            if view.is_unlabelled:
+                unlabelled += 1
+            else:
+                labelled += 1
+                if not is_member(view.label, taxonomy):
+                    out_of_taxonomy += 1
+        total = len(piece_ids)
+        return LabelCoverage(
+            total=total, labelled=labelled, unlabelled=unlabelled,
+            unlabelled_share=(unlabelled / total) if total else 0.0,
+            out_of_taxonomy=out_of_taxonomy, without_label=0)

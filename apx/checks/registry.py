@@ -24,6 +24,7 @@ from apx.checks import (
     import_contracts,
     inventory_record,
     isolation_harness,
+    label_not_a_ranking_input,
     manifest,
     no_truncation,
     originals_encrypted,
@@ -37,6 +38,7 @@ from apx.checks import (
     renders_sanitized,
     scope_admin,
     secrets,
+    taxonomy_label_ownership,
     tenant_isolation,
     truth_status,
     truth_status_surface,
@@ -128,6 +130,11 @@ CHECKS: list[Callable[[], CheckResult]] = [
     ranking_sets_are_views.no_retained_or_discarded_set_column,
     # story 4.4 — confidence is derived by one implementation, never self-reported (FR-42/AD-19).
     confidence_derivation.confidence_has_one_derivation,
+    # story 4.5 — per-pièce taxonomy labelling: the ledger is append-only, one owner (AD-37/AD-7);
+    # the ranked order has no dependency on the label axis — a label never moves a pièce or the line
+    # (FR-40/FR-43/AD-39).
+    taxonomy_label_ownership.taxonomy_label_is_append_only,
+    label_not_a_ranking_input.ranking_order_ignores_the_taxonomy_label,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

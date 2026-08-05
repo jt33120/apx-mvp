@@ -90,6 +90,10 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     # Story 4.4 — the derived-confidence signal list (comma-joined categorical enums, like
     # band/label); NULL when not derived. Non-content, non-PII.
     ("RankedEntry", "confidence_signals"),
+    # Story 4.5 — the per-pièce taxonomy-label ledger. ``source`` is a categorical enum
+    # (human | machine), like ``band``/``outcome``. (``label`` is the already-plaintext bare name —
+    # a tenant-configured category displayed in the clear; the actor ``set_by`` is EncryptedText.)
+    ("TaxonomyLabelEntry", "source"),
 }
 
 

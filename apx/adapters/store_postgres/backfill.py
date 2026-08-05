@@ -53,6 +53,9 @@ ENCRYPTED_COLUMNS = [
     ("backup_record", "id", "detail", "backup_record.detail"),
     ("truncation_marker", "tenant", "cleared_by", "truncation_marker.cleared_by"),
     ("truncation_marker", "tenant", "reason", "truncation_marker.reason"),
+    # Story 4.5: the per-pièce taxonomy-label ledger — the actor who set a label (PII) is encrypted;
+    # single-PK (`id`), so key rotation addresses it directly (unlike composite-PK tenant_setting).
+    ("taxonomy_label_entry", "id", "set_by", "taxonomy_label_entry.set_by"),
 ]
 
 
