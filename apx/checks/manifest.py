@@ -42,6 +42,8 @@ from apx.checks import (
     inventory_record,
     isolation_harness,
     label_not_a_ranking_input,
+    line_placement_ownership,
+    line_stored_by_piece_identity,
     no_truncation,
     originals_encrypted,
     payload_schema,
@@ -480,6 +482,17 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        triage_sets_one_derivation.triage_sets_have_one_derivation,
        "TriageSets(...) construction sites across apx/** — the retained/discarded sets are one "
        "derived view (core/domain/triage_sets.py), never a stored membership (Story 4.7)"),
+    # ── story 4.8: the line the tool draws — stored by pièce identity (FR-17), append-only ────────
+    _p("line-stored-by-piece-identity", "FR-17", "AD-23",
+       "the line is stored by pièce identity, not a bare integer",
+       line_stored_by_piece_identity.line_is_stored_by_piece_identity,
+       "the line_placement model's columns — it stores last_retained_piece_id and NO ordinal "
+       "position column, so an import cannot silently move the line (Story 4.8/FR-17)"),
+    _p("line-placement-append-only", "FR-17", "AD-37",
+       "line placements are append-only, one owner",
+       line_placement_ownership.line_placement_is_append_only,
+       "LinePlacement construction outside the store adapter + any UPDATE/DELETE of line_placement "
+       "across apx/** (append-only, one owner — Story 4.8)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

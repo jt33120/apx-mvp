@@ -94,6 +94,12 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     # (human | machine), like ``band``/``outcome``. (``label`` is the already-plaintext bare name —
     # a tenant-configured category displayed in the clear; the actor ``set_by`` is EncryptedText.)
     ("TaxonomyLabelEntry", "source"),
+    # Story 4.8 — the line-placement ledger. ``last_retained_piece_id`` is a pièce identity hash
+    # (like the globally-allowed ``piece_id``); ``basis`` is the inherited structural basis
+    # (``case-theory:<version>`` | ``intrinsic:<named signals>``) — categorical/identity metadata,
+    # non-content, non-PII, like ``RankingVersion.basis``. (The actor ``placed_by`` is encrypted.)
+    ("LinePlacement", "last_retained_piece_id"),
+    ("LinePlacement", "basis"),
 }
 
 

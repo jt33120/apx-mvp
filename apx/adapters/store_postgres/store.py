@@ -40,6 +40,7 @@ from apx.adapters.store_postgres.models import (
     ImportJob,
     ImportUnit,
     LabelRecord,
+    LinePlacement,
     MatterScope,
     NoiseExclusion,
     Piece,
@@ -60,6 +61,7 @@ from apx.adapters.store_postgres.models import (
 from apx.adapters.store_postgres.semantic_query import results_from_rows, semantic_search_stmt
 from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
 from apx.core.domain.auth import hash_password, verify_and_upgrade, verify_password
+from apx.core.domain.cascade import INTRINSIC_SIGNALS
 from apx.core.domain.chunking import (
     PIECE_GONE,
     FailedResolution,
@@ -82,6 +84,7 @@ from apx.core.domain.dedup import cluster
 from apx.core.domain.failures import ErrorClass, cardinality_for
 from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
 from apx.core.domain.inventory import Inventory
+from apx.core.domain.line import LinePlacementView, RankedBand, recommend_line
 from apx.core.domain.normalization import normalize
 from apx.core.domain.ranking import (
     RankedOrder,
@@ -115,7 +118,7 @@ _HEAD_SCHEMA_VERSION = "slice-a"  # the payload schema version (AD-40) stamped o
 _BACKUP_TABLES = (
     "matter_scope", "user_account", "session", "tenant_setting",
     "piece", "chunk", "failure", "noise_exclusion", "piece_label", "audit_record", "recall_review",
-    "backup_record", "truncation_marker", "taxonomy_label_entry",
+    "backup_record", "truncation_marker", "taxonomy_label_entry", "line_placement",
 )
 
 
@@ -3212,3 +3215,112 @@ class SqlStore:
                 TenantSetting, {"tenant": tenant, "key": "retained_ranking_versions_max"})
         bound = int(loads_value(row.value)) if row is not None else int(spec.default)
         return VersionRetentionView(total=total, bound=bound, over_bound=max(0, total - bound))
+
+    # ── Story 4.8: the tool draws the line and commits — the append-only version-bound placement ──
+    def _line_retain_bands(self, session: Session, tenant: str) -> frozenset[str]:
+        """The tenant's configured line-retain bands (config-as-data), read INSIDE the caller's tx
+        so the cut is placed against the policy current at write time (AD-24/AD-25)."""
+        spec = require_key("line_retain_bands")
+        row = session.get(TenantSetting, {"tenant": tenant, "key": "line_retain_bands"})
+        return frozenset(loads_value(row.value) if row is not None else spec.default)
+
+    @staticmethod
+    def _line_basis(version: RankingVersionRow) -> str:
+        """The line's stated basis (FR-17), **inherited** from the *ranking version* it cuts — never
+        invented. ``case-theory:<version_id>`` where the ranking was computed under a case theory,
+        else ``intrinsic:<the named intrinsic signals>`` (FR-38's enumerated signals)."""
+        if version.basis == "case-theory" and version.case_theory_version_id is not None:
+            return f"case-theory:{version.case_theory_version_id}"
+        return "intrinsic:" + ",".join(s.value for s in INTRINSIC_SIGNALS)
+
+    def place_line(
+        self, *, tenant: str, matter: str, actor: str, scopes: set[str],
+        version_no: int | None = None,
+    ) -> LinePlacementView | None:
+        """Draw and commit **the line** over a *ranking version* — the ONE owning use case (AD-37).
+        The system recommends the cut recall-first (``recommend_line`` over the version's ranked
+        bands, using the tenant's ``line_retain_bands``); when a cut exists it appends one
+        ``LinePlacement`` row (server monotonic ``seq``, AD-49) ATOMIC with one ``line_placed``
+        audit entry (AD-22), CONDITIONAL on the ``seq`` (a concurrent double-write collides on the
+        unique constraint and fails loudly, AD-37). The line is stored by the identity of the **last
+        retained *pièce*** (never a bare integer, FR-17), with basis + author + timestamp. Touches
+        ONLY ``line_placement`` — never ``ranked_entry`` — so placing the line cannot reorder the
+        order (FR-17). Scope-checked (``ScopeDenied``, non-disclosing). Returns the placement view,
+        or ``None`` when the tool commits to no line (no *pièce* in a retain-band — never
+        fabricated, AD-19) or the matter has no such ranking version."""
+        box: list[LinePlacementView | None] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            pinned = (
+                [RankingVersionRow.version_no == version_no] if version_no is not None else [])
+            version = session.scalars(
+                select(RankingVersionRow)
+                .where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter, *pinned)
+                .order_by(RankingVersionRow.version_no.desc()).limit(1)).first()
+            if version is None:
+                box.append(None)  # held, but no such ranking version — nothing to place a line over
+                return
+            rows = session.execute(
+                select(RankedEntry.piece_id, RankedEntry.band)
+                .where(RankedEntry.ranking_version_id == version.id,
+                       RankedEntry.rank.isnot(None))
+                .order_by(RankedEntry.rank)).all()
+            order = [RankedBand(piece_id=pid, band=band) for pid, band in rows]
+            line = recommend_line(
+                order, retain_bands=self._line_retain_bands(session, tenant))
+            if line is None:
+                box.append(None)  # no pièce in a retain-band — the tool commits to no line (AD-19)
+                return
+            basis = self._line_basis(version)
+            current_max = session.scalar(
+                select(func.max(LinePlacement.seq)).where(
+                    LinePlacement.ranking_version_id == version.id)) or 0
+            seq = current_max + 1
+            entry_id = hashlib.sha256(f"{version.id}\x00{seq}".encode()).hexdigest()
+            session.add(LinePlacement(
+                id=entry_id, tenant=tenant, matter=matter, ranking_version_id=version.id, seq=seq,
+                last_retained_piece_id=line.last_retained_piece_id, basis=basis, placed_by=actor,
+                at=now))
+            self._append_audit(
+                session, tenant, matter, actor, "line_placed",
+                f"version={version.version_no} last_retained={line.last_retained_piece_id[:12]} "
+                f"basis={basis} seq={seq}", now)
+            box.append(LinePlacementView(
+                version_id=version.id, version_no=version.version_no,
+                last_retained_piece_id=line.last_retained_piece_id, basis=basis, seq=seq, at=now))
+
+        self._audited_tx(_work)
+        return box[-1]
+
+    def read_current_line(
+        self, *, tenant: str, matter: str, scopes: set[str], version_no: int | None = None,
+    ) -> LinePlacementView | None:
+        """The CURRENT line over a *ranking version* — a VIEW (the max-``seq`` ``LinePlacement``
+        row), naming its ``version_id`` (AD-23). Scope pre-filtered (AD-13); returns None when out
+        of scope, absent, with no such ranking version, or no line placed yet (non-disclosing).
+        Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            pinned = (
+                [RankingVersionRow.version_no == version_no] if version_no is not None else [])
+            version = session.execute(
+                select(RankingVersionRow.id, RankingVersionRow.version_no)
+                .where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter, *pinned)
+                .order_by(RankingVersionRow.version_no.desc()).limit(1)).first()
+            if version is None:
+                return None
+            row = session.scalars(
+                select(LinePlacement)
+                .where(LinePlacement.ranking_version_id == version[0])
+                .order_by(LinePlacement.seq.desc()).limit(1)).first()
+            if row is None:
+                return None  # held ranking version, but no line placed yet
+            return LinePlacementView(
+                version_id=version[0], version_no=version[1],
+                last_retained_piece_id=row.last_retained_piece_id, basis=row.basis, seq=row.seq,
+                at=row.at)

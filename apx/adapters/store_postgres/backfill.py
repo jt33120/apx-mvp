@@ -56,6 +56,9 @@ ENCRYPTED_COLUMNS = [
     # Story 4.5: the per-pièce taxonomy-label ledger — the actor who set a label (PII) is encrypted;
     # single-PK (`id`), so key rotation addresses it directly (unlike composite-PK tenant_setting).
     ("taxonomy_label_entry", "id", "set_by", "taxonomy_label_entry.set_by"),
+    # Story 4.8: the line-placement ledger — the actor who placed the line (PII) is encrypted;
+    # single-PK (`id`), so key rotation addresses it directly.
+    ("line_placement", "id", "placed_by", "line_placement.placed_by"),
 ]
 
 

@@ -28,7 +28,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from apx.core.domain.cascade import Band
 from apx.core.domain.taxonomy_label import UNLABELLED
+
+# the stage-2 band values a line-retain policy may name (Story 4.8) — an unknown band can never
+# leak into the cut. Derived from the closed Band vocabulary, so the two never drift.
+_BAND_VALUES: frozenset[str] = frozenset(b.value for b in Band)
 
 # The value kinds a configuration value may take. Kept small and JSON-serialisable so the store
 # can hold every value in one text column and the surface can validate generically.
@@ -243,6 +248,16 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         governs="the number of ranking versions retained per matter before old, unreferenced ones "
                 "may be retired (FR-16) — a never-delete-safe capacity bound",
         valid=lambda v: 1 <= v <= 100_000,  # at least one version kept; a sane ceiling
+    ),
+    # ── the line's recall-first placement policy (Story 4.8, FR-17): config-as-data. The tool
+    # recommends the cut after the deepest pièce whose stage-2 band is a retain-band. Recall over
+    # precision — the UNCERTAIN band is retained by default, never discarded. Every entry must be a
+    # real Band value, so an unknown band can never silently widen or void the cut. ──
+    ConfigKey(
+        "line_retain_bands", "str_list", ["confident-relevant", "uncertain"],
+        governs="the stage-2 bands the recommended line retains (Story 4.8/FR-17) — recall-first: "
+                "the cut falls after the deepest pièce in one of these bands",
+        valid=lambda v: bool(v) and all(x in _BAND_VALUES for x in v),  # non-empty, real bands only
     ),
     # ── the two switchable guarantees — the v1 defects, encoded as build-checked predicates ──
     ConfigKey(

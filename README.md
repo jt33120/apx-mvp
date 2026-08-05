@@ -296,6 +296,7 @@ The configuration keys (each editable as data, no redeploy):
 | `container_max_expansion_ratio` | int | `100` | maximum ratio of expanded bytes to a container's size; over it is a zip-bomb `container-unopenable` entry (AD-17) |
 | `attachments_per_message_max` | int | `1000` | maximum attachments expanded from one message before it is a `container-unopenable` entry (AD-17) |
 | `retained_ranking_versions_max` | int | `20` | the number of ranking versions retained per matter before old, unreferenced ones may be retired (FR-16) — a never-delete-safe capacity bound |
+| `line_retain_bands` | list | `[confident-relevant, uncertain]` | the stage-2 bands the recommended line retains (Story 4.8/FR-17) — recall-first: the cut falls after the deepest pièce in one of these bands |
 
 <!-- config-keys:end -->
 
@@ -445,6 +446,8 @@ could contain is an inflated claim about what the suite proves).
 | `taxonomy-label-append-only` | FR-40 | AD-37 | structural | taxonomy_label_is_append_only | TaxonomyLabelEntry construction outside the store adapter + any UPDATE/DELETE of taxonomy_label_entry across apx/** — an assignment and its reversal are always new entries (append-only, one owner — Story 4.5) |
 | `label-not-a-ranking-input` | FR-43 | AD-39 | structural | ranking_order_ignores_the_taxonomy_label | core/domain/ranking.py + core/app/rank.py import/reference of the taxonomy-label axis — a label is never an ordering input, so it never moves a pièce or the line (Story 4.5) |
 | `triage-sets-one-derivation` | FR-16 | AD-39 | structural | triage_sets_have_one_derivation | TriageSets(...) construction sites across apx/** — the retained/discarded sets are one derived view built only in core/domain/triage_sets.py, never a hand-rolled or stored membership (Story 4.7) |
+| `line-stored-by-piece-identity` | FR-17 | AD-23 | structural | line_is_stored_by_piece_identity | the line_placement model's columns — it stores last_retained_piece_id and NO ordinal position column, so an import that adds pièces cannot silently move the line (Story 4.8/FR-17) |
+| `line-placement-append-only` | FR-17 | AD-37 | structural | line_placement_is_append_only | LinePlacement construction outside the store adapter + any UPDATE/DELETE of line_placement across apx/** — a line move and its reversal are always new placements (append-only, one owner — Story 4.8) |
 | `inventory-record-fields` | FR-6 | AD-38 | structural | inventory_record_fields_enumerated | Inventory fields in core/domain |
 | `unknown-cardinality-never-summed` | FR-6 | AD-38 | structural | unknown_cardinality_never_summed | '+' operands across apx/** |
 | `meta-property-has-check` | FR-56 | AD-33 | structural | every_structural_property_has_a_registered_check | this manifest vs CHECKS |

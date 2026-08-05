@@ -25,6 +25,8 @@ from apx.checks import (
     inventory_record,
     isolation_harness,
     label_not_a_ranking_input,
+    line_placement_ownership,
+    line_stored_by_piece_identity,
     manifest,
     no_truncation,
     originals_encrypted,
@@ -139,6 +141,10 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # story 4.7 — the retained/discarded sets are a single derived view, never a stored membership
     # (FR-16/AD-39).
     triage_sets_one_derivation.triage_sets_have_one_derivation,
+    # story 4.8 — the line the tool draws: stored by the last-retained-pièce identity, never a bare
+    # integer (FR-17); its placement ledger is append-only, one owner (AD-37/AD-7).
+    line_stored_by_piece_identity.line_is_stored_by_piece_identity,
+    line_placement_ownership.line_placement_is_append_only,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

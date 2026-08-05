@@ -52,6 +52,29 @@ def test_fires_on_a_table_naming_a_retained_set(tmp_path: Path) -> None:
     assert not r.ok and "retained" in r.detail.lower()
 
 
+def test_the_line_boundary_identity_is_exempt(tmp_path: Path) -> None:
+    # last_retained_piece_id is the line's cut (one pièce, FR-17), NOT a stored set — exempt (AD-39)
+    src = (
+        "from sqlalchemy.orm import Mapped, mapped_column\n"
+        "class LineTable:\n"
+        "    __tablename__ = 'line_placement'\n"
+        "    last_retained_piece_id: Mapped[str] = mapped_column()\n")
+    assert no_retained_or_discarded_set_column([_mod(tmp_path, "boundary", src)]).ok
+
+
+def test_a_genuine_retained_set_column_is_still_caught_alongside_the_exempt_one(
+        tmp_path: Path) -> None:
+    # the exemption is exact-name-only: a real retained-SET membership column is still flagged
+    src = (
+        "from sqlalchemy.orm import Mapped, mapped_column\n"
+        "class Bad:\n"
+        "    __tablename__ = 'thing'\n"
+        "    last_retained_piece_id: Mapped[str] = mapped_column()\n"
+        "    retained: Mapped[bool] = mapped_column()\n")
+    r = no_retained_or_discarded_set_column([_mod(tmp_path, "mix", src)])
+    assert not r.ok and "retained" in r.detail.lower()
+
+
 def test_a_non_model_class_is_ignored(tmp_path: Path) -> None:
     # a plain class with no __tablename__ is not an ORM model — a `discarded` local is not a column
     src = "class NotAModel:\n    discarded = []\n"

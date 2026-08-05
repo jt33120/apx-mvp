@@ -679,3 +679,52 @@ class TaxonomyLabelEntry(Base):
     set_by: Mapped[str] = mapped_column(
         EncryptedText("taxonomy_label_entry.set_by"), nullable=False)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class LinePlacement(Base):
+    """One placement of **the line** over a *ranking version* (FR-17, Story 4.8) — the cut the tool
+    commits to, retained above / discarded below. **APPEND-ONLY** and **version-bound** (keyed by
+    the *ranking version*): the system recommendation, and later a human move (Story 4.9) or a
+    reversal, is a NEW row, never an overwrite (AD-7; asserted by
+    ``line_placement_is_append_only``). The CURRENT line is a **VIEW** — the max-``seq`` row for the
+    version, or none when unplaced.
+
+    **The line is stored by the identity of the last retained *pièce***
+    (``last_retained_piece_id``), **never a bare integer position** — so an import that adds
+    *pièces* cannot silently move what the line designates (FR-17; asserted by
+    ``line_is_stored_by_piece_identity`` — there is NO ordinal / position / cut-index column). It is
+    an **ordinal cut over a named *ranking version***, with author + timestamp — never a bare score.
+
+    ``seq`` is the per-version monotonic order (AD-49). ``basis`` is the placement's stated basis,
+    **inherited** from the ranking version it cuts (``case-theory:<version>`` or
+    ``intrinsic:<named signals>``, FR-17) — plaintext categorical metadata, no PII/content (like
+    ``ranked_entry.band``).
+    ``placed_by`` is the actor (PII), never a SQL predicate → application-encrypted (AD-31). No
+    cascade FK (AD-7): a *ranking version* / *matter* is retired, never hard-deleted out from under
+    its line."""
+
+    __tablename__ = "line_placement"
+    __table_args__ = (
+        # per-version monotonic seq; a concurrent double-write collides here and fails loudly (AD-37
+        # conditional commit), never a silent overwrite.
+        UniqueConstraint("ranking_version_id", "seq", name="uq_line_placement_seq"),
+        Index("ix_line_placement_version", "tenant", "matter", "ranking_version_id"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(version_id \0 seq)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    ranking_version_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ranking_version.id"), nullable=False, index=True)  # no ondelete
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)  # per-version monotonic (AD-49)
+    # THE LINE'S IDENTITY — the last retained pièce, never a bare integer position (FR-17).
+    last_retained_piece_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # the stated basis, inherited from the ranking version (case-theory:<id> | intrinsic:<signals>).
+    basis: Mapped[str] = mapped_column(String, nullable=False)
+    # the actor who placed it (PII), never a SQL predicate → application-encrypted (AD-31).
+    placed_by: Mapped[str] = mapped_column(
+        EncryptedText("line_placement.placed_by"), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
