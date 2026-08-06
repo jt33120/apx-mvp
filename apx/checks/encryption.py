@@ -100,6 +100,9 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     # non-content, non-PII, like ``RankingVersion.basis``. (The actor ``placed_by`` is encrypted.)
     ("LinePlacement", "last_retained_piece_id"),
     ("LinePlacement", "basis"),
+    # Story 4.11 — the pin ledger. ``action`` is a categorical enum (retain | discard | removed),
+    # like ``band``/``source``. (The override ``reason`` and the actor ``set_by`` are encrypted.)
+    ("PinEntry", "action"),
 }
 
 

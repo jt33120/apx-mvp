@@ -49,6 +49,8 @@ from apx.checks import (
     originals_encrypted,
     payload_schema,
     perf_gate,
+    pin_ledger_ownership,
+    pin_not_a_ranking_input,
     projection,
     ranking_ownership,
     ranking_sets_are_views,
@@ -500,6 +502,15 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        line_projection_not_a_bound.line_projection_is_not_a_sampling_bound,
        "core/domain/line_projection.py imports/references — it never depends on "
        "confidence.prevalence_upper_bound, so a projection is never computed by the bound (§0.2)"),
+    # ── story 4.11: the pin — append-only ledger; the order ignores the pin axis ──────────────────
+    _p("pin-ledger-append-only", "FR-43", "AD-37", "pins are append-only, one owner",
+       pin_ledger_ownership.pin_ledger_is_append_only,
+       "PinEntry construction outside the store adapter + any UPDATE/DELETE of pin_entry across "
+       "apx/** — a pin and its removal are always new entries (append-only, one owner)"),
+    _p("pin-not-a-ranking-input", "FR-43", "AD-39", "the ranked order ignores the pin",
+       pin_not_a_ranking_input.ranking_order_ignores_the_pin,
+       "core/domain/ranking.py + core/app/rank.py import/reference of the pin axis — a pin is not "
+       "an ordering input, so it moves one pièce in the VIEW, never in the order (Story 4.11)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

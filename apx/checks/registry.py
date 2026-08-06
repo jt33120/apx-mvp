@@ -33,6 +33,8 @@ from apx.checks import (
     originals_encrypted,
     payload_schema,
     perf_gate,
+    pin_ledger_ownership,
+    pin_not_a_ranking_input,
     projection,
     ranking_ownership,
     ranking_sets_are_views,
@@ -149,6 +151,10 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # story 4.9 — the priced move is a projection from the ranking, never the sampling bound
     # (FR-19/§0.2).
     line_projection_not_a_bound.line_projection_is_not_a_sampling_bound,
+    # story 4.11 — the pin: its ledger is append-only, one owner (AD-37/AD-7); the ranked order has
+    # no dependency on the pin axis — a pin never reorders (FR-43/AD-39).
+    pin_ledger_ownership.pin_ledger_is_append_only,
+    pin_not_a_ranking_input.ranking_order_ignores_the_pin,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

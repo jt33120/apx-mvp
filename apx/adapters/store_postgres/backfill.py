@@ -59,6 +59,10 @@ ENCRYPTED_COLUMNS = [
     # Story 4.8: the line-placement ledger — the actor who placed the line (PII) is encrypted;
     # single-PK (`id`), so key rotation addresses it directly.
     ("line_placement", "id", "placed_by", "line_placement.placed_by"),
+    # Story 4.11: the pin ledger — the override reason (content) AND the actor (PII) are encrypted;
+    # single-PK (`id`), so key rotation addresses both directly.
+    ("pin_entry", "id", "reason", "pin_entry.reason"),
+    ("pin_entry", "id", "set_by", "pin_entry.set_by"),
 ]
 
 

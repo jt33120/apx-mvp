@@ -728,3 +728,46 @@ class LinePlacement(Base):
     placed_by: Mapped[str] = mapped_column(
         EncryptedText("line_placement.placed_by"), nullable=False)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PinEntry(Base):
+    """One entry in a *pièce*'s **pin** ledger (FR-43, Story 4.11) — a per-*pièce*, per-*matter*
+    override of **the line**: this *pièce* is retained (or discarded) regardless of its rank.
+    **APPEND-ONLY** and **version-INDEPENDENT** (keyed by the *pièce*, not a *ranking version*): a
+    pin or its removal is a NEW row, never an overwrite (AD-7; asserted by
+    ``pin_ledger_is_append_only``), so a pin **survives re-ranking** and carries to new *ranking
+    versions* until explicitly removed (FR-43). The CURRENT pin is a **VIEW** — the max-``seq`` row,
+    in force only when its ``action`` is retain/discard (a ``removed`` action lifts it).
+
+    A pin is an *override* (FR-25) — it contradicts a machine assertion — so it carries a
+    **mandatory one-line reason**, recorded verbatim (encrypted) here and in the ``audit_record``.
+    Because it is version-independent, a **human-set** pin survives re-ranking untouched.
+
+    ``seq`` is the per-*pièce* monotonic order (AD-49). ``action`` is
+    ``retain``/``discard``/``removed`` — categorical, plaintext. ``reason`` (the override reason —
+    content) and ``set_by`` (the actor —
+    PII) are application-encrypted (AD-31). No cascade FK (AD-7): a *matter* is retired, never
+    hard-deleted out from under its pins."""
+
+    __tablename__ = "pin_entry"
+    __table_args__ = (
+        # per-pièce monotonic seq; a concurrent double-write collides here and fails loudly (AD-37
+        # conditional commit), never a silent overwrite.
+        UniqueConstraint("tenant", "matter", "piece_id", "seq", name="uq_pin_entry_seq"),
+        Index("ix_pin_entry_piece", "tenant", "matter", "piece_id"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(pid \0 seq, tenant-qual)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    piece_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)  # per-pièce monotonic (AD-49)
+    action: Mapped[str] = mapped_column(String, nullable=False)  # retain | discard | removed
+    # the mandatory one-line override reason (content) → application-encrypted (AD-31).
+    reason: Mapped[str] = mapped_column(EncryptedText("pin_entry.reason"), nullable=False)
+    # the actor who pinned/unpinned (PII), never a SQL predicate → application-encrypted (AD-31).
+    set_by: Mapped[str] = mapped_column(EncryptedText("pin_entry.set_by"), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

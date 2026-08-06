@@ -46,6 +46,7 @@ from apx.adapters.store_postgres.models import (
     Piece,
     PieceCustodian,
     PieceProvenance,
+    PinEntry,
     RankedEntry,
     RecallReview,
     SessionRecord,
@@ -93,6 +94,12 @@ from apx.core.domain.line_projection import (
     price_line_move as project_line_move,
 )
 from apx.core.domain.normalization import normalize
+from apx.core.domain.pin import (
+    PinAction,
+    PinLogEntry,
+    current_pins,
+    validate_pin_reason,
+)
 from apx.core.domain.ranking import (
     RankedOrder,
     RankingIdentity,
@@ -108,7 +115,7 @@ from apx.core.domain.taxonomy_label import (
     validate_label,
 )
 from apx.core.domain.triage import TriageOutcome
-from apx.core.domain.triage_sets import Line, Pin, TriageSets, derive_triage_sets
+from apx.core.domain.triage_sets import Line, Pin, PinSide, TriageSets, derive_triage_sets
 from apx.core.ports.read import ExactSearch, PieceView
 from apx.core.projection import Snapshot
 
@@ -125,7 +132,7 @@ _HEAD_SCHEMA_VERSION = "slice-a"  # the payload schema version (AD-40) stamped o
 _BACKUP_TABLES = (
     "matter_scope", "user_account", "session", "tenant_setting",
     "piece", "chunk", "failure", "noise_exclusion", "piece_label", "audit_record", "recall_review",
-    "backup_record", "truncation_marker", "taxonomy_label_entry", "line_placement",
+    "backup_record", "truncation_marker", "taxonomy_label_entry", "line_placement", "pin_entry",
 )
 
 
@@ -168,6 +175,12 @@ class StaleLine(Exception):
         super().__init__(
             f"the line moved under the edit (expected a superseded position; current seq "
             f"{current_seq}, last retained {current_last_retained_piece_id})")
+
+
+class StalePin(Exception):
+    """The conditional commit refused a pin edit whose observed ``seq`` no longer holds (AD-37): the
+    *pièce*'s pin moved under the caller between read and write. Nothing is written — a pin edit
+    never silently overwrites a change the caller did not see (FR-43)."""
 
 
 @dataclass(frozen=True)
@@ -487,6 +500,19 @@ class LabelChangeEntry:
     seq: int
     label: str
     source: str
+    set_by: str
+    at: datetime
+
+
+@dataclass(frozen=True)
+class PinChangeEntry:
+    """One entry in a *pièce*'s pin change log (Story 4.11, FR-43/FR-25) — append-only, in ``seq``
+    order. A pin (retain/discard) is an *override* with its reason; a ``removed`` action lifts it.
+    ``set_by``/``at`` make each act attributable and reversible from the log."""
+
+    seq: int
+    action: str
+    reason: str
     set_by: str
     at: datetime
 
@@ -3215,8 +3241,18 @@ class SqlStore:
                 .order_by(RankedEntry.rank.is_(None), RankedEntry.rank, RankedEntry.piece_id)).all()
         ranked = [pid for pid, rank in rows if rank is not None]
         unscored = [pid for pid, rank in rows if rank is None]
+        # A pin is version-INDEPENDENT (it survives re-ranking, Story 4.11/FR-43), so the passed
+        # pins may name a *pièce* unscored or absent in THIS version. Such a pin has no line
+        # position to override here, so it is DORMANT for this version's view — it stays in the
+        # ledger and
+        # applies to any version where the *pièce* is scored. Filter to the ranked set: applying it
+        # would make derive_triage_sets fail loudly (it guards a pin naming a pièce not in the
+        # order), crashing the WHOLE view over one surviving pin (AD-19 — nothing imputed).
+        ranked_set = set(ranked)
+        applicable_pins = tuple(p for p in pins if p.piece_id in ranked_set)
         return derive_triage_sets(
-            ranked=ranked, unscored=unscored, line=line, pins=pins, version_id=version_id)
+            ranked=ranked, unscored=unscored, line=line, pins=applicable_pins,
+            version_id=version_id)
 
     def read_version_retention(
         self, *, tenant: str, matter: str, scopes: set[str]
@@ -3449,3 +3485,128 @@ class SqlStore:
 
         self._audited_tx(_work)
         return box[-1]
+
+    # ── Story 4.11: the pin — one pièce across the line (append-only, version-independent) ────────
+    def _append_pin_entry(
+        self, session: Session, now: datetime, *, tenant: str, matter: str, actor: str,
+        piece_id: str, action: PinAction, reason: str, audit_action: str, expected_seq: int | None,
+    ) -> int:
+        """Validate + append ONE pin ledger entry (and its audit) inside the caller's tx (the caller
+        has already scope-checked). Mints the per-*pièce* monotonic ``seq`` (AD-49); a conditional
+        commit on ``expected_seq`` fails loudly if it moved (AD-37). Never overwrites — always an
+        INSERT (AD-7). The audit entry is marked ``audit_action`` (``pin_override`` /
+        ``pin_removed``) carrying the reason verbatim (FR-25). Returns the new ``seq``."""
+        current_max = session.scalar(
+            select(func.max(PinEntry.seq)).where(
+                PinEntry.tenant == tenant, PinEntry.matter == matter,
+                PinEntry.piece_id == piece_id)) or 0
+        if expected_seq is not None and current_max != expected_seq:
+            raise StalePin(
+                f"pin moved under the edit (observed seq {expected_seq}, now {current_max})")
+        seq = current_max + 1
+        entry_id = hashlib.sha256(
+            f"{tenant}\x00{matter}\x00{piece_id}\x00{seq}".encode()).hexdigest()
+        session.add(PinEntry(
+            id=entry_id, tenant=tenant, matter=matter, piece_id=piece_id, seq=seq,
+            action=action.value, reason=reason, set_by=actor, at=now))
+        self._append_audit(
+            session, tenant, matter, actor, audit_action,
+            f"piece={piece_id[:12]} action={action.value} seq={seq} reason={reason}", now)
+        return seq
+
+    def _current_pin_action(
+        self, session: Session, tenant: str, matter: str, piece_id: str
+    ) -> PinAction | None:
+        """The *pièce*'s CURRENT pin action — the max-``seq`` ledger row, or None when unpinned."""
+        row = session.execute(
+            select(PinEntry.action).where(
+                PinEntry.tenant == tenant, PinEntry.matter == matter, PinEntry.piece_id == piece_id)
+            .order_by(PinEntry.seq.desc()).limit(1)).first()
+        return PinAction(row[0]) if row is not None else None
+
+    def pin_piece(
+        self, *, tenant: str, matter: str, actor: str, piece_id: str, side: PinSide, reason: str,
+        scopes: set[str], expected_seq: int | None = None,
+    ) -> int:
+        """Pin a *pièce* into or out of the *retained set* — the ONE owning use case (AD-37),
+        APPEND-ONLY (FR-43). A pin is an *override* of **the line** and **requires a one-line
+        reason** (FR-25 — a blank reason raises :class:`MissingPinReason`, nothing written). Appends
+        one ledger
+        entry with a server monotonic ``seq`` (AD-49) ATOMIC with one ``pin_override`` audit entry
+        carrying the reason verbatim (AD-22). CONDITIONAL on ``expected_seq`` (a moved pin raises
+        :class:`StalePin`). Scope-checked (``ScopeDenied``). Touches ONLY ``pin_entry`` — never the
+        ranked order, never **the line** — so exactly one *pièce* crosses and nothing else moves
+        (FR-43, the derivation is Story 4.7). Returns the new ``seq``."""
+        validate_pin_reason(reason)
+        box: list[int] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            box.append(self._append_pin_entry(
+                session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
+                action=PinAction(side.value), reason=reason, audit_action="pin_override",
+                expected_seq=expected_seq))
+
+        self._audited_tx(_work)
+        return box[-1]
+
+    def remove_pin(
+        self, *, tenant: str, matter: str, actor: str, piece_id: str, scopes: set[str],
+        expected_seq: int | None = None,
+    ) -> int:
+        """Remove a *pièce*'s pin — a recorded, reversible act (FR-43). Appends a ``removed`` ledger
+        entry (append-only, AD-7 — never a delete) ATOMIC with one ``pin_removed`` audit entry. NOT
+        an *override* (it lifts a contradiction, it does not make one — no reason required). Raises
+        ``ValueError`` when there is no active pin to remove. CONDITIONAL on ``expected_seq``
+        (:class:`StalePin`). Scope-checked. Returns the new ``seq``."""
+        box: list[int] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            current = self._current_pin_action(session, tenant, matter, piece_id)
+            if current is None or current is PinAction.REMOVED:
+                raise ValueError(f"no active pin to remove for pièce {piece_id}")
+            box.append(self._append_pin_entry(
+                session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
+                action=PinAction.REMOVED, reason="", audit_action="pin_removed",
+                expected_seq=expected_seq))
+
+        self._audited_tx(_work)
+        return box[-1]
+
+    def read_current_pins(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> tuple[Pin, ...] | None:
+        """The in-force pins for a *matter* — a VIEW over the append-only ledger (the latest action
+        per *pièce*; ``removed`` lifts it). The input :meth:`read_triage_sets` consumes so the pins
+        apply to whatever *ranking version* the sets are derived over (survival is structural,
+        FR-43). Scope pre-filtered (None when out of scope or absent — non-disclosing). Not
+        audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            rows = session.execute(
+                select(PinEntry.piece_id, PinEntry.seq, PinEntry.action)
+                .where(PinEntry.tenant == tenant, PinEntry.matter == matter)).all()
+        return current_pins(PinLogEntry(pid, seq, PinAction(action)) for pid, seq, action in rows)
+
+    def read_pin_change_log(
+        self, *, tenant: str, matter: str, piece_id: str, scopes: set[str]
+    ) -> list[PinChangeEntry] | None:
+        """A *pièce*'s full pin change log, ascending by ``seq`` (append-only, FR-43 — every pin and
+        removal is a distinct entry, never rewritten). Scope pre-filtered; None when out of scope or
+        absent; ``[]`` when the *pièce* has no pin history. Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            rows = session.scalars(
+                select(PinEntry)
+                .where(PinEntry.tenant == tenant, PinEntry.matter == matter,
+                       PinEntry.piece_id == piece_id)
+                .order_by(PinEntry.seq.asc())).all()
+            return [
+                PinChangeEntry(
+                    seq=r.seq, action=r.action, reason=r.reason, set_by=r.set_by, at=r.at)
+                for r in rows]
