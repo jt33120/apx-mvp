@@ -66,6 +66,7 @@ from apx.checks import (
     triage_sets_one_derivation,
     truth_status,
     truth_status_surface,
+    user_actions,
 )
 from apx.checks.import_contracts import CheckResult
 
@@ -527,6 +528,19 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "SqlStore.read_justification references resolve_chunk + verify_justification — every "
        "extract is re-verified by exact containment when shown, so an unresolved one is unverified "
        "(FR-11)"),
+    # ── story 4.12: never hard-delete — the enumerated registry of user-reachable actions the
+    # bounded runtime probe walks, and the reversal every deletion-shaped act must name ──────────
+    _p("user-action-registry-complete", "FR-21", "AD-7",
+       "the user-action registry is complete",
+       user_actions.user_action_registry_is_complete,
+       "every HTTP route declared anywhere under apx/api/ + every Ports-taking public callable "
+       "anywhere under apx/core/app/, against USER_ACTIONS, both ways — an action outside the "
+       "registry is outside the bounded probe that proves it destroys nothing (Story 4.12)"),
+    _p("deletion-shaped-names-reversal", "FR-21", "AD-7",
+       "a deletion-shaped action names its reversal",
+       user_actions.deletion_shaped_actions_declare_their_reversal,
+       "the HTTP verb and the word parts of every registered action's path/name — an act a user "
+       "could read as deletion declares it and names how it is undone (Story 4.12/FR-5)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

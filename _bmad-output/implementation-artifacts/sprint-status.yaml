@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-08-06  # Epic 4: 4-1..4-9, 4-11 DONE (4-10, 4-12, 4-13 remain); triage UX pass done (EXPERIENCE-EPIC4). Epic 3 done
+last_updated: 2026-08-06  # Epic 4: 4-1..4-9, 4-11, 4-12 DONE (4-10, 4-13 remain); triage UX pass done (EXPERIENCE-EPIC4). Epic 3 done
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -90,7 +90,7 @@ development_status:
   4-9-moving-the-line-is-priced: done  # moving the line is priced (FR-19): Δ pièces + projected discarded-set prevalence — a projection from the ranking, NEVER a sampling bound (structural check line-projection-not-a-bound); retain-everything says no bound applies (never 0%); counts-only fallback; the human move is serialised (StaleLine) + audited with the priced statement shown (Julian, 2026-08-05)
   4-10-the-editable-cell-by-cell-table-with-a-live-change-log: backlog
   4-11-the-pin-moving-a-single-pi-ce-across-the-line: done  # the pin (FR-43/FR-25): a per-pièce override of the line, exactly one pièce crosses (order + line unchanged); mandatory one-line reason recorded as an override; append-only version-INDEPENDENT ledger so a pin survives re-ranking (dormant when its pièce is unscored in a version); removal is a reversible act; 2 structural checks (Julian, 2026-08-06)
-  4-12-never-hard-delete-proven-by-a-bounded-probe: backlog
+  4-12-never-hard-delete-proven-by-a-bounded-probe: done  # never hard-delete, PROVEN by a bounded runtime probe (FR-21/FR-56/AD-7): an enumerated registry of 70 user-reachable actions (45 HTTP routes, every verb — 8 audited GETs write evidential rows — + 25 Ports-taking core/app seams), complete both ways and fail-closed on any routing/import shape the check cannot read; the probe EXECUTES 57 of them against a real seeded matter and fails on ANY DELETE of an evidential table (statement-level, not a net count) — evidential = every mapped table minus a written transient allow-list, so a new table is protected by default; changes_state is verified by execution, never trusted; each deletion-shaped act is shown to APPEND; 2 structural checks (Julian, 2026-08-06)
   4-13-freshness-and-staleness-of-derived-artefacts: backlog
   epic-4-retrospective: optional
   epic-5: backlog

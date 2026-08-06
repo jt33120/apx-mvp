@@ -50,6 +50,7 @@ from apx.checks import (
     triage_sets_one_derivation,
     truth_status,
     truth_status_surface,
+    user_actions,
 )
 from apx.checks.import_contracts import CheckResult
 
@@ -162,6 +163,11 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # at show time, so an unresolved extract is unverified, never ordinary (FR-11/FR-41).
     justification_names_its_evidence.justification_names_its_evidence,
     justification_verified_at_show_time.justification_verified_at_show_time,
+    # story 4.12 — never hard-delete, proven by a bounded probe: the enumerated registry of
+    # user-reachable actions the probe walks is complete both ways, and an act a user could read as
+    # deletion declares itself and names its reversal (FR-21/FR-56/AD-7).
+    user_actions.user_action_registry_is_complete,
+    user_actions.deletion_shaped_actions_declare_their_reversal,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,
