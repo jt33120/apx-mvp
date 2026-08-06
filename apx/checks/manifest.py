@@ -41,6 +41,8 @@ from apx.checks import (
     import_contracts,
     inventory_record,
     isolation_harness,
+    justification_names_its_evidence,
+    justification_verified_at_show_time,
     label_not_a_ranking_input,
     line_placement_ownership,
     line_projection_not_a_bound,
@@ -511,6 +513,20 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        pin_not_a_ranking_input.ranking_order_ignores_the_pin,
        "core/domain/ranking.py + core/app/rank.py import/reference of the pin axis — a pin is not "
        "an ordering input, so it moves one pièce in the VIEW, never in the order (Story 4.11)"),
+    # ── story 4.6: the justification derived from named evidence — its checkable part is the named
+    # evidence, never the sentence; the read seam containment-verifies every extract at show time ──
+    _p("justification-names-evidence", "FR-41", "AD-19",
+       "a justification names its evidence, not just a sentence",
+       justification_names_its_evidence.justification_names_its_evidence,
+       "Justification(...) construction sites across apx/** (built only in justification.py, whose "
+       "invariant requires named extracts or intrinsic signals) + record_justification's call to "
+       "validate_named_evidence — the write seam re-runs it, so no unreadable row is persisted"),
+    _p("justification-verified-show-time", "FR-11", "AD-10",
+       "a justification is containment-verified at show time",
+       justification_verified_at_show_time.justification_verified_at_show_time,
+       "SqlStore.read_justification references resolve_chunk + verify_justification — every "
+       "extract is re-verified by exact containment when shown, so an unresolved one is unverified "
+       "(FR-11)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

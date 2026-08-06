@@ -24,6 +24,8 @@ from apx.checks import (
     import_contracts,
     inventory_record,
     isolation_harness,
+    justification_names_its_evidence,
+    justification_verified_at_show_time,
     label_not_a_ranking_input,
     line_placement_ownership,
     line_projection_not_a_bound,
@@ -155,6 +157,11 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # no dependency on the pin axis — a pin never reorders (FR-43/AD-39).
     pin_ledger_ownership.pin_ledger_is_append_only,
     pin_not_a_ranking_input.ranking_order_ignores_the_pin,
+    # story 4.6 — the justification derived from named evidence: its checkable part is the NAMED
+    # evidence, never the sentence alone (FR-41); the read seam containment-verifies every extract
+    # at show time, so an unresolved extract is unverified, never ordinary (FR-11/FR-41).
+    justification_names_its_evidence.justification_names_its_evidence,
+    justification_verified_at_show_time.justification_verified_at_show_time,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

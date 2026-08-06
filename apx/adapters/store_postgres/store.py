@@ -39,12 +39,14 @@ from apx.adapters.store_postgres.models import (
     Failure,
     ImportJob,
     ImportUnit,
+    JustificationRejection,
     LabelRecord,
     LinePlacement,
     MatterScope,
     NoiseExclusion,
     Piece,
     PieceCustodian,
+    PieceJustification,
     PieceProvenance,
     PinEntry,
     RankedEntry,
@@ -85,6 +87,14 @@ from apx.core.domain.dedup import cluster
 from apx.core.domain.failures import ErrorClass, cardinality_for
 from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
 from apx.core.domain.inventory import Inventory
+from apx.core.domain.justification import (
+    EvidenceExtract,
+    JustificationBasis,
+    VerifiedJustification,
+    rebuild_justification,
+    validate_named_evidence,
+    verify_justification,
+)
 from apx.core.domain.line import LinePlacementView, RankedBand, recommend_line
 from apx.core.domain.line_projection import (
     PROJECTION_METHOD,
@@ -133,6 +143,7 @@ _BACKUP_TABLES = (
     "matter_scope", "user_account", "session", "tenant_setting",
     "piece", "chunk", "failure", "noise_exclusion", "piece_label", "audit_record", "recall_review",
     "backup_record", "truncation_marker", "taxonomy_label_entry", "line_placement", "pin_entry",
+    "piece_justification", "justification_rejection",
 )
 
 
@@ -181,6 +192,14 @@ class StalePin(Exception):
     """The conditional commit refused a pin edit whose observed ``seq`` no longer holds (AD-37): the
     *pièce*'s pin moved under the caller between read and write. Nothing is written — a pin edit
     never silently overwrites a change the caller did not see (FR-43)."""
+
+
+class StaleJustification(Exception):
+    """The conditional commit refused a justification reject/restore whose observed ``seq`` no
+    longer holds (AD-37): the *pièce*'s rejection state moved under the caller between read and
+    write.
+    Nothing is written — a reversal never silently overwrites a change the caller did not see
+    (FR-18)."""
 
 
 @dataclass(frozen=True)
@@ -513,6 +532,19 @@ class PinChangeEntry:
     seq: int
     action: str
     reason: str
+    set_by: str
+    at: datetime
+
+
+@dataclass(frozen=True)
+class JustificationRejectionEntry:
+    """One entry in a *pièce*'s justification-rejection change log (Story 4.6, FR-18) — append-only,
+    in ``seq`` order. ``action`` is ``rejected``/``restored``; ``reason`` is the optional note;
+    ``set_by``/``at`` make each act attributable and reversible from the log."""
+
+    seq: int
+    action: str
+    reason: str | None
     set_by: str
     at: datetime
 
@@ -3608,5 +3640,221 @@ class SqlStore:
                 .order_by(PinEntry.seq.asc())).all()
             return [
                 PinChangeEntry(
+                    seq=r.seq, action=r.action, reason=r.reason, set_by=r.set_by, at=r.at)
+                for r in rows]
+
+    # ── Story 4.6: the per-pièce justification derived from named evidence ────────────────────────
+    def _target_version_id(
+        self, session: Session, tenant: str, matter: str, version_no: int | None
+    ) -> str | None:
+        """The ranking-version id to bind a justification to — the latest, or the named
+        ``version_no`` (None when the matter has no such ranking version). Mirrors
+        :meth:`read_ranked_order`'s target resolution."""
+        pinned = [RankingVersionRow.version_no == version_no] if version_no is not None else []
+        return session.scalar(
+            select(RankingVersionRow.id)
+            .where(RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter, *pinned)
+            .order_by(RankingVersionRow.version_no.desc()).limit(1))
+
+    def record_justification(
+        self, *, tenant: str, matter: str, actor: str, piece_id: str,
+        sentence: str, basis: JustificationBasis, evidence: tuple[EvidenceExtract, ...],
+        source_language: str | None = None, scopes: set[str], version_no: int | None = None,
+    ) -> None:
+        """Record a *pièce*'s justification against a *ranking version* (FR-41/FR-18) — the
+        generation write-point (near **the line** / on demand). WRITE-ONCE per (version, *pièce*): a
+        second record for the same pair fails loudly (``ValueError``), never a silent overwrite. The
+        ``sentence`` is a model summary and the ``evidence`` (chunk id + quoted passage) is the
+        checkable control (FR-41); both stored, the quote encrypted. One ``justification_recorded``
+        audit entry ATOMIC with the write (AD-22). Scope-checked (``ScopeDenied``). Raises
+        ``ValueError`` for an unknown matter / absent ranking version.
+
+        The FR-41 named-evidence invariant is re-run HERE, before anything is written: the read path
+        rebuilds a domain :class:`Justification` (whose ``__post_init__`` enforces it), so a row
+        accepted without it would be **unreadable forever** — recording is write-once and AD-7
+        forbids a delete. Refusing at the write leaves no row and no audit entry."""
+        validate_named_evidence(sentence, basis, evidence)
+        evidence_json = json.dumps(
+            [[e.chunk_id, e.quoted_text] for e in evidence], ensure_ascii=False)
+        intrinsic = ",".join(s.value for s in basis.intrinsic_signals)
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            version_id = self._target_version_id(session, tenant, matter, version_no)
+            if version_id is None:
+                raise ValueError("no ranking version to record a justification against")
+            entry_id = hashlib.sha256(f"{version_id}\x00{piece_id}".encode()).hexdigest()
+            if session.get(PieceJustification, entry_id) is not None:
+                raise ValueError(
+                    "a justification is already recorded for this pièce in this ranking version")
+            session.add(PieceJustification(
+                id=entry_id, tenant=tenant, matter=matter, ranking_version_id=version_id,
+                piece_id=piece_id, sentence=sentence, basis_kind=basis.kind,
+                case_theory_version_id=basis.case_theory_version_id, intrinsic_signals=intrinsic,
+                evidence_json=evidence_json, source_language=source_language, at=now))
+            self._append_audit(
+                session, tenant, matter, actor, "justification_recorded",
+                f"piece={piece_id[:12]} basis={basis.named[:40]} extracts={len(evidence)}", now)
+
+        self._audited_tx(_work)
+
+    def read_justification(
+        self, *, tenant: str, matter: str, scopes: set[str], piece_id: str,
+        version_no: int | None = None, interface_language: str | None = None,
+    ) -> VerifiedJustification | None:
+        """A *pièce*'s justification AS SHOWN (FR-41/FR-11) — scope pre-filtered (None when out of
+        scope or absent, non-disclosing). Rebuilds the domain justification, then **verifies every
+        named extract at show time** by exact containment through :meth:`resolve_chunk` (a chunk
+        that no longer resolves — gone, text changed, config superseded, out of range, or no longer
+        containing — makes that extract UNVERIFIED and the justification ``is_unverified``, never
+        ordinary). The current rejection state (the tool's assessment set aside, reversibly) is
+        folded in. Carries the DERIVED confidence (Story 4.4). Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            version_id = self._target_version_id(session, tenant, matter, version_no)
+            if version_id is None:
+                return None
+            row = session.scalar(
+                select(PieceJustification).where(
+                    PieceJustification.ranking_version_id == version_id,
+                    PieceJustification.piece_id == piece_id))
+            if row is None:
+                return None
+            entry = session.get(
+                RankedEntry, hashlib.sha256(f"{version_id}\x00{piece_id}".encode()).hexdigest())
+            confidence = entry.confidence if entry is not None else None
+            signals = (
+                tuple(entry.confidence_signals.split(","))
+                if entry is not None and entry.confidence_signals else ())
+            evidence = tuple((cid, quote) for cid, quote in json.loads(row.evidence_json))
+            intrinsic = tuple(s for s in row.intrinsic_signals.split(",") if s)
+            rejected = self._current_justification_rejection(session, tenant, matter, piece_id) \
+                == "rejected"
+        justification = rebuild_justification(
+            piece_id=piece_id, sentence=row.sentence, basis_kind=row.basis_kind,
+            case_theory_version_id=row.case_theory_version_id, intrinsic_signals=intrinsic,
+            evidence=evidence, source_language=row.source_language, confidence=confidence,
+            confidence_signals=signals)
+
+        def _resolve(chunk_id: str, quoted_text: str) -> ResolvedPassage | FailedResolution:
+            # a named extract whose chunk is unknown/gone must be UNVERIFIED, not a raised
+            # ScopeDenied: the matter is already in scope here, so a refusal means the chunk is gone
+            # (FR-11 — surfaced as unverified, never shown as though it resolved).
+            try:
+                return self.resolve_chunk(chunk_id, tenant, scopes, expected_text=quoted_text)
+            except ScopeDenied:
+                return FailedResolution(PIECE_GONE)
+
+        return verify_justification(justification, _resolve, rejected=rejected)
+
+    def _append_justification_rejection(
+        self, session: Session, now: datetime, *, tenant: str, matter: str, actor: str,
+        piece_id: str, action: str, reason: str | None, audit_action: str, expected_seq: int | None,
+    ) -> int:
+        """Validate + append ONE justification-rejection ledger entry (and its audit) inside the
+        caller's tx. Mints the per-*pièce* monotonic ``seq`` (AD-49); a conditional commit on
+        ``expected_seq`` fails loudly (:class:`StaleJustification`) if it moved (AD-37). Never
+        overwrites — always an INSERT (AD-7). Returns the new ``seq``."""
+        current_max = session.scalar(
+            select(func.max(JustificationRejection.seq)).where(
+                JustificationRejection.tenant == tenant, JustificationRejection.matter == matter,
+                JustificationRejection.piece_id == piece_id)) or 0
+        if expected_seq is not None and current_max != expected_seq:
+            raise StaleJustification(
+                f"rejection moved under the edit (observed seq {expected_seq}, now {current_max})")
+        seq = current_max + 1
+        entry_id = hashlib.sha256(
+            f"{tenant}\x00{matter}\x00{piece_id}\x00{seq}".encode()).hexdigest()
+        session.add(JustificationRejection(
+            id=entry_id, tenant=tenant, matter=matter, piece_id=piece_id, seq=seq, action=action,
+            reason=reason, set_by=actor, at=now))
+        self._append_audit(
+            session, tenant, matter, actor, audit_action,
+            f"piece={piece_id[:12]} action={action} seq={seq} "
+            f"reason={reason if reason else ''}", now)
+        return seq
+
+    def _current_justification_rejection(
+        self, session: Session, tenant: str, matter: str, piece_id: str
+    ) -> str | None:
+        """The *pièce*'s CURRENT rejection action — the max-``seq`` ledger row, or None when the
+        justification has never been rejected/restored."""
+        row = session.execute(
+            select(JustificationRejection.action).where(
+                JustificationRejection.tenant == tenant, JustificationRejection.matter == matter,
+                JustificationRejection.piece_id == piece_id)
+            .order_by(JustificationRejection.seq.desc()).limit(1)).first()
+        return row[0] if row is not None else None
+
+    def reject_justification(
+        self, *, tenant: str, matter: str, actor: str, piece_id: str, scopes: set[str],
+        reason: str | None = None, expected_seq: int | None = None,
+    ) -> int:
+        """Reject the tool's assessment for a *pièce* in one action (FR-18) — set it aside,
+        reversibly (append-only, AD-7 — never a delete). Recorded in the *audit record*
+        (``justification_rejected``). A reason is optional (unlike an FR-25 override). Raises
+        ``ValueError`` when it is already rejected. CONDITIONAL on ``expected_seq``
+        (:class:`StaleJustification`). Scope-checked. Returns the new ``seq``."""
+        box: list[int] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            if self._current_justification_rejection(session, tenant, matter, piece_id) \
+                    == "rejected":
+                raise ValueError(f"the assessment for pièce {piece_id} is already rejected")
+            box.append(self._append_justification_rejection(
+                session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
+                action="rejected", reason=reason, audit_action="justification_rejected",
+                expected_seq=expected_seq))
+
+        self._audited_tx(_work)
+        return box[-1]
+
+    def restore_justification(
+        self, *, tenant: str, matter: str, actor: str, piece_id: str, scopes: set[str],
+        reason: str | None = None, expected_seq: int | None = None,
+    ) -> int:
+        """Re-instate a rejected assessment for a *pièce* (FR-18) — the reversal of a rejection
+        (append-only, AD-7 — a NEW ``restored`` entry, never a delete of the rejection). Recorded in
+        the *audit record* (``justification_restored``). Raises ``ValueError`` when there is nothing
+        to restore (not currently rejected). CONDITIONAL on ``expected_seq``. Scope-checked. Returns
+        the new ``seq``."""
+        box: list[int] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            if self._current_justification_rejection(session, tenant, matter, piece_id) \
+                    != "rejected":
+                raise ValueError(f"no rejected assessment to restore for pièce {piece_id}")
+            box.append(self._append_justification_rejection(
+                session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
+                action="restored", reason=reason, audit_action="justification_restored",
+                expected_seq=expected_seq))
+
+        self._audited_tx(_work)
+        return box[-1]
+
+    def read_justification_rejection_log(
+        self, *, tenant: str, matter: str, piece_id: str, scopes: set[str]
+    ) -> list[JustificationRejectionEntry] | None:
+        """A *pièce*'s full justification-rejection change log, ascending by ``seq`` (append-only,
+        FR-18 — every reject and restore is a distinct entry, never rewritten). Scope pre-filtered;
+        None when out of scope or absent; ``[]`` when the *pièce* has no rejection history. Not
+        audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            rows = session.scalars(
+                select(JustificationRejection)
+                .where(JustificationRejection.tenant == tenant,
+                       JustificationRejection.matter == matter,
+                       JustificationRejection.piece_id == piece_id)
+                .order_by(JustificationRejection.seq.asc())).all()
+            return [
+                JustificationRejectionEntry(
                     seq=r.seq, action=r.action, reason=r.reason, set_by=r.set_by, at=r.at)
                 for r in rows]

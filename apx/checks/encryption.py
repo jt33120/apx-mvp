@@ -103,6 +103,16 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     # Story 4.11 — the pin ledger. ``action`` is a categorical enum (retain | discard | removed),
     # like ``band``/``source``. (The override ``reason`` and the actor ``set_by`` are encrypted.)
     ("PinEntry", "action"),
+    # Story 4.6 — the per-pièce justification. ``basis_kind`` is a categorical enum
+    # (case-theory | intrinsic, like ``ranking_version.basis``); ``intrinsic_signals`` is a
+    # comma-joined categorical list (the named FR-38 signals, like ``confidence_signals``);
+    # ``source_language`` is a language tag (non-content metadata). (The ``sentence`` and
+    # ``evidence_json`` are EncryptedText; ``case_theory_version_id`` is a globally-allowed hash;
+    # the rejection ledger's ``action`` is globally allowed; its ``reason``/``set_by`` are
+    # encrypted.)
+    ("PieceJustification", "basis_kind"),
+    ("PieceJustification", "intrinsic_signals"),
+    ("PieceJustification", "source_language"),
 }
 
 

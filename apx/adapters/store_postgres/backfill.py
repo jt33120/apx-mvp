@@ -63,6 +63,14 @@ ENCRYPTED_COLUMNS = [
     # single-PK (`id`), so key rotation addresses both directly.
     ("pin_entry", "id", "reason", "pin_entry.reason"),
     ("pin_entry", "id", "set_by", "pin_entry.set_by"),
+    # Story 4.6: the per-pièce justification — the one-line sentence (model summary — content) and
+    # the named extracts' quoted passages (client content, the containment target) are encrypted;
+    # the rejection ledger's optional reason (content) AND actor (PII) are encrypted. Single-PK
+    # (`id`) on both, so key rotation addresses them directly.
+    ("piece_justification", "id", "sentence", "piece_justification.sentence"),
+    ("piece_justification", "id", "evidence_json", "piece_justification.evidence_json"),
+    ("justification_rejection", "id", "reason", "justification_rejection.reason"),
+    ("justification_rejection", "id", "set_by", "justification_rejection.set_by"),
 ]
 
 

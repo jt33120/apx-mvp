@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-08-06  # Epic 4: 4-1..4-5, 4-7, 4-8, 4-9, 4-11 DONE; triage UX pass done (EXPERIENCE-EPIC4). Epic 3 done
+last_updated: 2026-08-06  # Epic 4: 4-1..4-9, 4-11 DONE (4-10, 4-12, 4-13 remain); triage UX pass done (EXPERIENCE-EPIC4). Epic 3 done
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -84,7 +84,7 @@ development_status:
   4-3-the-ranked-order-and-the-reproducible-ranking-version: done  # the ranked order + reproducible ranking version identity + persistence (Julian, 2026-08-04)
   4-4-confidence-is-derived-never-self-reported: done  # per-pièce confidence derived from observables, method in the ranking version, SM-17 calibration (Julian, 2026-08-05)
   4-5-per-pi-ce-labelling-against-the-taxonomy: done  # per-pièce taxonomy label: append-only version-independent ledger, out-of-taxonomy can never leak, never moves the order, survives re-ranking human-set, no silent remap; port+use-case seam (review) (Julian, 2026-08-05)
-  4-6-per-pi-ce-confidence-and-a-justification-derived-from-named-evidence: backlog
+  4-6-per-pi-ce-confidence-and-a-justification-derived-from-named-evidence: done  # the justification derived from NAMED evidence (FR-41/FR-18/FR-11): a Justification cannot exist without checkable evidence (extracts or named intrinsic signals) — enforced at BOTH the write seam and on read, so a persisted justification is always readable; every named extract is re-verified by exact containment AT SHOW TIME through the FR-11 resolver (unresolved ⇒ shown unverified, never ordinary); carries the derived 4.4 confidence, never imputed; rejecting the tool's assessment is append-only, reversible and audited; 2 structural checks (Julian, 2026-08-06)
   4-7-one-ranked-order-nothing-deleted-nothing-categorised: done  # retained/discarded as VIEWS (derive_triage_sets, never stored); discard≠deletion proven via exhaustive search (FR-13); sets name their version; retained-versions bound = config (retirement deferred, AD-7); line/pins are typed inputs (4.8/4.11) (Julian, 2026-08-05)
   4-8-the-tool-draws-the-line-and-commits: done  # the tool draws the line (FR-17): recall-first system placement, stored by last-retained-pièce identity (never a bare integer), append-only version-bound line_placement ledger; import can't move it; placing never reorders; port+use-case seam; 2 structural checks (Julian, 2026-08-05)
   4-9-moving-the-line-is-priced: done  # moving the line is priced (FR-19): Δ pièces + projected discarded-set prevalence — a projection from the ranking, NEVER a sampling bound (structural check line-projection-not-a-bound); retain-everything says no bound applies (never 0%); counts-only fallback; the human move is serialised (StaleLine) + audited with the priced statement shown (Julian, 2026-08-05)

@@ -771,3 +771,97 @@ class PinEntry(Base):
     # the actor who pinned/unpinned (PII), never a SQL predicate → application-encrypted (AD-31).
     set_by: Mapped[str] = mapped_column(EncryptedText("pin_entry.set_by"), nullable=False)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PieceJustification(Base):
+    """One *pièce*'s justification in a *ranking version* (FR-41/FR-18, Story 4.6) — WHY it is where
+    it is, in one line, backed by NAMED evidence. **Version-bound** (keyed by ``ranking_version_id``
+    + ``piece_id``): the justification is the output of one version's *relevance judgement*, so a
+    re-rank produces a new one — write-once per (version, pièce).
+
+    ``sentence`` is the model's one-line summary (**content** → application-encrypted, AD-31);
+    ``evidence_json`` is the named *retained extracts* — a JSON list of ``[chunk_id, quoted_text]``
+    (the quote is client **content** and the containment target at show time → encrypted). The
+    ``sentence`` is a summary, **the extracts are the control** (FR-41/R-11).
+
+    ``basis_kind`` (``case-theory`` | ``intrinsic``) + ``case_theory_version_id`` (a hash, on the
+    case-theory path) + ``intrinsic_signals`` (comma-joined categorical, on the intrinsic path) are
+    the **stated input set**, named — plaintext structural metadata (like
+    ``ranking_version.basis``). ``source_language`` is the source *pièce*'s language, stated where
+    it differs (FR-36). No cascade FK (AD-7): a *ranking version* / *matter* is retired, never
+    hard-deleted out from under its justifications."""
+
+    __tablename__ = "piece_justification"
+    __table_args__ = (
+        # one justification per pièce per version; a concurrent double-write collides here and fails
+        # loudly, never a silent overwrite.
+        UniqueConstraint(
+            "tenant", "matter", "ranking_version_id", "piece_id", name="uq_piece_justification"),
+        Index("ix_piece_justification_version", "tenant", "matter", "ranking_version_id"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(version_id \0 piece_id)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    ranking_version_id: Mapped[str] = mapped_column(
+        String(64), ForeignKey("ranking_version.id"), nullable=False, index=True)  # no ondelete
+    piece_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # the one-line justification sentence (a model summary — content) → app-encrypted (AD-31).
+    sentence: Mapped[str] = mapped_column(
+        EncryptedText("piece_justification.sentence"), nullable=False)
+    basis_kind: Mapped[str] = mapped_column(String, nullable=False)  # case-theory | intrinsic
+    # the referenced case-theory version (NULL on the intrinsic path) — a hash, structural metadata.
+    case_theory_version_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # the named intrinsic signals (comma-joined categorical), "" on the case-theory path.
+    intrinsic_signals: Mapped[str] = mapped_column(String, nullable=False, default="")
+    # the named retained extracts: JSON [[chunk_id, quoted_text], ...] — the quote is CONTENT and
+    # the containment target at show time → application-encrypted (AD-31).
+    evidence_json: Mapped[str] = mapped_column(
+        EncryptedText("piece_justification.evidence_json"), nullable=False)
+    # the source pièce's language (FR-36), stated where it differs — a language tag, non-content.
+    source_language: Mapped[str | None] = mapped_column(String, nullable=True)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class JustificationRejection(Base):
+    """One entry in a *pièce*'s justification-**rejection** ledger (FR-18, Story 4.6) — a human
+    setting the tool's assessment aside, or re-instating it. **APPEND-ONLY** and
+    **version-INDEPENDENT** (keyed by the *pièce*, not a *ranking version*): a reject or a restore
+    is a NEW row, never an overwrite (AD-7), so a rejection **survives re-ranking** and a restore
+    reverses it without a delete. The CURRENT state is a **VIEW** — the max-``seq`` row, rejected
+    only when its ``action`` is ``rejected`` (a
+    ``restored`` action lifts it).
+
+    A rejection is NOT an *override* — it sets aside a machine assertion rather than contradicting a
+    human one — so a reason is **optional** (FR-18 does not mandate one, unlike the FR-25 pin). Any
+    ``reason`` (content) and ``set_by`` (the actor — PII) are application-encrypted (AD-31). No
+    cascade FK (AD-7): a *matter* is retired, never hard-deleted out from under its rejections."""
+
+    __tablename__ = "justification_rejection"
+    __table_args__ = (
+        # per-pièce monotonic seq; a concurrent double-write collides here and fails loudly (AD-37
+        # conditional commit), never a silent overwrite.
+        UniqueConstraint(
+            "tenant", "matter", "piece_id", "seq", name="uq_justification_rejection_seq"),
+        Index("ix_justification_rejection_piece", "tenant", "matter", "piece_id"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(pid \0 seq, tenant-qual)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    piece_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)  # per-pièce monotonic (AD-49)
+    action: Mapped[str] = mapped_column(String, nullable=False)  # rejected | restored
+    # an OPTIONAL note (content) → application-encrypted (AD-31); NULL when none was given.
+    reason: Mapped[str | None] = mapped_column(
+        EncryptedText("justification_rejection.reason"), nullable=True)
+    # the actor who rejected/restored (PII), never a SQL predicate → application-encrypted (AD-31).
+    set_by: Mapped[str] = mapped_column(
+        EncryptedText("justification_rejection.set_by"), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
