@@ -51,15 +51,26 @@ from apx.adapters.render_image import Pdf2ImageRasterizer
 from apx.adapters.store_postgres.admission import admit
 from apx.adapters.store_postgres.engine import make_session_factory
 from apx.adapters.store_postgres.queue import enqueue_import
-from apx.adapters.store_postgres.store import ScopeConflict, ScopeDenied, SqlStore
+from apx.adapters.store_postgres.store import (
+    ScopeConflict,
+    ScopeDenied,
+    SqlStore,
+    StaleLabel,
+)
 from apx.api.logging import install_secret_redaction
 from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
+from apx.core.app.label import assign_taxonomy_label, revert_taxonomy_label
 from apx.core.app.read.deterministic import MovingPopulation, search_exhaustive
 from apx.core.app.read.piece import open_piece
 from apx.core.app.read.render import render_piece
 from apx.core.app.read.scan import read_scan_page
 from apx.core.app.read.semantic import search_semantic
+from apx.core.app.read.triage_table import (
+    read_matter_change_log,
+    read_piece_change_log,
+    read_triage_table,
+)
 from apx.core.app.triage import triage_pieces
 from apx.core.domain import capacity
 from apx.core.domain.config import (
@@ -72,6 +83,8 @@ from apx.core.domain.config import (
 from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.head_journal import open_journal
 from apx.core.domain.inventory import Inventory
+from apx.core.domain.taxonomy_label import OutOfTaxonomyLabel
+from apx.core.domain.triage_table import ChangeLogEntry
 from apx.core.ports.embedding import Embedder
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
@@ -1907,6 +1920,224 @@ def read_inventory(matter: str, ident: Identity = Depends(current_identity)) -> 
     except ScopeDenied as exc:
         raise HTTPException(status_code=403, detail="outside your scope") from exc
     return _inventory_out(inv)
+
+
+# ── Story 4.10: the triage table — one read for the surface, and the one act performed on it ──
+# The table is a RENDERING of derived views: no route here stores a côté, a rank or a confidence.
+# The single write is the taxonomy label, and it goes through the core/app seam (AD-4), which owns
+# validation, the monotonic seq, the conditional commit and the atomic audit entry.
+
+
+class TriageRowOut(BaseModel):
+    piece_id: str
+    name: str
+    rank: int | None
+    side: str
+    confidence: float | None
+    confidence_derived: bool
+    confidence_signals: list[str]
+    band: str | None
+    label: str
+    label_source: str | None
+    label_seq: int | None
+    in_current_taxonomy: bool
+    pinned: bool
+
+
+class LineOut(BaseModel):
+    placed: bool
+    last_retained_piece_id: str | None = None
+    last_retained_rank: int | None = None
+    basis: str | None = None
+    seq: int | None = None
+    at: datetime | None = None
+
+
+class TriageTableOut(BaseModel):
+    matter: str
+    version_no: int
+    version_id: str
+    basis: str
+    case_theory_version_id: str | None
+    created_at: datetime
+    rows: list[TriageRowOut]
+    retained_count: int
+    discarded_count: int
+    unscored_count: int
+    unsplit_count: int
+    corpus_count: int
+    pins_in_force: int
+    line: LineOut
+    taxonomy: list[str]
+
+
+class ChangeLogEntryOut(BaseModel):
+    piece_id: str
+    seq: int
+    previous: str
+    label: str
+    source: str
+    set_by: str
+    at: datetime
+
+
+class ChangeLogOut(BaseModel):
+    entries: list[ChangeLogEntryOut]
+
+
+class LabelIn(BaseModel):
+    label: str
+    expected_seq: int | None = None
+
+
+class LabelRevertIn(BaseModel):
+    to_seq: int
+
+
+class LabelWriteOut(BaseModel):
+    piece_id: str
+    seq: int
+    entries: list[ChangeLogEntryOut]
+
+
+def _change_log_out(entries: tuple[ChangeLogEntry, ...]) -> list[ChangeLogEntryOut]:
+    return [
+        ChangeLogEntryOut(
+            piece_id=e.piece_id, seq=e.seq, previous=e.previous, label=e.label, source=e.source,
+            set_by=e.set_by, at=e.at)
+        for e in entries]
+
+
+@app.get("/api/matters/{matter}/triage-table", response_model=TriageTableOut)
+def get_triage_table(
+    matter: str, version: int | None = None, ident: Identity = Depends(current_identity)
+) -> TriageTableOut:
+    """The whole triage surface for ONE ranking version (Story 4.10, FR-20) — the latest unless
+    `version` pins one (AD-23: every count on screen names its version). Out of scope, absent, or
+    not yet ranked are the SAME non-disclosing 404 (FR-14): the client renders "no ranking yet" as
+    its own state, never an empty table pretending to be a result."""
+    store = _require_store()
+    table = read_triage_table(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store, version_no=version)
+    if table is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return TriageTableOut(
+        matter=table.matter, version_no=table.version_no, version_id=table.version_id,
+        basis=table.basis, case_theory_version_id=table.case_theory_version_id,
+        created_at=table.created_at,
+        rows=[
+            TriageRowOut(
+                piece_id=r.piece_id, name=r.name, rank=r.rank, side=r.side,
+                confidence=r.confidence, confidence_derived=r.confidence_derived,
+                confidence_signals=list(r.confidence_signals), band=r.band, label=r.label,
+                label_source=r.label_source, label_seq=r.label_seq,
+                in_current_taxonomy=r.in_current_taxonomy, pinned=r.pinned)
+            for r in table.rows],
+        retained_count=table.retained_count, discarded_count=table.discarded_count,
+        unscored_count=table.unscored_count, unsplit_count=table.unsplit_count,
+        corpus_count=table.corpus_count,
+        pins_in_force=table.pins_in_force,
+        line=LineOut(
+            placed=table.line.placed, last_retained_piece_id=table.line.last_retained_piece_id,
+            last_retained_rank=table.line.last_retained_rank, basis=table.line.basis,
+            seq=table.line.seq, at=table.line.at),
+        taxonomy=list(table.taxonomy))
+
+
+def _require_piece_in_matter(store: SqlStore, ident: Identity, matter: str,
+                             piece_id: str) -> None:
+    """A write naming a pièce that is not in the matter is refused with the same non-disclosing 404
+    as an absent matter (FR-14). Without this, an arbitrary identifier would become a permanent row
+    in an append-only ledger nothing can delete (AD-7) and would surface in the matter's change log
+    — an evidential surface — naming a pièce that never existed."""
+    if not store.piece_is_in_matter(
+            tenant=ident.tenant, matter=matter, piece_id=piece_id, scopes=ident.scopes):
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+
+
+def _label_write_out(store: SqlStore, ident: Identity, matter: str, piece_id: str,
+                     seq: int) -> LabelWriteOut:
+    """The written seq plus the row's change log, so the surface can show the entry beside the row
+    immediately (FR-20) without a second round trip that could race the write."""
+    entries = read_piece_change_log(
+        tenant=ident.tenant, matter=matter, piece_id=piece_id, scopes=ident.scopes, reader=store)
+    return LabelWriteOut(piece_id=piece_id, seq=seq, entries=_change_log_out(entries or ()))
+
+
+@app.put("/api/matters/{matter}/pieces/{piece_id}/label", response_model=LabelWriteOut)
+def put_piece_label(
+    matter: str, piece_id: str, body: LabelIn, ident: Identity = Depends(current_identity)
+) -> LabelWriteOut:
+    """Set one *pièce*'s taxonomy label (FR-40/FR-20) — the ONE editable cell of the table.
+
+    It changes that cell and nothing else: no rank, no confidence, no côté, no other row (FR-20).
+    422 an out-of-taxonomy value (it can never leak), 409 a stale `expected_seq` (someone else
+    edited the cell — the client reverts and re-reads rather than silently overwriting), 404 the
+    non-disclosing wall gate."""
+    store = _require_store()
+    _require_piece_in_matter(store, ident, matter, piece_id)
+    try:
+        seq = assign_taxonomy_label(
+            store, tenant=ident.tenant, matter=matter, actor=ident.actor, piece_id=piece_id,
+            label=body.label, scopes=ident.scopes, expected_seq=body.expected_seq)
+    except OutOfTaxonomyLabel as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except StaleLabel as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT) from exc
+    return _label_write_out(store, ident, matter, piece_id, seq)
+
+
+@app.post("/api/matters/{matter}/pieces/{piece_id}/label/revert", response_model=LabelWriteOut)
+def revert_piece_label(
+    matter: str, piece_id: str, body: LabelRevertIn, ident: Identity = Depends(current_identity)
+) -> LabelWriteOut:
+    """Revert a *pièce*'s label to the value it held at `to_seq` — a **new** change-log entry, never
+    an erasure of the one it reverts (AD-7/FR-20). 400 when `to_seq` is not an entry of this pièce,
+    422 when the restored value has since left the taxonomy, 404 the non-disclosing wall gate."""
+    store = _require_store()
+    _require_piece_in_matter(store, ident, matter, piece_id)
+    try:
+        seq = revert_taxonomy_label(
+            store, tenant=ident.tenant, matter=matter, actor=ident.actor, piece_id=piece_id,
+            to_seq=body.to_seq, scopes=ident.scopes)
+    except OutOfTaxonomyLabel as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return _label_write_out(store, ident, matter, piece_id, seq)
+
+
+@app.get("/api/matters/{matter}/pieces/{piece_id}/label/log", response_model=ChangeLogOut)
+def read_piece_label_log(
+    matter: str, piece_id: str, ident: Identity = Depends(current_identity)
+) -> ChangeLogOut:
+    """One row's change log, ascending: previous value → new value, author, timestamp (FR-20).
+    Append-only — there is no route that edits or erases an entry."""
+    store = _require_store()
+    entries = read_piece_change_log(
+        tenant=ident.tenant, matter=matter, piece_id=piece_id, scopes=ident.scopes, reader=store)
+    if entries is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return ChangeLogOut(entries=_change_log_out(entries))
+
+
+@app.get("/api/matters/{matter}/change-log", response_model=ChangeLogOut)
+def read_matter_change_log_api(
+    matter: str, limit: int = 200, ident: Identity = Depends(current_identity)
+) -> ChangeLogOut:
+    """The matter-level change log, newest first (FR-20) — the panel beside the table. `limit` is a
+    panel page size, not a truncation of an evidential claim."""
+    store = _require_store()
+    entries = read_matter_change_log(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store,
+        limit=max(1, min(limit, 1000)))
+    if entries is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return ChangeLogOut(entries=_change_log_out(entries))
 
 
 # One artifact serves both: the API routes above (/api/*, matched first) and the built

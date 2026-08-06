@@ -300,3 +300,91 @@ export function pieceOriginalUrl(pieceId: string): string {
 export function piecePageUrl(pieceId: string, page: number): string {
   return `/api/pieces/${encodeURIComponent(pieceId)}/page/${page}`;
 }
+
+// ── Story 4.10 — the triage table ────────────────────────────────────────────────────────────
+// One read for the whole surface, bound to ONE ranking version (AD-23): the parts cannot drift
+// apart under a concurrent re-rank. `side` is a DERIVED view of (the order, the line, the pins) —
+// there is deliberately no endpoint that sets one (FR-16/AD-39). `confidence_derived` is false when
+// the cascade derived no confidence: show that, never a zero (AD-19). `name` and `label` are
+// UNTRUSTED text — render as text nodes, never as HTML.
+
+export type TriageSide = "retained" | "discarded" | "unscored" | "unsplit";
+export type TriageRow = {
+  piece_id: string; name: string; rank: number | null; side: TriageSide;
+  confidence: number | null; confidence_derived: boolean; confidence_signals: string[];
+  band: string | null; label: string; label_source: string | null; label_seq: number | null;
+  in_current_taxonomy: boolean; pinned: boolean;
+};
+export type TriageLine = {
+  placed: boolean; last_retained_piece_id: string | null; last_retained_rank: number | null;
+  basis: string | null; seq: number | null; at: string | null;
+};
+export type TriageTable = {
+  matter: string; version_no: number; version_id: string; basis: string;
+  case_theory_version_id: string | null; created_at: string; rows: TriageRow[];
+  retained_count: number; discarded_count: number; unscored_count: number;
+  unsplit_count: number; corpus_count: number; pins_in_force: number;
+  line: TriageLine; taxonomy: string[];
+};
+export type ChangeLogEntry = {
+  piece_id: string; seq: number; previous: string; label: string; source: string;
+  set_by: string; at: string;
+};
+export type LabelWrite = { piece_id: string; seq: number; entries: ChangeLogEntry[] };
+
+export const UNLABELLED = "unlabelled";
+
+export async function readTriageTable(matter: string, version?: number): Promise<TriageTable> {
+  const qs = version === undefined ? "" : `?${new URLSearchParams({ version: String(version) })}`;
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/triage-table${qs}`);
+  if (!res.ok) return fail(res);
+  return res.json();
+}
+
+// The ONE editable cell. `expected_seq` is the seq the client last saw: the server refuses a stale
+// one with 409 rather than silently overwriting somebody else's edit — the caller reverts and
+// re-reads (FR-20 extends to failure).
+export async function setPieceLabel(
+  matter: string, pieceId: string, label: string, expectedSeq: number | null,
+): Promise<LabelWrite> {
+  const res = await fetch(
+    `/api/matters/${encodeURIComponent(matter)}/pieces/${encodeURIComponent(pieceId)}/label`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ label, expected_seq: expectedSeq }),
+    });
+  if (!res.ok) return fail(res);
+  return res.json();
+}
+
+// A revert is a NEW change-log entry carrying the restored value — never an erasure (AD-7).
+export async function revertPieceLabel(
+  matter: string, pieceId: string, toSeq: number,
+): Promise<LabelWrite> {
+  const res = await fetch(
+    `/api/matters/${encodeURIComponent(matter)}/pieces/${encodeURIComponent(pieceId)}/label/revert`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ to_seq: toSeq }),
+    });
+  if (!res.ok) return fail(res);
+  return res.json();
+}
+
+export async function readPieceChangeLog(
+  matter: string, pieceId: string,
+): Promise<ChangeLogEntry[]> {
+  const res = await fetch(
+    `/api/matters/${encodeURIComponent(matter)}/pieces/${encodeURIComponent(pieceId)}/label/log`);
+  if (!res.ok) return fail(res);
+  return (await res.json()).entries;
+}
+
+export async function readMatterChangeLog(matter: string, limit = 200): Promise<ChangeLogEntry[]> {
+  const qs = new URLSearchParams({ limit: String(limit) });
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/change-log?${qs}`);
+  if (!res.ok) return fail(res);
+  return (await res.json()).entries;
+}

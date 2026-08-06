@@ -215,6 +215,18 @@ USER_ACTIONS: tuple[UserAction, ...] = (
     _http("POST", "/api/matters/{matter}/recall/review", "record-recall-review",
           "inserts recall_review rows and returns the bound"),
 
+    # ── Story 4.10: the triage table. Note what is NOT here — no route sets a côté, a rank or a
+    # confidence: those are derived views (AD-39/AD-19) and the table only renders them. ──
+    _http("PUT", "/api/matters/{matter}/pieces/{piece_id}/label", "set-piece-label",
+          "appends one taxonomy_label_entry — the ONE editable cell of the table; it changes that "
+          "cell and nothing else (FR-20/FR-40)"),
+    _http("POST", "/api/matters/{matter}/pieces/{piece_id}/label/revert", "revert-piece-label",
+          "reverting a label APPENDS a new change-log entry carrying the restored value — the "
+          "entry it reverts stays readable (AD-7/FR-20)",
+          reads_as_deletion=True,
+          reversal="set the label again, or revert to any earlier seq — every value the pièce ever "
+                   "carried stays in the ledger"),
+
     # ── the read surface. Registered so nothing is invisible; the SEVEN that write an audit entry
     # on serve are state-changing and probed like any other write (FR-45 + FR-21). ──
     _read("/api/health", "read-health", "liveness; touches no store"),
@@ -238,6 +250,13 @@ USER_ACTIONS: tuple[UserAction, ...] = (
     _read("/api/matters/{matter}/triage", "read-triage", "the deduplication summary; a read"),
     _read("/api/matters/{matter}/labels", "read-labels", "the current triage labels; a read"),
     _read("/api/matters/{matter}/inventory", "read-inventory", "the six-field denominator; a read"),
+    _read("/api/matters/{matter}/triage-table", "read-triage-table",
+          "the whole triage surface for one ranking version — order, line, pins, labels and counts "
+          "read against that one version so the parts cannot drift (AD-23); a pure read"),
+    _read("/api/matters/{matter}/pieces/{piece_id}/label/log", "read-piece-change-log",
+          "one row's append-only change log, previous → new (FR-20); a read"),
+    _read("/api/matters/{matter}/change-log", "read-matter-change-log",
+          "the matter-level change log, newest first (FR-20); a read"),
     _read("/api/matters/{matter}/recall/sample", "draw-recall-sample",
           "draws a random sample of the discard pile; the draw itself persists nothing"),
     _read("/api/pieces/{piece_id}", "read-piece-meta", "viewer metadata; a read"),
@@ -332,6 +351,15 @@ USER_ACTIONS: tuple[UserAction, ...] = (
     _seam("read.semantic.search_semantic",
           "the suggestive semantic engine; a read (the query is audited at the edge)",
           changes_state=False),
+    # Story 4.10 — the triage surface's read seams. Pure reads: the côté they carry is DERIVED at
+    # read time from the order, the line and the pins, never stored (AD-39).
+    _seam("read.triage_table.read_triage_table",
+          "the whole table for one ranking version; a read that stores nothing and decides nothing",
+          changes_state=False),
+    _seam("read.triage_table.read_piece_change_log",
+          "one row's change log, paired previous → new; a read", changes_state=False),
+    _seam("read.triage_table.read_matter_change_log",
+          "the matter-level change log, newest first; a read", changes_state=False),
 )
 
 

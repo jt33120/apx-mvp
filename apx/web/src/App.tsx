@@ -775,6 +775,12 @@ function MatterRow({ m }: { m: MatterSummary }) {
           {m.inventory.in_corpus} indexées · {m.inventory.open_register_entries} à revoir · tri &amp; journal
         </div>
       </div>
+      {/* Story 4.10 — the triage surface, reached from the matter once a ranking exists */}
+      <div style={{ padding: "0 1rem .55rem", fontSize: ".84rem" }}>
+        <Link to={`/matter/${encodeURIComponent(m.matter)}/triage`}>
+          Ouvrir le classement…
+        </Link>
+      </div>
       {open && (
         <div className="apx-detail">
           {err && <p className="apx-error" role="alert" style={{ marginTop: 0 }}>{err}</p>}

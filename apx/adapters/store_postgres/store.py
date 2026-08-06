@@ -118,6 +118,7 @@ from apx.core.domain.ranking import (
 from apx.core.domain.retrieval import DeterministicResult, SemanticResult
 from apx.core.domain.search import snippet
 from apx.core.domain.taxonomy_label import (
+    UNLABELLED,
     LabelEntry,
     LabelSource,
     current_label,
@@ -126,6 +127,17 @@ from apx.core.domain.taxonomy_label import (
 )
 from apx.core.domain.triage import TriageOutcome
 from apx.core.domain.triage_sets import Line, Pin, PinSide, TriageSets, derive_triage_sets
+from apx.core.domain.triage_table import (
+    SIDE_DISCARDED,
+    SIDE_RETAINED,
+    SIDE_UNSCORED,
+    SIDE_UNSPLIT,
+    ChangeLogEntry,
+    LineView,
+    TriageRow,
+    TriageTable,
+    pair_change_log,
+)
 from apx.core.ports.read import ExactSearch, PieceView
 from apx.core.projection import Snapshot
 
@@ -3858,3 +3870,189 @@ class SqlStore:
                 JustificationRejectionEntry(
                     seq=r.seq, action=r.action, reason=r.reason, set_by=r.set_by, at=r.at)
                 for r in rows]
+
+    # ── Story 4.10: the triage table — ONE coherent read of ONE ranking version (FR-20/AD-23) ────
+    def _piece_names(self, session: Session, tenant: str, matter: str) -> dict[str, str]:
+        """``piece_id -> provenance path`` for a *matter*. ``matter`` is IN the query (AD-13), so
+        this is not a tenant-wide fetch narrowed afterwards."""
+        rows = session.execute(
+            select(Piece.id, Piece.provenance_path)
+            .where(Piece.tenant == tenant, Piece.matter == matter)).all()
+        return {pid: name for pid, name in rows}
+
+    def piece_is_in_matter(
+        self, *, tenant: str, matter: str, piece_id: str, scopes: set[str]
+    ) -> bool:
+        """Is this *pièce* actually part of this *matter*, for a caller holding its wall?
+
+        The label ledger is keyed by ``(tenant, matter, piece_id)`` with no foreign key to ``piece``
+        (AD-7 forbids the cascade a FK would invite), so nothing at the schema layer stops a write
+        naming a *pièce* that does not exist. That is harmless at the internal seam, whose callers
+        pass a *pièce* they just read — but Story 4.10 put the act behind an HTTP route, and at a
+        trust boundary an unchecked identifier becomes permanent, undeletable rows in an evidential
+        ledger that a *bordereau* reader would see. So the boundary checks membership.
+
+        Scope pre-filtered (AD-13); False when out of scope, when the matter is absent, or when the
+        *pièce* is not in it — the caller turns all three into the same non-disclosing 404
+        (FR-14)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return False
+            return session.scalar(
+                select(func.count()).select_from(Piece)
+                .where(Piece.tenant == tenant, Piece.matter == matter,
+                       Piece.id == piece_id)) > 0
+
+    def _current_labels(
+        self, session: Session, tenant: str, matter: str, taxonomy: list[str]
+    ) -> dict[str, CurrentLabel]:
+        """Every *pièce*'s CURRENT label for a *matter*, in **one** query — the same max-``seq``
+        VIEW as :meth:`read_current_label`, computed for the whole table at once.
+
+        The per-row read would be N+1: one query per *pièce* on a surface built for thousands of
+        them (Story 2.13's 5 000-*pièce* run is the standing bound). ``matter`` is in the query
+        (AD-13); the pairing and the ``unlabelled`` default stay in the domain (FR-40)."""
+        entries = session.execute(
+            select(TaxonomyLabelEntry.piece_id, TaxonomyLabelEntry.seq, TaxonomyLabelEntry.label,
+                   TaxonomyLabelEntry.source)
+            .where(TaxonomyLabelEntry.tenant == tenant,
+                   TaxonomyLabelEntry.matter == matter)).all()
+        by_piece: dict[str, list[LabelEntry]] = {}
+        for pid, seq, label, src in entries:
+            by_piece.setdefault(pid, []).append(LabelEntry(pid, seq, label, LabelSource(src)))
+        out: dict[str, CurrentLabel] = {}
+        for pid, rows in by_piece.items():
+            view = current_label(rows)
+            out[pid] = CurrentLabel(
+                piece_id=pid, label=view.label,
+                source=view.source.value if view.source is not None else None, seq=view.seq,
+                in_current_taxonomy=is_member(view.label, taxonomy))
+        return out
+
+    def read_triage_table(
+        self, *, tenant: str, matter: str, scopes: set[str], version_no: int | None = None
+    ) -> TriageTable | None:
+        """The whole triage surface for ONE *ranking version* (Story 4.10, FR-20).
+
+        Every part is read **against that one version**: the version is resolved first and its
+        ``version_no`` is then passed explicitly to the order, the line and the sets, so a
+        concurrent re-rank cannot leave the parts describing different versions (AD-23 — no
+        unqualified reference). The côté each row carries is **derived** here from *(the order, the
+        line, the pins)* and is never stored (AD-39); the label is the max-``seq`` view over the
+        append-only ledger and is never null (FR-40); a ``None`` confidence stays ``None`` (AD-19).
+
+        Scope pre-filtered (AD-13). ``None`` when out of scope, absent, or not yet ranked — the
+        three are indistinguishable (FR-14). Not audited (a read)."""
+        version = self.read_ranking(tenant=tenant, matter=matter, scopes=scopes) \
+            if version_no is None else None
+        if version_no is None:
+            if version is None:
+                return None
+            version_no = version.version_no
+        else:
+            versions = self.list_ranking_versions(tenant=tenant, matter=matter, scopes=scopes)
+            if versions is None:
+                return None
+            version = next((v for v in versions if v.version_no == version_no), None)
+            if version is None:
+                return None
+        order = self.read_ranked_order(
+            tenant=tenant, matter=matter, scopes=scopes, version_no=version_no)
+        if not order:
+            return None
+        line = self.read_current_line(
+            tenant=tenant, matter=matter, scopes=scopes, version_no=version_no)
+        pins = self.read_current_pins(tenant=tenant, matter=matter, scopes=scopes) or ()
+        sets = self.read_triage_sets(
+            tenant=tenant, matter=matter, scopes=scopes,
+            line=Line(line.last_retained_piece_id) if line is not None else None,
+            pins=pins, version_no=version_no)
+        if sets is None:
+            return None
+        with self._sf() as session:
+            names = self._piece_names(session, tenant, matter)
+            taxonomy_list = self._current_taxonomy(session, tenant)
+            labels = self._current_labels(session, tenant, matter, taxonomy_list)
+        taxonomy = tuple(taxonomy_list)
+        retained, discarded = set(sets.retained), set(sets.discarded)
+        pinned_ids = {p.piece_id for p in pins}
+        rows: list[TriageRow] = []
+        for entry in order:
+            if entry.piece_id in retained:
+                side = SIDE_RETAINED
+            elif entry.piece_id in discarded:
+                side = SIDE_DISCARDED
+            elif entry.rank is None:
+                side = SIDE_UNSCORED
+            else:
+                # ranked, but no line has been drawn — on neither side of a cut that does not
+                # exist. Calling it "écartée" would be the lie FR-16 forbids.
+                side = SIDE_UNSPLIT
+            current = labels.get(entry.piece_id)
+            signals = tuple(
+                s for s in (entry.confidence_signals or "").split(",") if s)
+            rows.append(TriageRow(
+                piece_id=entry.piece_id, name=names.get(entry.piece_id, entry.piece_id),
+                rank=entry.rank, side=side, confidence=entry.confidence,
+                confidence_signals=signals, band=entry.band,
+                label=current.label if current is not None else UNLABELLED,
+                label_source=current.source if current is not None else None,
+                label_seq=current.seq if current is not None else None,
+                in_current_taxonomy=current.in_current_taxonomy if current is not None else True,
+                pinned=entry.piece_id in pinned_ids))
+        by_id = {r.piece_id: r for r in rows}
+        last = by_id.get(line.last_retained_piece_id) if line is not None else None
+        return TriageTable(
+            matter=matter, version_no=version.version_no, version_id=version.version_id,
+            basis=version.basis, case_theory_version_id=version.case_theory_version_id,
+            created_at=version.created_at, rows=tuple(rows),
+            retained_count=len(sets.retained), discarded_count=len(sets.discarded),
+            unscored_count=len(sets.unscored), pins_in_force=sets.pins_in_force,
+            line=LineView(
+                placed=line is not None,
+                last_retained_piece_id=line.last_retained_piece_id if line else None,
+                last_retained_rank=last.rank if last else None,
+                basis=line.basis if line else None, seq=line.seq if line else None,
+                at=line.at if line else None),
+            taxonomy=taxonomy)
+
+    def read_label_change_log_paired(
+        self, *, tenant: str, matter: str, piece_id: str, scopes: set[str]
+    ) -> tuple[ChangeLogEntry, ...] | None:
+        """One *pièce*'s change log as ``previous → new`` entries (FR-20). The pairing is the pure
+        :func:`pair_change_log`; the first entry's previous value is the ``unlabelled`` sentinel —
+        never null, because "no label" is a value here, not an absence (FR-40)."""
+        entries = self.read_label_change_log(
+            tenant=tenant, matter=matter, piece_id=piece_id, scopes=scopes)
+        if entries is None:
+            return None
+        return pair_change_log(
+            piece_id,
+            tuple((e.seq, e.label, e.source, e.set_by, e.at) for e in entries),
+            unlabelled=UNLABELLED)
+
+    def read_matter_change_log(
+        self, *, tenant: str, matter: str, scopes: set[str], limit: int = 200
+    ) -> tuple[ChangeLogEntry, ...] | None:
+        """The *matter*'s whole label change log, **newest first**, bounded by ``limit`` — the
+        matter-level panel beside the table (FR-20).
+
+        The pairing is per-*pièce* (a previous value only means something within one *pièce*'s own
+        history), so the full ledger for the matter is read, paired per *pièce*, then ordered by
+        recency and bounded. ``matter`` is in the query (AD-13). Scope pre-filtered; ``None`` when
+        out of scope or absent."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            rows = session.scalars(
+                select(TaxonomyLabelEntry)
+                .where(TaxonomyLabelEntry.tenant == tenant, TaxonomyLabelEntry.matter == matter)
+                .order_by(TaxonomyLabelEntry.piece_id, TaxonomyLabelEntry.seq.asc())).all()
+        by_piece: dict[str, list[tuple[int, str, str, str, datetime]]] = {}
+        for r in rows:
+            by_piece.setdefault(r.piece_id, []).append((r.seq, r.label, r.source, r.set_by, r.at))
+        paired: list[ChangeLogEntry] = []
+        for pid, entries in by_piece.items():
+            paired.extend(pair_change_log(pid, tuple(entries), unlabelled=UNLABELLED))
+        paired.sort(key=lambda e: (e.at, e.seq), reverse=True)
+        return tuple(paired[:max(1, limit)])

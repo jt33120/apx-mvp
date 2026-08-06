@@ -353,6 +353,12 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             _Step(("search-corpus",), lambda: _get("/api/search", q="bail")),
             _Step(("read-import-progress",),
                   lambda: _get(f"/api/imports/{state['job_id']}")),
+            # Story 4.10 — the triage surface reads. Pure: they render derived views and write
+            # nothing, which the flag verification below asserts rather than assumes.
+            _Step(("read-triage-table",), lambda: _get(f"/api/matters/{MATTER}/triage-table")),
+            _Step(("read-piece-change-log",),
+                  lambda: _get(f"/api/matters/{MATTER}/pieces/{pieces[0]}/label/log")),
+            _Step(("read-matter-change-log",), lambda: _get(f"/api/matters/{MATTER}/change-log")),
         ]
         def _as_unscoped(path: str) -> None:
             """Drive a SUGGESTIVE endpoint. Its vector query is Postgres-only (``<=>``), so on this
@@ -411,6 +417,12 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             _Step(("label.revert_taxonomy_label",), lambda: revert_taxonomy_label(
                 store, tenant=TENANT, matter=MATTER, actor="me.durand", piece_id=pieces[0],
                 to_seq=1, scopes={WALL})),
+            # Story 4.10 — the table's one editable cell, over HTTP. On a DIFFERENT pièce, so the
+            # seam steps above keep their own seq history.
+            _Step(("set-piece-label",), lambda: _put(
+                f"/api/matters/{MATTER}/pieces/{pieces[-1]}/label", {"label": "Contrats"})),
+            _Step(("revert-piece-label",), lambda: _post(
+                f"/api/matters/{MATTER}/pieces/{pieces[-1]}/label/revert", {"to_seq": 1})),
             _Step(("justification.record_justification",), lambda: record_justification(
                 store, tenant=TENANT, matter=MATTER, actor="me.durand", piece_id=pieces[0],
                 sentence="Le bail porte la clause invoquée.",

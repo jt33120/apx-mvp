@@ -362,3 +362,64 @@ button:focus-visible { box-shadow: var(--apx-ring); }
   .pv-canvas { padding: 1rem 0.8rem; }
   .sk { padding: 1.4rem 1.2rem; }
 }
+
+/* ── Story 4.10: the triage table — the north-star working surface ─────────────────────────────
+   The table is the one place content runs wider than the reading shell, in its OWN horizontally
+   scrolling container so the page body never scrolls sideways. The load-bearing contrast is
+   editable vs derived: the label cell is a real control, the confidence cell is deliberately shaped
+   like text. The kept/review/discard tier stays DISTINCT from the gold — gold is the line. */
+.apx-triage { display: flex; flex-direction: column; gap: 1.1rem; }
+.apx-triage-scroll { overflow-x: auto; border: 1px solid var(--apx-line); border-radius: var(--apx-radius); background: var(--apx-surface); box-shadow: var(--apx-shadow-sm); }
+.apx-triage-table { width: 100%; min-width: 46rem; border-collapse: collapse; font-size: 0.9rem; }
+.apx-triage-table th { position: sticky; top: 0; z-index: 2; background: var(--apx-surface-2); text-align: left; font-size: 0.72rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--apx-muted); font-weight: 600; padding: 0.6rem 0.8rem; border-bottom: 1px solid var(--apx-line); }
+.apx-triage-table td { padding: 0.5rem 0.8rem; border-bottom: 1px solid var(--apx-line-2); vertical-align: top; }
+.apx-triage-table tr:last-child td { border-bottom: 0; }
+
+/* rank — a serif ordinal, tabular so the column reads as a column */
+.apx-rank-cell { font-family: var(--apx-serif); font-variant-numeric: tabular-nums; text-align: right; width: 4.5rem; color: var(--apx-ink-2); }
+.apx-piece-cell .n { display: block; }
+.apx-piece-cell .id { display: block; font-family: var(--apx-mono); font-size: 0.7rem; color: var(--apx-muted); word-break: break-all; }
+
+/* confidence — DERIVED: read-only text with its marker, never shaped like an input (FR-42) */
+.apx-confidence-cell { white-space: nowrap; }
+.apx-confidence-cell .b { font-variant-numeric: tabular-nums; }
+.apx-confidence-cell .d { display: inline-block; margin-left: 0.4rem; font-size: 0.66rem; letter-spacing: 0.07em; text-transform: uppercase; color: var(--apx-muted); }
+.apx-confidence-cell .none { color: var(--apx-muted); font-style: italic; }
+
+/* label — EDITABLE: a real select, so assistive tech announces the difference a sighted user sees */
+.apx-label-cell select { font: inherit; color: var(--apx-ink); background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: 0.24rem 0.5rem; max-width: 14rem; }
+.apx-label-cell select:focus-visible { outline: none; box-shadow: var(--apx-ring); border-color: var(--apx-gold-2); }
+.apx-label-cell select:disabled { opacity: 0.55; }
+.apx-label-cell .out { display: block; margin-top: 0.2rem; font-size: 0.72rem; color: var(--apx-review); }
+
+/* côté — a DERIVED view chip, never a toggle. Its pinned variant is the one gold mark on a row. */
+.apx-side-badge { display: inline-flex; align-items: center; gap: 0.3rem; border-radius: 999px; padding: 0.1rem 0.6rem; font-size: 0.76rem; white-space: nowrap; }
+.apx-side-badge--retained { color: var(--apx-kept); background: var(--apx-kept-bg); }
+.apx-side-badge--discarded { color: var(--apx-discard); background: var(--apx-discard-bg); }
+.apx-side-badge--unscored { color: var(--apx-review); background: var(--apx-review-bg); }
+.apx-side-badge--unsplit { color: var(--apx-ink-3); background: var(--apx-line-2); }
+.apx-pin-marker { color: var(--apx-gold); }
+
+/* the line — a single gold hairline BETWEEN two rows, and it speaks */
+.apx-the-line td { padding: 0; border-bottom: 0; }
+.apx-the-line .rule { height: 2px; background: linear-gradient(90deg, var(--apx-gold-2), var(--apx-gold)); }
+.apx-the-line .say { padding: 0.7rem 0.85rem 0.75rem; background: var(--apx-surface-2); border-bottom: 1px solid var(--apx-line-2); }
+.apx-the-line .say .s { font-family: var(--apx-serif); font-size: 1.02rem; color: var(--apx-ink); }
+.apx-the-line .say .e { display: block; margin-top: 0.15rem; font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--apx-muted); }
+
+/* a zone heading inside the table (retenue / écartée / non-scorée), carrying its count */
+.apx-zone td { background: var(--apx-surface-2); border-bottom: 1px solid var(--apx-line-2); padding: 0.45rem 0.85rem; font-size: 0.74rem; letter-spacing: 0.08em; text-transform: uppercase; color: var(--apx-muted); }
+.apx-zone .c { font-family: var(--apx-serif); font-variant-numeric: tabular-nums; letter-spacing: 0; text-transform: none; font-size: 0.95rem; color: var(--apx-ink-2); }
+
+/* the change log — append-only, newest first; the inline form sits beside its row */
+.apx-change-log-entry { margin-top: 0.3rem; font-size: 0.76rem; color: var(--apx-ink-2); }
+.apx-change-log-entry .from { color: var(--apx-muted); }
+.apx-change-log-entry .to { color: var(--apx-ink); font-weight: 560; }
+.apx-change-log { border: 1px solid var(--apx-line); border-radius: var(--apx-radius); background: var(--apx-surface); padding: 0.8rem 0.95rem; }
+.apx-change-log ol { list-style: none; margin: 0.5rem 0 0; padding: 0; display: flex; flex-direction: column; gap: 0.45rem; }
+.apx-change-log li { display: flex; flex-wrap: wrap; gap: 0.4rem; align-items: baseline; font-size: 0.82rem; border-bottom: 1px solid var(--apx-line-2); padding-bottom: 0.45rem; }
+.apx-change-log li:last-child { border-bottom: 0; padding-bottom: 0; }
+.apx-change-log .when { color: var(--apx-muted); font-variant-numeric: tabular-nums; }
+
+/* the honesty banner — one sentence, always present, never a badge */
+.apx-honesty { border-left: 3px solid var(--apx-gold-2); background: var(--apx-surface-2); padding: 0.7rem 0.9rem; border-radius: 0 var(--apx-radius-sm) var(--apx-radius-sm) 0; font-size: 0.88rem; color: var(--apx-ink-2); }
