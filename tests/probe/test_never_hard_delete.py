@@ -359,7 +359,25 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             _Step(("read-piece-change-log",),
                   lambda: _get(f"/api/matters/{MATTER}/pieces/{pieces[0]}/label/log")),
             _Step(("read-matter-change-log",), lambda: _get(f"/api/matters/{MATTER}/change-log")),
+            # Story 4.13 — freshness. All three are pure reads: staleness is a COMPARISON of the
+            # stamp an artefact was produced under against the current observables, and reading it
+            # resolves nothing (FR-58). The flag verification below asserts they write nothing.
+            _Step(("read-freshness",), lambda: _get(f"/api/matters/{MATTER}/freshness")),
+            _Step(("read-worklist",), lambda: _get(f"/api/matters/{MATTER}/worklist")),
+            _Step(("read-bound",), lambda: _get(f"/api/matters/{MATTER}/bound")),
         ]
+
+        def _export_bound() -> None:
+            """Exercise the bound export on its SUCCESS path.
+
+            Every write step above moved an input, so the bound recorded early in this probe is
+            stale by now and the export would (correctly) refuse it with 409 — writing nothing, and
+            leaving `changes_state=True` unverified. So a FRESH bound is recorded first, as
+            arrangement. The proof that the export really happened is the 200 assertion, not the
+            census: had it refused, this step would fail loudly here rather than pass because the
+            arrangement happened to write."""
+            _recall_review()
+            _get(f"/api/matters/{MATTER}/bound/export")
         def _as_unscoped(path: str) -> None:
             """Drive a SUGGESTIVE endpoint. Its vector query is Postgres-only (``<=>``), so on this
             SQLite harness it is exercised through the fail-closed empty-scope short-circuit — the
@@ -380,6 +398,7 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             _Step(("search-exhaustive",), lambda: _get("/api/search/exhaustive", q="bail")),
             _Step(("export-exhaustive",), lambda: _get("/api/search/exhaustive/export", q="bail")),
             _Step(("export-register",), lambda: _get("/api/register/export")),
+            _Step(("export-bound",), _export_bound),
             _Step(("open-piece-original",), lambda: _get(f"/api/pieces/{piece}/original")),
             _Step(("open-piece-render",), lambda: _get(f"/api/pieces/{piece}/render")),
             _Step(("open-piece-page",),

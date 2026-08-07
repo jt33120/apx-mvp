@@ -21,6 +21,7 @@ discarded pieces were actually relevant (a prevalence of `prevalence_upper`)."
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 from math import comb
 
 
@@ -95,3 +96,24 @@ def prevalence_upper_bound(
         count_upper=lo,
         prevalence_upper=lo / population,
     )
+
+
+@dataclass(frozen=True)
+class RecordedBound:
+    """A *confidence bound* that was **recorded** and can be read back later — the derived artefact
+    FR-58 governs (Story 4.13).
+
+    :class:`PrevalenceBound` is the number; this is the number as an *artefact with a lifetime*: it
+    names the identity its freshness stamp is keyed by (``artefact_id``) and when it was reviewed.
+    A bound displayed later is the one thing in this product that can be false while looking fresh
+    — 300 *pièces* arrive and the sentence still speaks about the old population — so it is stamped
+    like the ranking and the line, and a stale one cannot be exported as current.
+
+    ``reviewed_at`` is a **record** of when the review happened. It is never an input to the
+    freshness decision: staleness is not resolved by the passage of time (FR-58), and no observable
+    on :class:`~apx.core.domain.freshness.FreshnessStamp` is a clock.
+    """
+
+    artefact_id: str
+    bound: PrevalenceBound
+    reviewed_at: datetime

@@ -257,6 +257,19 @@ USER_ACTIONS: tuple[UserAction, ...] = (
           "one row's append-only change log, previous → new (FR-20); a read"),
     _read("/api/matters/{matter}/change-log", "read-matter-change-log",
           "the matter-level change log, newest first (FR-20); a read"),
+    _read("/api/matters/{matter}/freshness", "read-freshness",
+          "the verdict on every stamped derived artefact — a COMPARISON of stamps, never a stored "
+          "flag (FR-58/AD-23); a read that resolves nothing"),
+    _read("/api/matters/{matter}/worklist", "read-worklist",
+          "the derived worklist: one line per stale artefact, OFFERING a recomputation the user "
+          "must start (FR-58); a read that queues nothing"),
+    _read("/api/matters/{matter}/bound", "read-bound",
+          "the current confidence bound with its freshness and the copy string that carries its "
+          "staleness (FR-58); a read"),
+    _read("/api/matters/{matter}/bound/export", "export-bound",
+          "AUDITED on serve when it succeeds — an export of the bound is a recorded egress act "
+          "(FR-53/FR-58). A STALE bound is refused 409 and writes nothing: the refusal is not an "
+          "export", changes_state=True),
     _read("/api/matters/{matter}/recall/sample", "draw-recall-sample",
           "draws a random sample of the discard pile; the draw itself persists nothing"),
     _read("/api/pieces/{piece_id}", "read-piece-meta", "viewer metadata; a read"),
@@ -360,6 +373,17 @@ USER_ACTIONS: tuple[UserAction, ...] = (
           "one row's change log, paired previous → new; a read", changes_state=False),
     _seam("read.triage_table.read_matter_change_log",
           "the matter-level change log, newest first; a read", changes_state=False),
+    # Story 4.13 — freshness. Reads only: staleness is a COMPARISON of the stamp an artefact was
+    # produced under against the current observables, and nothing here resolves it — FR-58 resolves
+    # staleness only by an explicit user act that produces a NEW artefact.
+    _seam("read.freshness.read_freshness",
+          "compares each artefact's recorded stamp with the current observables; stores nothing "
+          "and queues nothing", changes_state=False),
+    _seam("read.freshness.read_worklist",
+          "derives the worklist from the assessments — a view, never a stored queue; a read",
+          changes_state=False),
+    _seam("read.freshness.read_bound",
+          "the current confidence bound plus the verdict on it; a read", changes_state=False),
 )
 
 

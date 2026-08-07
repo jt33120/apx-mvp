@@ -31,12 +31,14 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from apx.checks import (
+    artefact_stamp_ownership,
     case_theory_ownership,
     confidence_derivation,
     configuration,
     credential_storage,
     encryption,
     forward_looking,
+    freshness_never_time_based,
     gold_gate,
     import_contracts,
     inventory_record,
@@ -61,6 +63,7 @@ from apx.checks import (
     renders_sanitized,
     scope_admin,
     secrets,
+    staleness_triggers,
     taxonomy_label_ownership,
     tenant_isolation,
     triage_sets_one_derivation,
@@ -541,6 +544,25 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        user_actions.deletion_shaped_actions_declare_their_reversal,
        "the HTTP verb and the word parts of every registered action's path/name — an act a user "
        "could read as deletion declares it and names how it is undone (Story 4.12/FR-5)"),
+    # ── story 4.13: freshness and staleness of derived artefacts — the enumerated trigger list,
+    # the clock that may not reach the decision, and the stamp nobody may rewrite ────────────────
+    _p("staleness-trigger-has-observable", "FR-58", "AD-23",
+       "every staleness trigger has an observable",
+       staleness_triggers.every_staleness_trigger_has_an_observable,
+       "the TRIGGERS enumeration and FreshnessStamp's fields in core/domain/freshness.py, both "
+       "ways, plus each artefact kind's declared input subset — a trigger with no observable is a "
+       "staleness nothing detects, and the confidence bound must depend on every one of them "
+       "(Story 4.13)"),
+    _p("freshness-names-no-clock", "FR-58", "AD-23", "the freshness decision names no clock",
+       freshness_never_time_based.freshness_is_never_time_based,
+       "time imports, clock calls and timedelta across the three modules that decide freshness — "
+       "staleness is never resolved by the passage of time or by being viewed (Story 4.13)"),
+    _p("artefact-stamp-append-only", "FR-58", "AD-37",
+       "artefact stamps are append-only, one owner",
+       artefact_stamp_ownership.artefact_stamp_is_append_only,
+       "ArtefactStamp constructions outside the store adapter and every UPDATE/DELETE idiom "
+       "against artefact_stamp — rewriting a recorded stamp would make a stale artefact read "
+       "fresh (Story 4.13)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

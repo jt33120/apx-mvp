@@ -62,6 +62,7 @@ from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.label import assign_taxonomy_label, revert_taxonomy_label
 from apx.core.app.read.deterministic import MovingPopulation, search_exhaustive
+from apx.core.app.read.freshness import BoundReading, read_bound, read_freshness, read_worklist
 from apx.core.app.read.piece import open_piece
 from apx.core.app.read.render import render_piece
 from apx.core.app.read.scan import read_scan_page
@@ -81,6 +82,7 @@ from apx.core.domain.config import (
     expansion_bounds,
 )
 from apx.core.domain.crypto import DecryptionError
+from apx.core.domain.freshness import Freshness
 from apx.core.domain.head_journal import open_journal
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.taxonomy_label import OutOfTaxonomyLabel
@@ -1965,7 +1967,9 @@ class TriageTableOut(BaseModel):
     discarded_count: int
     unscored_count: int
     unsplit_count: int
-    corpus_count: int
+    corpus_count: int    # the MATTER's pièces — "pièces au dossier" (FR-58)
+    ranked_count: int    # the pièces THIS ranking version holds
+    unranked_count: int  # in the dossier, in no set — ingested after the ranking ran (FR-58)
     pins_in_force: int
     line: LineOut
     taxonomy: list[str]
@@ -2035,7 +2039,8 @@ def get_triage_table(
             for r in table.rows],
         retained_count=table.retained_count, discarded_count=table.discarded_count,
         unscored_count=table.unscored_count, unsplit_count=table.unsplit_count,
-        corpus_count=table.corpus_count,
+        corpus_count=table.corpus_count, ranked_count=table.ranked_count,
+        unranked_count=table.unranked_count,
         pins_in_force=table.pins_in_force,
         line=LineOut(
             placed=table.line.placed, last_retained_piece_id=table.line.last_retained_piece_id,
@@ -2138,6 +2143,139 @@ def read_matter_change_log_api(
     if entries is None:
         raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
     return ChangeLogOut(entries=_change_log_out(entries))
+
+
+# ── Story 4.13: freshness and staleness of derived artefacts (FR-58/AD-23/AD-40) ───────────────
+
+
+class FreshnessOut(BaseModel):
+    kind: str                 # ranking | line | bound
+    artefact_id: str
+    fresh: bool
+    changed: list[str]        # the trigger keys that moved
+    changed_fr: list[str]     # what the surface says
+    reason: str
+    # a NEWER artefact of this kind exists. The verdict still stands (the artefact is readable and
+    # still stale), but the recomputation it would offer has already been performed — so it carries
+    # no worklist line, and the surface must not speak of it as the artefact on screen.
+    superseded: bool
+
+
+class WorklistLineOut(BaseModel):
+    kind: str
+    artefact_id: str
+    changed: list[str]
+    changed_fr: list[str]
+    offer: str
+    offer_fr: str
+
+
+class BoundOut(BaseModel):
+    artefact_id: str
+    population: int
+    sample_size: int
+    relevant_found: int
+    confidence: float
+    count_upper: int
+    prevalence_upper: float
+    reviewed_at: datetime
+    freshness: FreshnessOut | None   # None == the bound recorded no stamp; NOT a claim of freshness
+    exportable_as_current: bool
+    status_fr: str
+    copy_text: str                   # carries its staleness — the surface copies THIS (FR-58)
+
+
+def _freshness_out(assessment: Freshness) -> FreshnessOut:
+    return FreshnessOut(
+        kind=assessment.kind, artefact_id=assessment.artefact_id,
+        fresh=assessment.fresh, changed=list(assessment.changed),
+        changed_fr=list(assessment.changed_fr), reason=assessment.reason(),
+        superseded=assessment.superseded)
+
+
+def _bound_out(reading: BoundReading) -> BoundOut:
+    b = reading.bound.bound
+    return BoundOut(
+        artefact_id=reading.bound.artefact_id, population=b.population,
+        sample_size=b.sample_size, relevant_found=b.relevant_in_sample,
+        confidence=b.confidence, count_upper=b.count_upper,
+        prevalence_upper=b.prevalence_upper, reviewed_at=reading.bound.reviewed_at,
+        freshness=_freshness_out(reading.freshness) if reading.freshness is not None else None,
+        exportable_as_current=reading.exportable_as_current,
+        status_fr=reading.status_fr, copy_text=reading.copy_text)
+
+
+@app.get("/api/matters/{matter}/freshness", response_model=list[FreshnessOut])
+def get_freshness(
+    matter: str, ident: Identity = Depends(current_identity)
+) -> list[FreshnessOut]:
+    """The verdict on every stamped derived artefact of the matter (FR-58/AD-23).
+
+    Staleness is a COMPARISON of the stamp the artefact was produced under against the current
+    observables — never a stored flag, so no writer can leave an artefact falsely fresh by
+    forgetting to set one. `[]` means the matter was read and has stamped nothing yet; out of scope
+    and absent are the same non-disclosing 404 (FR-14). Reading this resolves nothing."""
+    store = _require_store()
+    assessments = read_freshness(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store)
+    if assessments is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return [_freshness_out(a) for a in assessments]
+
+
+@app.get("/api/matters/{matter}/worklist", response_model=list[WorklistLineOut])
+def get_worklist(
+    matter: str, ident: Identity = Depends(current_identity)
+) -> list[WorklistLineOut]:
+    """The matter's worklist — one line per stale artefact, naming the inputs that moved and
+    OFFERING the recomputation (FR-58). Derived from the assessments, stored nowhere.
+
+    Reading it writes nothing and queues nothing: staleness is resolved only by an explicit
+    user-initiated act that produces a NEW artefact."""
+    store = _require_store()
+    lines = read_worklist(tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store)
+    if lines is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return [
+        WorklistLineOut(
+            kind=line.kind, artefact_id=line.artefact_id, changed=list(line.changed),
+            changed_fr=list(line.changed_fr), offer=line.offer, offer_fr=line.offer_fr)
+        for line in lines]
+
+
+@app.get("/api/matters/{matter}/bound", response_model=BoundOut)
+def get_bound(matter: str, ident: Identity = Depends(current_identity)) -> BoundOut:
+    """The matter's current confidence bound and the verdict on it (FR-58/FR-23).
+
+    404 when out of scope, absent, or when no bound has been recorded — the surface renders "no
+    bound yet" as its own state, never as a bound of zero."""
+    store = _require_store()
+    reading = read_bound(tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store)
+    if reading is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return _bound_out(reading)
+
+
+@app.get("/api/matters/{matter}/bound/export", response_model=BoundOut)
+def export_bound(matter: str, ident: Identity = Depends(current_identity)) -> BoundOut:
+    """Export the confidence bound as current — REFUSED with 409 when it is stale or when its
+    inputs cannot be verified (FR-58).
+
+    The product blocks rather than warns (PRD §Blocking, not warning): a qualified export of a
+    false number is still a false number in a bundle. The refusal names the inputs that moved and
+    writes nothing; a successful export is an audited egress act (FR-53)."""
+    store = _require_store()
+    reading = read_bound(tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store)
+    if reading is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    if not reading.exportable_as_current:
+        raise HTTPException(status_code=409, detail=reading.status_fr)
+    store.audit_bound_export(
+        tenant=ident.tenant, matter=matter, actor=ident.actor,
+        detail=(f"artefact={reading.bound.artefact_id[:12]} "
+                f"bound={reading.bound.bound.prevalence_upper:.4f}"
+                f"@{reading.bound.bound.confidence}"))
+    return _bound_out(reading)
 
 
 # One artifact serves both: the API routes above (/api/*, matched first) and the built

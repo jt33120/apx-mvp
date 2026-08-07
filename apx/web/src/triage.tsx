@@ -25,12 +25,16 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useParams } from "react-router";
 import {
   ApiError,
+  type Bound,
   type ChangeLogEntry,
   type TriageRow,
   type TriageTable,
   UNLABELLED,
+  type WorklistLine,
+  readBound,
   readMatterChangeLog,
   readTriageTable,
+  readWorklist,
   setPieceLabel,
 } from "./api";
 
@@ -63,6 +67,13 @@ export function TriageRoute() {
   const { matter = "" } = useParams();
   const [table, setTable] = useState<TriageTable | null>(null);
   const [log, setLog] = useState<ChangeLogEntry[] | null>(null);
+  // Same rule as the change log, for the same reason: `null` = not read, `[]` = read and empty.
+  // A worklist that could not be read must never render as "rien à faire" (FR-58's surface is an
+  // audit surface too).
+  const [worklist, setWorklist] = useState<WorklistLine[] | null>(null);
+  // `undefined` = not read; `null` = read, and no bound has been recorded — a state of its own,
+  // never a bound of zero.
+  const [bound, setBound] = useState<Bound | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
   const [absent, setAbsent] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -74,14 +85,21 @@ export function TriageRoute() {
       // empty: `null` means "not read", `[]` means "read, and there is nothing". Collapsing the two
       // would make the panel assert an absence it never verified — the one thing this product must
       // never do (it is the "honest 'not in the corpus'" rule, applied to the audit surface).
-      const [t, l] = await Promise.all([
+      const [t, l, w, b] = await Promise.all([
         readTriageTable(matter),
         readMatterChangeLog(matter).then(
           (entries) => entries as ChangeLogEntry[] | null,
           () => null),
+        readWorklist(matter).then((lines) => lines as WorklistLine[] | null, () => null),
+        // a 404 here means "no bound recorded" (its own state); any other failure stays unread
+        readBound(matter).then(
+          (value) => value as Bound | null | undefined,
+          (e) => (e instanceof ApiError && e.status === 404 ? null : undefined)),
       ]);
       setTable(t);
       setLog(l);
+      setWorklist(w);
+      setBound(b);
       setAbsent(false);
       setError(null);
     } catch (e) {
@@ -139,12 +157,14 @@ export function TriageRoute() {
       {table && (
         <>
           <Header table={table} />
+          <StalenessBanner lines={worklist} version={table.version_no} />
           <Denominator table={table} />
           <p className="apx-honesty">
             Ordre proposé par l'outil, révisable — ce n'est pas une preuve. Rien n'est
             supprimé&nbsp;: une pièce écartée reste retrouvable par la recherche exhaustive.
           </p>
           <Table table={table} onCommitted={onCommitted} />
+          <BoundPanel bound={bound} matter={table.matter} />
           <ChangeLogPanel entries={log} />
         </>
       )}
@@ -170,7 +190,7 @@ function Header({ table }: { table: TriageTable }) {
  *  corpus (FR-16). Before the line is drawn there is no cut, so the ranked rows are counted as
  *  *non départagées* rather than being called discarded. */
 function Denominator({ table }: { table: TriageTable }) {
-  const rows: [number, string][] = table.line.placed
+  const split: [number, string][] = table.line.placed
     ? [
         [table.retained_count, "retenues"],
         [table.discarded_count, "écartées du jeu retenu — retrouvables par la recherche exhaustive"],
@@ -180,6 +200,13 @@ function Denominator({ table }: { table: TriageTable }) {
         [table.unsplit_count, "classées, en attente de la ligne"],
         [table.unscored_count, "non scorées — la cascade n'a pas pu les départager"],
       ];
+  // FR-58: pièces arrivées APRÈS ce classement. They are in NEITHER set, because they are in no
+  // set — the third state FR-16 forbids anyone to invent, stated instead of imputed. The line is
+  // shown only when there are any: a permanent "0 non classées" would be noise.
+  const rows: [number, string][] = table.unranked_count > 0
+    ? [...split, [table.unranked_count,
+        "arrivées après ce classement — dans aucun des deux jeux tant qu'il n'est pas refait"]]
+    : split;
   return (
     <section className="apx-card apx-equation" aria-label="Le dénominateur du dossier">
       <div className="apx-eq-total">
@@ -415,6 +442,103 @@ function Row({ row, table, onCommitted }: {
 
 /** The matter-level change log — append-only, newest first. Nothing here edits or erases an entry;
  *  a reversal is a new entry of its own (AD-7/FR-20). */
+/** The staleness banner (Story 4.13, FR-58). It names **which input moved** — never a bare
+ *  "périmé" — and it OFFERS the recomputation; it never starts one. Staleness is resolved only by
+ *  an explicit user act producing a NEW artefact, so there is deliberately no automatic refresh
+ *  here, and no button on this screen that recomputes behind the user's back. */
+function StalenessBanner(
+  { lines, version }: { lines: WorklistLine[] | null; version: number | null },
+) {
+  if (lines === null) {
+    // The same rule as the change log: a failed read is not a verified absence. Saying nothing
+    // here would read as "tout est à jour", which is the exact false reassurance FR-58 exists
+    // to prevent.
+    return (
+      <p className="apx-error" role="alert">
+        La fraîcheur du classement n'a pas pu être vérifiée — cet écran ne peut pas dire s'il est à
+        jour. Rechargez pour réessayer.
+      </p>
+    );
+  }
+  if (lines.length === 0) return null;   // read, and nothing is stale
+  return (
+    <section className="apx-stale" role="status" aria-label="Fraîcheur des artefacts dérivés">
+      {lines.map((line) => (
+        <p key={`${line.kind}-${line.artefact_id}`} style={{ margin: ".25rem 0" }}>
+          {/* AD-23 — the banner names the version it speaks of; the worklist carries only the
+              artefacts IN FORCE, so "Le classement" is the one on screen and not a superseded one */}
+          <strong>{STALE_SUBJECT[line.kind] ?? line.kind}</strong>
+          {version !== null && line.kind !== "bound" && <> v{version}</>} — périmé depuis&nbsp;:{" "}
+          {line.changed_fr.join(", ")}. <span className="apx-hint">{line.offer_fr}</span>
+        </p>
+      ))}
+      <p className="apx-hint" style={{ margin: ".4rem 0 0" }}>
+        Rien n'est recalculé automatiquement, et le temps qui passe ne remet rien à jour.
+      </p>
+    </section>
+  );
+}
+
+const STALE_SUBJECT: Record<string, string> = {
+  ranking: "Le classement",
+  line: "La ligne",
+  bound: "La borne de confiance",
+};
+
+/** The confidence bound (FR-58/FR-23). A stale bound is visually distinct, cannot be exported as
+ *  current, and the string the copy button puts on the clipboard is the SERVER's — so the number
+ *  cannot travel without its staleness. */
+function BoundPanel({ bound, matter }: { bound: Bound | null | undefined; matter: string }) {
+  const [copied, setCopied] = useState(false);
+  if (bound === undefined) return null;   // not read — the banner above already says what it can
+  if (bound === null) {
+    return (
+      <section className="apx-card" aria-label="Borne de confiance">
+        <strong>Borne de confiance</strong>
+        <p className="apx-hint" style={{ margin: ".3rem 0 0" }}>
+          Aucune borne n'a encore été établie pour ce dossier.
+        </p>
+      </section>
+    );
+  }
+  const stale = !bound.exportable_as_current;
+  const copy = () => {
+    // the SERVER's sentence, never one composed here: every path through it carries the staleness
+    void navigator.clipboard?.writeText(bound.copy_text).then(
+      () => setCopied(true), () => setCopied(false));
+  };
+  return (
+    <section
+      className={`apx-card apx-bound${stale ? " apx-bound-stale" : ""}`}
+      aria-label="Borne de confiance"
+    >
+      <strong>Borne de confiance</strong>
+      {stale && (
+        <span className="apx-chip apx-chip-review" style={{ marginLeft: ".5rem" }}>
+          {bound.status_fr}
+        </span>
+      )}
+      <p style={{ margin: ".4rem 0 .2rem" }}>{bound.copy_text}</p>
+      <p className="apx-hint" style={{ margin: 0 }}>
+        Échantillon de {bound.sample_size} sur {bound.population} pièces écartées ·{" "}
+        {bound.relevant_found} pertinente(s) trouvée(s)
+      </p>
+      <p style={{ margin: ".5rem 0 0" }}>
+        <button type="button" onClick={copy}>Copier la phrase</button>{" "}
+        {stale ? (
+          <span className="apx-hint">
+            Export impossible tant que la borne est périmée — ré-échantillonnez pour en produire une
+            nouvelle.
+          </span>
+        ) : (
+          <a href={`/api/matters/${encodeURIComponent(matter)}/bound/export`}>Exporter</a>
+        )}
+        {copied && <span className="apx-hint"> · copiée</span>}
+      </p>
+    </section>
+  );
+}
+
 function ChangeLogPanel({ entries }: { entries: ChangeLogEntry[] | null }) {
   return (
     <section className="apx-change-log" aria-label="Journal des modifications">

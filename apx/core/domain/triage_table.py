@@ -74,12 +74,22 @@ class LineView:
 class TriageTable:
     """The whole surface, bound to ONE named ranking version (AD-23 — no unqualified reference).
 
-    Once the line is placed, ``retained + discarded + unscored == len(rows)`` — the completeness the
-    screen renders as the denominator equation under its verdict seal: the sets **partition** the
-    ranked matter and nothing has left the corpus (FR-16). Before it is placed there is no cut, so
-    the ranked rows are **unsplit** and counted as such; the equation the screen draws then is
-    ``unsplit + non-scorée = le corpus``. ``__post_init__`` refuses any table whose parts do not add
-    up, so a surface can never draw a false equation."""
+    Once the line is placed, ``retained + discarded + unscored == ranked_count`` — the completeness
+    the screen renders as the denominator equation under its verdict seal: the sets **partition the
+    ranking** and nothing has left it (FR-16). Before it is placed there is no cut, so the ranked
+    rows are **unsplit** and counted as such; the equation the screen draws then is
+    ``unsplit + non-scorée = le classement``.
+
+    **The ranking is not the dossier** (Story 4.13, FR-58). ``corpus_count`` is the number of
+    *pièces* in the *matter* — what the surface labels *"pièces au dossier"* — and it is supplied,
+    not inferred from the rows. *Pièces* ingested after the ranking are in **neither** set because
+    they are in no set at all: they are ``unranked_count``, the third state FR-16 forbids anyone to
+    invent, made visible rather than imputed (AD-19). Before this story ``corpus_count`` was
+    ``len(rows)``, which silently renamed the ranking's population "the dossier" and made an import
+    after the ranking invisible on the very surface that counts the sets.
+
+    ``__post_init__`` refuses any table whose parts do not add up, so a surface can never draw a
+    false equation."""
 
     matter: str
     version_no: int
@@ -94,24 +104,37 @@ class TriageTable:
     pins_in_force: int
     line: LineView
     taxonomy: tuple[str, ...]
+    corpus_count: int  # the MATTER's pièces — never len(rows) (FR-58)
 
     def __post_init__(self) -> None:
         named = self.retained_count + self.discarded_count + self.unscored_count
         if named > len(self.rows):
             raise ValueError(
-                f"the triage sets cannot exceed the matter: "
+                f"the triage sets cannot exceed the ranking: "
                 f"{self.retained_count}+{self.discarded_count}+{self.unscored_count} > "
-                f"{len(self.rows)} rows (FR-16)")
+                f"{len(self.rows)} ranked rows (FR-16)")
         if self.line.placed and named != len(self.rows):
             raise ValueError(
-                f"with a line placed the sets must PARTITION the ranked matter: "
+                f"with a line placed the sets must PARTITION the ranking: "
                 f"{self.retained_count}+{self.discarded_count}+{self.unscored_count} != "
-                f"{len(self.rows)} rows — the surface draws this as an equation and it may never "
-                "be false (FR-16)")
+                f"{len(self.rows)} ranked rows — the surface draws this as an equation and it may "
+                "never be false (FR-16)")
+        if self.corpus_count < len(self.rows):
+            raise ValueError(
+                f"the dossier cannot be smaller than its own ranking: {self.corpus_count} pièces "
+                f"< {len(self.rows)} ranked rows — a miscount is never rendered (FR-58)")
 
     @property
-    def corpus_count(self) -> int:
+    def ranked_count(self) -> int:
+        """The *pièces* the *ranking version* holds — judged, rejected and unscored alike."""
         return len(self.rows)
+
+    @property
+    def unranked_count(self) -> int:
+        """*Pièces* in the *matter* that this *ranking version* never saw — ingested after it ran.
+        In **neither** set, because they are in no set: stated wherever the sets are counted
+        (FR-58), never folded into the discarded set and never imputed a rank (AD-19)."""
+        return self.corpus_count - len(self.rows)
 
     @property
     def unsplit_count(self) -> int:

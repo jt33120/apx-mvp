@@ -865,3 +865,47 @@ class JustificationRejection(Base):
     set_by: Mapped[str] = mapped_column(
         EncryptedText("justification_rejection.set_by"), nullable=False)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ArtefactStamp(Base):
+    """The **freshness stamp** of one produced derived artefact (FR-58, Story 4.13) — the observable
+    state of the eight enumerated staleness inputs at the moment the artefact was produced
+    (AD-23/AD-40).
+
+    **APPEND-ONLY**: a stamp records what *was*, so it is never updated and never deleted (AD-7;
+    asserted by ``artefact_stamp_is_append_only``). It is written **inside the producing artefact's
+    own transaction** (AD-22) by that artefact's one owning use case (AD-37), so a produced artefact
+    without a stamp cannot exist.
+
+    Staleness is then a **comparison** — this recorded stamp against the current observables — and
+    never a stored ``stale`` flag. A flag has to be *set* by every writer, and a writer that forgets
+    leaves the artefact falsely FRESH, which is exactly the failure AD-23 names. A comparison cannot
+    forget.
+
+    ``kind`` is the closed vocabulary ``ranking`` | ``line`` | ``bound``; ``artefact_id`` is that
+    artefact's own identity (a ``ranking_version.id``, a ``line_placement.id``, a
+    ``recall_review.id``). ``stamp_json`` is the canonical JSON of
+    :class:`~apx.core.domain.freshness.FreshnessStamp` — **plaintext**, like
+    ``ranking_version.identity_json``: two counts, two sequence numbers, a scope name and two
+    hashes, carrying no PII and no content. No cascade FK (AD-7): a *matter* is retired, never
+    hard-deleted out from under its stamps."""
+
+    __tablename__ = "artefact_stamp"
+    __table_args__ = (
+        # one stamp per artefact; a concurrent double-write collides here and fails loudly (AD-37
+        # conditional commit), never a silent overwrite of what the artefact was produced under.
+        UniqueConstraint("tenant", "matter", "kind", "artefact_id", name="uq_artefact_stamp"),
+        Index("ix_artefact_stamp_matter", "tenant", "matter"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(tenant\0matter\0kind\0a)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    kind: Mapped[str] = mapped_column(String, nullable=False)  # ranking | line | bound
+    artefact_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # the canonical FreshnessStamp JSON — plaintext structural metadata (NFR-56), no PII/content.
+    stamp_json: Mapped[str] = mapped_column(Text, nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

@@ -258,6 +258,12 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         governs="the stage-2 bands the recommended line retains (Story 4.8/FR-17) — recall-first: "
                 "the cut falls after the deepest pièce in one of these bands",
         valid=lambda v: bool(v) and all(x in _BAND_VALUES for x in v),  # non-empty, real bands only
+        # This key decides WHERE the recommended cut falls, so changing it makes an already-placed
+        # line — and any confidence bound drawn over the population that line defines — stale
+        # (FR-58's "a configuration change affecting retrieval, ranking or the estimator"). Without
+        # the flag a firm could widen the retain policy and the committed line would keep reading
+        # fresh, which is the failure AD-23 is written for.
+        affects_retrieval=True,
     ),
     # ── the two switchable guarantees — the v1 defects, encoded as build-checked predicates ──
     ConfigKey(

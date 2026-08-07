@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-08-06  # Epic 4: 4-1..4-12 DONE (only 4-13 remains); triage UX pass done (EXPERIENCE-EPIC4). Epic 3 done
+last_updated: 2026-08-07  # EPIC 4 COMPLETE (4-1..4-13 all done); triage UX pass done (EXPERIENCE-EPIC4). Epic 3 done
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -78,7 +78,7 @@ development_status:
   3-5d-1-the-viewer-surface: done  # React route + chrome + 4 states; scan page-image+OCR box+passage, office/msg sandboxed HTML, image, honest fallback, non-disclosing 404, audit surfaced; workflow-review 5-confirmed/8-refuted, fixed; tsc+vite green
   3-5d-2-born-digital-pdf-and-image-region: done  # born-digital PDF inline via PDF.js (offline worker + text-layer passage highlight); CSP extended (fixes 3.5d-1 image blob too); workflow-review 5-confirmed/9-refuted, fixed; image region box N/A (no position source)
   epic-3-retrospective: optional
-  epic-4: in-progress
+  epic-4: done
   4-1-the-optional-case-theory: done  # the versioned/audited/referenceable case theory + append-only gate (Julian, 2026-08-04)
   4-2-the-relevance-judgement-a-cascade-cheap-filters-first: done  # the 3-stage scored cascade compute engine (Julian, 2026-08-04)
   4-3-the-ranked-order-and-the-reproducible-ranking-version: done  # the ranked order + reproducible ranking version identity + persistence (Julian, 2026-08-04)
@@ -91,7 +91,7 @@ development_status:
   4-10-the-editable-cell-by-cell-table-with-a-live-change-log: done  # THE TRIAGE SURFACE (FR-20): the ranked table a lawyer edits cell by cell, with a live append-only change log. An edit changes that cell and NOTHING else (N edits across N rows all hold); no edit re-ranks or regenerates anything; human-set values survive an explicit re-rank marked human-set (the label ledger is version-INDEPENDENT). The côté is a derived VIEW no route can set; confidence is read-only and 'non dérivée' when not derived; the unscored tail is its own zone; the line is a cut BETWEEN rows named by the last retained pièce. 5 new HTTP routes (all registered in the 4.12 registry + walked by its probe), 3 core layers (domain/port/read seam), the React route /matter/:matter/triage + the Epic-4 tokens (Julian, 2026-08-06)
   4-11-the-pin-moving-a-single-pi-ce-across-the-line: done  # the pin (FR-43/FR-25): a per-pièce override of the line, exactly one pièce crosses (order + line unchanged); mandatory one-line reason recorded as an override; append-only version-INDEPENDENT ledger so a pin survives re-ranking (dormant when its pièce is unscored in a version); removal is a reversible act; 2 structural checks (Julian, 2026-08-06)
   4-12-never-hard-delete-proven-by-a-bounded-probe: done  # never hard-delete, PROVEN by a bounded runtime probe (FR-21/FR-56/AD-7): an enumerated registry of 70 user-reachable actions (45 HTTP routes, every verb — 8 audited GETs write evidential rows — + 25 Ports-taking core/app seams), complete both ways and fail-closed on any routing/import shape the check cannot read; the probe EXECUTES 57 of them against a real seeded matter and fails on ANY DELETE of an evidential table (statement-level, not a net count) — evidential = every mapped table minus a written transient allow-list, so a new table is protected by default; changes_state is verified by execution, never trusted; each deletion-shaped act is shown to APPEND; 2 structural checks (Julian, 2026-08-06)
-  4-13-freshness-and-staleness-of-derived-artefacts: backlog
+  4-13-freshness-and-staleness-of-derived-artefacts: done  # freshness/staleness (FR-58/AD-23/AD-40/FR-23): staleness is a DERIVED COMPARISON of the input stamp an artefact was produced under against the current observables — never a stored flag a writer could forget to set. NINE exact observables, one per enumerated trigger (AD-23's eight + FR-23's population-the-bound-was-drawn-from), each artefact kind depending only on the inputs it actually has; the stamp written INSIDE the producing transaction (AD-22) into an append-only evidential ledger. A stale bound is refused as current (409) and cannot be copied without its staleness; the unranked count is stated wherever the sets are counted; a superseded artefact keeps its verdict but is not work, so the offer discharges. 4 HTTP routes, 3 seams, 3 structural checks (74→77), 1 migration (Julian, 2026-08-07)
   epic-4-retrospective: optional
   epic-5: backlog
   5-1-random-draw-from-the-discarded-set-population-frozen: backlog

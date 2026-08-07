@@ -93,7 +93,11 @@ def test_the_table_names_its_ranking_version_and_partitions_the_matter(
     assert body["version_no"] >= 1 and body["version_id"]           # AD-23 — never unqualified
     assert body["basis"] and body["created_at"]
     total = body["retained_count"] + body["discarded_count"] + body["unscored_count"]
-    assert total == body["corpus_count"] == len(body["rows"])       # the equation is true (FR-16)
+    assert total == body["ranked_count"] == len(body["rows"])       # the equation is true (FR-16)
+    # and the dossier is named separately from the ranking (FR-58): here nothing was imported
+    # after the ranking, so they coincide — the point is that they are two different numbers.
+    assert body["corpus_count"] == body["ranked_count"] + body["unranked_count"]
+    assert body["unranked_count"] == 0
     assert body["taxonomy"] == _TAXONOMY                            # the select's only options
     sides = {r["side"] for r in body["rows"]}
     assert sides <= {"retained", "discarded", "unscored", "unsplit"}

@@ -14,12 +14,14 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from apx.checks import (
+    artefact_stamp_ownership,
     case_theory_ownership,
     confidence_derivation,
     configuration,
     credential_storage,
     encryption,
     forward_looking,
+    freshness_never_time_based,
     gold_gate,
     import_contracts,
     inventory_record,
@@ -45,6 +47,7 @@ from apx.checks import (
     renders_sanitized,
     scope_admin,
     secrets,
+    staleness_triggers,
     taxonomy_label_ownership,
     tenant_isolation,
     triage_sets_one_derivation,
@@ -168,6 +171,10 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # deletion declares itself and names its reversal (FR-21/FR-56/AD-7).
     user_actions.user_action_registry_is_complete,
     user_actions.deletion_shaped_actions_declare_their_reversal,
+    # Story 4.13 — freshness and staleness of derived artefacts (FR-58/AD-23/AD-40).
+    staleness_triggers.every_staleness_trigger_has_an_observable,
+    freshness_never_time_based.freshness_is_never_time_based,
+    artefact_stamp_ownership.artefact_stamp_is_append_only,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

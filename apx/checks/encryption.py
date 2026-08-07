@@ -113,6 +113,16 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     ("PieceJustification", "basis_kind"),
     ("PieceJustification", "intrinsic_signals"),
     ("PieceJustification", "source_language"),
+    # Story 4.13 — the freshness stamp of a derived artefact. ``kind`` is a categorical enum
+    # (ranking | line | bound, like ``band``/``action``); ``artefact_id`` is that artefact's own
+    # identity hash (like the globally-allowed ``ranking_version_id``); ``stamp_json`` is the
+    # canonical FreshnessStamp — two counts, two sequence numbers, the matter's own (already
+    # plaintext) scope name and two sha256 digests. It is the same shape and the same NFR-56
+    # argument as ``RankingVersion.identity_json``: structural metadata the interface must be able
+    # to display, carrying no client content and no PII.
+    ("ArtefactStamp", "kind"),
+    ("ArtefactStamp", "artefact_id"),
+    ("ArtefactStamp", "stamp_json"),
 }
 
 

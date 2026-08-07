@@ -13,13 +13,15 @@ be shown rather than asserted.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import create_engine, func, select
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from apx.adapters.store_postgres.models import Base, TaxonomyLabelEntry
 from apx.adapters.store_postgres.store import SqlStore
-from apx.core.app.ingest import IngestionResult
+from apx.core.app.ingest import IngestedPiece, IngestionResult
 from apx.core.app.label import assign_taxonomy_label
 from apx.core.app.rank import produce_ranking
 from apx.core.domain.cascade import Band, CascadeResult, CascadeUnit, PieceJudgement, Stage
@@ -32,13 +34,25 @@ PIECES = ("p-alpha", "p-beta", "p-gamma")
 TAXONOMY = ["Contrats", "Correspondance", "Jurisprudence"]
 
 
+def _ingested(pid: str) -> IngestedPiece:
+    return IngestedPiece(
+        id=pid, matter=MATTER, tenant=TENANT, content_hash=pid, text_key=pid,
+        provenance_path=f"/{pid}.txt", custodian="c", extraction_method="text",
+        extractor_version="v", schema_version="s", ingestion_timestamp=datetime.now(UTC),
+        full_text=f"le document {pid}", text_version="v")
+
+
 def _store() -> SqlStore:
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
     store = SqlStore(sessionmaker(bind=engine, future=True))
-    store.save(IngestionResult(), scope=WALL, actor="setup", matter=MATTER, tenant=TENANT,
-               audit=False)
+    # The three pièces are really in the dossier. A ranking over pièces the matter does not hold
+    # would be a table whose dossier is smaller than its own ranking, which Story 4.13's invariant
+    # refuses to render (FR-58) — rightly: the denominator would be describing a corpus that is not
+    # there.
+    store.save(IngestionResult(pieces=[_ingested(p) for p in PIECES]), scope=WALL, actor="setup",
+               matter=MATTER, tenant=TENANT, audit=False)
     store.set_config(TENANT, "admin", "taxonomy", TAXONOMY)
     return store
 

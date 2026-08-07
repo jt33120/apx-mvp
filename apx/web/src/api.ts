@@ -323,8 +323,8 @@ export type TriageTable = {
   matter: string; version_no: number; version_id: string; basis: string;
   case_theory_version_id: string | null; created_at: string; rows: TriageRow[];
   retained_count: number; discarded_count: number; unscored_count: number;
-  unsplit_count: number; corpus_count: number; pins_in_force: number;
-  line: TriageLine; taxonomy: string[];
+  unsplit_count: number; corpus_count: number; ranked_count: number; unranked_count: number;
+  pins_in_force: number; line: TriageLine; taxonomy: string[];
 };
 export type ChangeLogEntry = {
   piece_id: string; seq: number; previous: string; label: string; source: string;
@@ -387,4 +387,47 @@ export async function readMatterChangeLog(matter: string, limit = 200): Promise<
   const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/change-log?${qs}`);
   if (!res.ok) return fail(res);
   return (await res.json()).entries;
+}
+
+
+// ── Story 4.13: freshness and staleness of derived artefacts (FR-58/AD-23) ────────────────────
+// Staleness is a COMPARISON the server makes between the inputs an artefact was produced under and
+// the inputs now — never a flag. `changed_fr` is what the banner says; it is never empty when
+// `fresh` is false, so the surface can always name WHICH input moved rather than just "périmé".
+// A `null` bound freshness means the artefact recorded no stamp: unverifiable, NOT fresh.
+
+export type Freshness = {
+  kind: "ranking" | "line" | "bound"; artefact_id: string;
+  fresh: boolean; changed: string[]; changed_fr: string[]; reason: string;
+  // a newer artefact of this kind exists: still readable and still stale, but not work — the
+  // recomputation its line would offer has already been performed. The worklist excludes these.
+  superseded: boolean;
+};
+export type WorklistLine = {
+  kind: string; artefact_id: string; changed: string[]; changed_fr: string[];
+  offer: string; offer_fr: string;
+};
+export type Bound = {
+  artefact_id: string; population: number; sample_size: number; relevant_found: number;
+  confidence: number; count_upper: number; prevalence_upper: number; reviewed_at: string;
+  freshness: Freshness | null; exportable_as_current: boolean;
+  status_fr: string; copy_text: string;
+};
+
+export async function readFreshness(matter: string): Promise<Freshness[]> {
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/freshness`);
+  if (!res.ok) return fail(res);
+  return res.json();
+}
+
+export async function readWorklist(matter: string): Promise<WorklistLine[]> {
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/worklist`);
+  if (!res.ok) return fail(res);
+  return res.json();
+}
+
+export async function readBound(matter: string): Promise<Bound> {
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/bound`);
+  if (!res.ok) return fail(res);
+  return res.json();
 }

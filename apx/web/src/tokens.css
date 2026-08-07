@@ -423,3 +423,19 @@ button:focus-visible { box-shadow: var(--apx-ring); }
 
 /* the honesty banner — one sentence, always present, never a badge */
 .apx-honesty { border-left: 3px solid var(--apx-gold-2); background: var(--apx-surface-2); padding: 0.7rem 0.9rem; border-radius: 0 var(--apx-radius-sm) var(--apx-radius-sm) 0; font-size: 0.88rem; color: var(--apx-ink-2); }
+
+/* ── Story 4.13: freshness and staleness (FR-58) ────────────────────────────────────────────────
+   Staleness wears the REVIEW tone, never the gold. Gold is the line — the tool's committed
+   judgement — and an artefact whose inputs moved is not a judgement to celebrate; it is something
+   to look at. The banner names which input moved and offers the recomputation: nothing here is a
+   progress bar, because nothing recomputes on its own. */
+.apx-stale { border-left: 3px solid var(--apx-review); background: var(--apx-review-bg); padding: 0.75rem 0.95rem; border-radius: 0 var(--apx-radius-sm) var(--apx-radius-sm) 0; font-size: 0.88rem; color: #6a4211; }
+.apx-stale strong { color: var(--apx-review); }
+.apx-bound { display: flex; flex-direction: column; gap: 0.15rem; }
+/* a stale bound is visually distinct WHEREVER it appears (FR-58) — the rule, not a decoration */
+.apx-bound-stale { border-color: #ecdcc0; background: var(--apx-review-bg); }
+.apx-bound-stale p { color: #6a4211; }
+.apx-chip-review { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.72rem; letter-spacing: 0.02em; color: var(--apx-review); background: var(--apx-surface); border: 1px solid #ecdcc0; }
+/* the unranked row of the equation carries the review tone too: it is the count that says the
+   dossier has moved past its own classement */
+.apx-eq-row:last-child .c { color: inherit; }

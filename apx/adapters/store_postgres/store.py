@@ -18,7 +18,7 @@ import json
 import logging
 import random
 import secrets
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
@@ -32,6 +32,7 @@ from apx.adapters.store_postgres.chunk_writer import UnauthorizedScope
 from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.deterministic_query import exact_search_stmt
 from apx.adapters.store_postgres.models import (
+    ArtefactStamp,
     AuditRecord,
     BackupRecord,
     CaseTheoryVersion,
@@ -72,7 +73,7 @@ from apx.core.domain.chunking import (
     chunking_config,
     resolve_passage,
 )
-from apx.core.domain.confidence import prevalence_upper_bound
+from apx.core.domain.confidence import PrevalenceBound, RecordedBound, prevalence_upper_bound
 from apx.core.domain.config import (
     CONFIG_SCHEMA,
     ConfigError,
@@ -85,6 +86,15 @@ from apx.core.domain.config import (
 from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.dedup import cluster
 from apx.core.domain.failures import ErrorClass, cardinality_for
+from apx.core.domain.freshness import (
+    KIND_BOUND,
+    KIND_LINE,
+    KIND_RANKING,
+    FreshnessStamp,
+    config_digest,
+    extraction_digest,
+    population_digest,
+)
 from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.justification import (
@@ -1579,6 +1589,19 @@ class SqlStore:
                 f"lines={len(entries)} scopes={len(scopes)}", now or datetime.now(UTC))
         return RegisterExport(tuple(entries), len(scopes))
 
+    def audit_bound_export(
+        self, *, tenant: str, matter: str, actor: str, detail: str,
+        now: datetime | None = None,
+    ) -> None:
+        """Record the export of a *confidence bound* as an audited egress act (FR-53/FR-58).
+
+        The bound is the sentence a firm says to a judge; taking it out of the system is an act, not
+        a read, so it is on the chain with the stamp it was exported under. A **refused** export
+        writes nothing — the refusal is not an export."""
+        with self._sf() as session, session.begin():
+            self._append_audit(
+                session, tenant, matter, actor, "export-bound", detail, now or datetime.now(UTC))
+
     def audit_query(
         self, tenant: str, actor: str, *, term: str, engine: str, scopes: set[str],
         denominator: Inventory | None = None, action: str = "search",
@@ -1805,8 +1828,9 @@ class SqlStore:
             bound = prevalence_upper_bound(
                 population, sample_size, relevant_found, confidence=confidence
             )
+            review_id = uuid4().hex
             session.add(RecallReview(
-                id=uuid4().hex, tenant=tenant, matter=matter, population=population,
+                id=review_id, tenant=tenant, matter=matter, population=population,
                 sample_size=sample_size, relevant_found=relevant_found, confidence=confidence,
                 count_upper=bound.count_upper, prevalence_upper=bound.prevalence_upper,
                 reviewer=actor, reviewed_at=now,
@@ -1816,6 +1840,14 @@ class SqlStore:
                 f"bound={bound.prevalence_upper:.4f}@{confidence}"
             )
             self._append_audit(session, tenant, matter, actor, "recall-review", detail, now)
+            # The bound is the artefact FR-58 protects hardest: it is the sentence quoted to a
+            # court, and it is false the moment its population moves. Stamp it with its own write.
+            current_version_no = session.scalar(
+                select(func.max(RankingVersionRow.version_no)).where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter))
+            self._write_stamp(
+                session, tenant=tenant, matter=matter, kind=KIND_BOUND, artefact_id=review_id,
+                version_no=current_version_no, now=now)
         return RecallResult(
             population, sample_size, relevant_found, confidence,
             bound.count_upper, bound.prevalence_upper,
@@ -2986,6 +3018,10 @@ class SqlStore:
                 f"version={version_no} fingerprint={identity.fingerprint[:12]} "
                 f"ranked={len(order.rows)} unscored={len(order.unscored_rows)} "
                 f"stage3_share={order.stage3_share:.4f}", now)
+            # the produced artefact records the state of its inputs, atomically with itself (FR-58)
+            self._write_stamp(
+                session, tenant=tenant, matter=matter, kind=KIND_RANKING,
+                artefact_id=version.version_id, version_no=version_no, now=now)
             box.append(version)
 
         self._audited_tx(_work)
@@ -3389,6 +3425,9 @@ class SqlStore:
                 session, tenant, matter, actor, "line_placed",
                 f"version={version.version_no} last_retained={line.last_retained_piece_id[:12]} "
                 f"basis={basis} seq={seq}", now)
+            self._write_stamp(
+                session, tenant=tenant, matter=matter, kind=KIND_LINE, artefact_id=entry_id,
+                version_no=version.version_no, now=now)
             box.append(LinePlacementView(
                 version_id=version.id, version_no=version.version_no,
                 last_retained_piece_id=line.last_retained_piece_id, basis=basis, seq=seq, at=now))
@@ -3523,6 +3562,9 @@ class SqlStore:
                 f"version={version.version_no} old={(current_last or 'none')[:12]} "
                 f"new={last_retained_piece_id[:12]} method={PROJECTION_METHOD} "
                 f"priced={priced_statement}", now)
+            self._write_stamp(
+                session, tenant=tenant, matter=matter, kind=KIND_LINE, artefact_id=entry_id,
+                version_no=version.version_no, now=now)
             box.append(LinePlacementView(
                 version_id=version.id, version_no=version.version_no,
                 last_retained_piece_id=last_retained_piece_id, basis=basis, seq=seq, at=now))
@@ -3973,6 +4015,11 @@ class SqlStore:
             names = self._piece_names(session, tenant, matter)
             taxonomy_list = self._current_taxonomy(session, tenant)
             labels = self._current_labels(session, tenant, matter, taxonomy_list)
+            # the DOSSIER's pièces — not the ranking's. Pièces ingested after this version ran are
+            # counted as unranked, never folded into a set they were never judged for (FR-58).
+            corpus_count = session.scalar(
+                select(func.count()).select_from(Piece)
+                .where(Piece.tenant == tenant, Piece.matter == matter)) or 0
         taxonomy = tuple(taxonomy_list)
         retained, discarded = set(sets.retained), set(sets.discarded)
         pinned_ids = {p.piece_id for p in pins}
@@ -4014,7 +4061,8 @@ class SqlStore:
                 last_retained_rank=last.rank if last else None,
                 basis=line.basis if line else None, seq=line.seq if line else None,
                 at=line.at if line else None),
-            taxonomy=taxonomy)
+            taxonomy=taxonomy,
+            corpus_count=corpus_count)
 
     def read_label_change_log_paired(
         self, *, tenant: str, matter: str, piece_id: str, scopes: set[str]
@@ -4056,3 +4104,237 @@ class SqlStore:
             paired.extend(pair_change_log(pid, tuple(entries), unlabelled=UNLABELLED))
         paired.sort(key=lambda e: (e.at, e.seq), reverse=True)
         return tuple(paired[:max(1, limit)])
+
+    # ── Story 4.13: freshness and staleness of derived artefacts (FR-58/AD-23/AD-40) ─────────────
+
+    def _compute_stamp(
+        self, session: Session, tenant: str, matter: str, version_no: int | None
+    ) -> FreshnessStamp:
+        """The observable state of ALL EIGHT enumerated staleness inputs, read inside the caller's
+        session (FR-58/AD-23/AD-40).
+
+        This is the **one** derivation, used both to stamp an artefact at production time and to
+        compute the current state at read time — so a stamp can never be produced by different
+        arithmetic than the one it is later compared against.
+
+        ``version_no`` selects which *ranking version*'s line the ``line_seq`` observable reads.
+        The line is version-bound, so an artefact produced over version 2 must be compared against
+        version 2's line; comparing it against the latest version's line would report a phantom
+        *line move* every time a re-rank happened. ``ranking_version_no`` is always the *matter*'s
+        maximum — that is the observable for the re-rank trigger itself.
+        """
+        ranking_version_no = session.scalar(
+            select(func.max(RankingVersionRow.version_no)).where(
+                RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter)) or 0
+        line_seq: int | None = None
+        if version_no is not None and version_no > 0:
+            line_seq = session.scalar(
+                select(func.max(LinePlacement.seq))
+                .join(RankingVersionRow, RankingVersionRow.id == LinePlacement.ranking_version_id)
+                .where(RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter,
+                       RankingVersionRow.version_no == version_no))
+        # The pin observable is the SUM of each pièce's highest seq. Every pin act — a pin AND an
+        # unpin — appends a row with a strictly greater per-pièce seq (AD-49), so the sum strictly
+        # increases on both. A count of pins in force would not move when one is added and another
+        # removed in the same read window.
+        pin_max_per_piece = (
+            select(func.max(PinEntry.seq).label("s"))
+            .where(PinEntry.tenant == tenant, PinEntry.matter == matter)
+            .group_by(PinEntry.piece_id).subquery())
+        pin_ledger_seq = session.scalar(
+            select(func.coalesce(func.sum(pin_max_per_piece.c.s), 0))) or 0
+        case_theory_version_no = session.scalar(
+            select(func.max(CaseTheoryVersion.version_no)).where(
+                CaseTheoryVersion.tenant == tenant, CaseTheoryVersion.matter == matter)) or 0
+        # A scope the matter row does not have is not a scope: an absent matter is handled by the
+        # callers' scope pre-filter, so this is always the matter's own wall (AD-13).
+        scope_identity = session.scalar(
+            select(MatterScope.scope).where(
+                MatterScope.tenant == tenant, MatterScope.matter == matter)) or ""
+        corpus_count = session.scalar(
+            select(func.count()).select_from(Piece).where(
+                Piece.tenant == tenant, Piece.matter == matter)) or 0
+        pairs = session.execute(
+            select(Piece.id, Piece.text_identity)
+            .where(Piece.tenant == tenant, Piece.matter == matter)
+            .order_by(Piece.id)).all()
+        return FreshnessStamp(
+            ranking_version_no=ranking_version_no,
+            line_seq=line_seq,
+            pin_ledger_seq=int(pin_ledger_seq),
+            case_theory_version_no=case_theory_version_no,
+            config_digest=config_digest(self._retrieval_config(session, tenant)),
+            scope_identity=scope_identity,
+            corpus_count=corpus_count,
+            extraction_digest=extraction_digest((pid, ti) for pid, ti in pairs),
+            discard_population=population_digest(
+                pid for (pid,) in session.execute(
+                    select(LabelRecord.piece_id)
+                    .where(LabelRecord.tenant == tenant, LabelRecord.matter == matter,
+                           LabelRecord.label == "discard")
+                    .order_by(LabelRecord.piece_id)).all()),
+        )
+
+    @staticmethod
+    def _retrieval_config(session: Session, tenant: str) -> dict[str, object]:
+        """The effective values of every configuration key declaring ``affects_retrieval`` — the
+        ``config_digest`` observable's input (FR-58's *"a configuration change affecting retrieval,
+        ranking or the estimator"*).
+
+        Reusing the flag the schema already declares (and which already drives the audited change
+        detail, ``_config_change_detail``) means the staleness trigger and the audited reason cannot
+        drift apart, and a new ranking-affecting key is covered the moment its author sets the flag
+        they already have to set."""
+        keys = {k: spec for k, spec in CONFIG_SCHEMA.items() if spec.affects_retrieval}
+        stored = {
+            r.key: r for r in session.execute(
+                select(TenantSetting).where(
+                    TenantSetting.tenant == tenant,
+                    TenantSetting.key.in_(sorted(keys)))).scalars().all()}
+        return {k: _config_value(spec, stored.get(k)) for k, spec in keys.items()}
+
+    def _write_stamp(
+        self, session: Session, *, tenant: str, matter: str, kind: str, artefact_id: str,
+        version_no: int | None, now: datetime,
+    ) -> None:
+        """Stamp a produced artefact, INSIDE its producing transaction (AD-22) — never a second
+        act a caller could skip, so a produced artefact without a stamp cannot exist (AD-37).
+
+        ``session.flush()`` first so the observables see the rows this very transaction just added:
+        the ranking version being minted, the line placement being appended. Without it the stamp
+        would record the state *before* the artefact, and the artefact would read stale against
+        itself the instant it was produced."""
+        session.flush()
+        stamp = self._compute_stamp(session, tenant, matter, version_no)
+        session.add(ArtefactStamp(
+            id=hashlib.sha256(
+                f"{tenant}\x00{matter}\x00{kind}\x00{artefact_id}".encode()).hexdigest(),
+            tenant=tenant, matter=matter, kind=kind, artefact_id=artefact_id,
+            stamp_json=stamp.to_json(), at=now))
+
+    def current_stamp(
+        self, *, tenant: str, matter: str, scopes: set[str], version_no: int | None = None
+    ) -> FreshnessStamp | None:
+        """The current observable state of the eight enumerated inputs (FR-58). Scope pre-filtered
+        (AD-13); ``None`` when out of scope or absent (FR-14). Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            return self._compute_stamp(session, tenant, matter, version_no)
+
+    def read_artefact_stamps(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> tuple[tuple[str, str, int | None, bool, FreshnessStamp], ...] | None:
+        """Every stamped artefact of the *matter* as ``(kind, artefact_id, own version_no,
+        superseded, recorded stamp)``, oldest first. ``()`` = read, nothing stamped yet; ``None`` =
+        out of scope or absent (FR-14).
+
+        ``superseded`` is True when a NEWER artefact of the same kind exists: a higher ranking
+        ``version_no``, a higher placement ``seq`` on the same version (or a placement on a later
+        version), a later ``recall_review``. Such an artefact is still readable and its verdict is
+        still true of it (AD-7 — nothing is deleted), but the recomputation it would offer has
+        already been performed, so it must not generate a *worklist* line.
+
+        **The version_no is the artefact's OWN**, resolved from the artefact itself — the ranking
+        version for a ranking, the version its placement cuts for a line — and ``None`` for a bound,
+        which is about the *matter*'s current state and has no version of its own. It is NOT
+        ``stamp.ranking_version_no``: that observable is the *matter*'s MAXIMUM version, which is a
+        different number whenever a line is placed over a version that is not the latest. Comparing
+        such a line against the latest version's placement would read it fresh while its own cut had
+        moved — the catastrophic direction (AD-23).
+
+        A row whose ``stamp_json`` cannot be decoded **propagates the error** rather than being
+        skipped: a stamp that cannot be read is not evidence of freshness, and silently dropping it
+        would make an unverifiable artefact disappear from the worklist entirely."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            rows = session.scalars(
+                select(ArtefactStamp)
+                .where(ArtefactStamp.tenant == tenant, ArtefactStamp.matter == matter)
+                .order_by(ArtefactStamp.at.asc(), ArtefactStamp.id.asc())).all()
+            owners = self._artefact_versions(session, tenant, matter, rows)
+            live = self._live_artefacts(session, tenant, matter)
+            return tuple(
+                (r.kind, r.artefact_id, owners.get((r.kind, r.artefact_id)),
+                 r.artefact_id != live.get(r.kind),
+                 FreshnessStamp.from_json(r.stamp_json))
+                for r in rows)
+
+    @staticmethod
+    def _live_artefacts(session: Session, tenant: str, matter: str) -> dict[str, str]:
+        """The identity of the artefact **in force** for each kind — the latest ranking version, the
+        placement in force over it, and the most recent recorded bound. Everything else of that kind
+        is superseded.
+
+        The line in force is read over the LATEST ranking version, because that is the one the
+        surface renders: a placement over an older version is superseded by the re-rank itself, not
+        only by a later placement."""
+        live: dict[str, str] = {}
+        version = session.scalars(
+            select(RankingVersionRow)
+            .where(RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter)
+            .order_by(RankingVersionRow.version_no.desc()).limit(1)).first()
+        if version is not None:
+            live[KIND_RANKING] = version.id
+            placement = session.scalars(
+                select(LinePlacement)
+                .where(LinePlacement.ranking_version_id == version.id)
+                .order_by(LinePlacement.seq.desc()).limit(1)).first()
+            if placement is not None:
+                live[KIND_LINE] = placement.id
+        bound = session.scalars(
+            select(RecallReview)
+            .where(RecallReview.tenant == tenant, RecallReview.matter == matter)
+            .order_by(RecallReview.reviewed_at.desc(), RecallReview.id.desc()).limit(1)).first()
+        if bound is not None:
+            live[KIND_BOUND] = bound.id
+        return live
+
+    @staticmethod
+    def _artefact_versions(
+        session: Session, tenant: str, matter: str, rows: Sequence[ArtefactStamp]
+    ) -> dict[tuple[str, str], int]:
+        """Resolve each stamped artefact to the *ranking version* it belongs to, in TWO queries —
+        never one per artefact. A ``bound`` is absent from the result: it has no version of its
+        own."""
+        ranking_ids = [r.artefact_id for r in rows if r.kind == KIND_RANKING]
+        line_ids = [r.artefact_id for r in rows if r.kind == KIND_LINE]
+        out: dict[tuple[str, str], int] = {}
+        if ranking_ids:
+            for vid, no in session.execute(
+                    select(RankingVersionRow.id, RankingVersionRow.version_no).where(
+                        RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter,
+                        RankingVersionRow.id.in_(ranking_ids))).all():
+                out[(KIND_RANKING, vid)] = no
+        if line_ids:
+            for pid, no in session.execute(
+                    select(LinePlacement.id, RankingVersionRow.version_no)
+                    .join(RankingVersionRow,
+                          RankingVersionRow.id == LinePlacement.ranking_version_id)
+                    .where(LinePlacement.tenant == tenant, LinePlacement.matter == matter,
+                           LinePlacement.id.in_(line_ids))).all():
+                out[(KIND_LINE, pid)] = no
+        return out
+
+    def read_current_bound(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> RecordedBound | None:
+        """The *matter*'s most recent recorded *confidence bound* (FR-58/FR-23). Scope pre-filtered;
+        ``None`` when out of scope, absent, or when no bound has been recorded. Not audited."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            row = session.scalars(
+                select(RecallReview)
+                .where(RecallReview.tenant == tenant, RecallReview.matter == matter)
+                .order_by(RecallReview.reviewed_at.desc(), RecallReview.id.desc()).limit(1)).first()
+            if row is None:
+                return None
+            return RecordedBound(
+                artefact_id=row.id,
+                bound=PrevalenceBound(
+                    population=row.population, sample_size=row.sample_size,
+                    relevant_in_sample=row.relevant_found, confidence=row.confidence,
+                    count_upper=row.count_upper, prevalence_upper=row.prevalence_upper),
+                reviewed_at=row.reviewed_at)
