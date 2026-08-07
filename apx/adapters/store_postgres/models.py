@@ -909,3 +909,124 @@ class ArtefactStamp(Base):
     # the canonical FreshnessStamp JSON — plaintext structural metadata (NFR-56), no PII/content.
     stamp_json: Mapped[str] = mapped_column(Text, nullable=False)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class SamplingRun(Base):
+    """One *sampling run* over a *matter*'s **discarded set** (Story 5.1, FR-22).
+
+    The population is the Epic-4 derived VIEW — ``derive_triage_sets(order, line, pins).discarded``
+    for one named *ranking version* — never ``label_record WHERE label='discard'`` (planning
+    decision A1, ``epic-5-planning-2026-08-07.md``). The unit of the draw is the near-duplicate
+    **family** (FR-38): forty copies of one email are one draw, not forty.
+
+    **The freeze is structural, not a convention.** ``ranking_version_id``,
+    ``last_retained_piece_id`` (the position of **the line**, by identity — never a bare integer,
+    FR-17), ``pin_ledger_seq`` and ``scope`` are all NOT NULL, and the explicit identifier list
+    lives on :class:`SamplingRunItem`. ``seed`` is recorded for reproducing a draw in a test only:
+    FR-22 says *a seed alone is insufficient*, and the structural check
+    ``sampling-run-freezes-identifiers`` asserts the item table carries the identities.
+
+    **Nothing here says "invalidated".** Invalidation is the comparison of this run's
+    ``artefact_stamp`` (kind ``sampling_run``) against the current observables — Story 4.13's
+    machinery. A stored flag would have to be set by every writer, and a writer that forgets leaves
+    the run *falsely valid*.
+
+    ``status`` moves ``open`` → ``completed`` | ``abandoned`` and never back; an abandoned run keeps
+    its draw and its verdicts forever (AD-7). No cascade FK: a *matter* is retired, never
+    hard-deleted out from under its runs."""
+
+    __tablename__ = "sampling_run"
+    __table_args__ = (
+        Index("ix_sampling_run_matter", "tenant", "matter", "started_at"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+        CheckConstraint(
+            "status in ('open', 'completed', 'abandoned')", name="ck_sampling_run_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    # ── the freeze (FR-22) — every column NOT NULL, asserted structurally ────────────────────────
+    ranking_version_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    ranking_version_no: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_retained_piece_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    pin_ledger_seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    # the matter's RBAC scope AT DRAW TIME — a scope name (a wall label), not PII and not content;
+    # it is also a SQL predicate elsewhere, so it stays plaintext like matter_scope.scope (NFR-56).
+    scope: Mapped[str] = mapped_column(String, nullable=False)
+    seed: Mapped[int] = mapped_column(Integer, nullable=False)
+    # ── the draw ────────────────────────────────────────────────────────────────────────────────
+    confidence: Mapped[float] = mapped_column(Float, nullable=False)
+    population_families: Mapped[int] = mapped_column(Integer, nullable=False)  # the bound's unit
+    population_pieces: Mapped[int] = mapped_column(Integer, nullable=False)
+    sample_size: Mapped[int] = mapped_column(Integer, nullable=False)
+    is_census: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # ── lifecycle ───────────────────────────────────────────────────────────────────────────────
+    status: Mapped[str] = mapped_column(String, nullable=False)
+    # actor display names are PII and never a SQL predicate → application-encrypted (AD-31)
+    started_by: Mapped[str] = mapped_column(
+        EncryptedText("sampling_run.started_by"), nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    closed_by: Mapped[str | None] = mapped_column(
+        EncryptedText("sampling_run.closed_by"), nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    # ── the result, written only at completion ──────────────────────────────────────────────────
+    relevant_found: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    count_upper: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    prevalence_upper: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+class SamplingRunItem(Base):
+    """One **drawn family**, frozen by explicit identifier (Story 5.1, FR-22).
+
+    This table is what makes FR-22's *"a seed alone is insufficient"* true: the run's population is
+    re-readable from these rows without re-deriving the discarded set, so a later re-rank cannot
+    change what a completed run says it drew.
+
+    ``member_piece_ids`` is the family's **discarded** members only, newline-joined in rank order —
+    a retained member of a family that straddles **the line** is not in the discarded set and must
+    not be counted into a population a bound is quoted over. ``proxy_piece_id`` is the *pièce* the
+    lawyer actually reads (the lowest-rank discarded member); a verdict on it is a verdict on the
+    family. All three are *pièce*/family identity hashes — no content, no PII (NFR-56)."""
+
+    __tablename__ = "sampling_run_item"
+    __table_args__ = (
+        UniqueConstraint("run_id", "family_id", name="uq_sampling_run_item"),
+        Index("ix_sampling_run_item_run", "run_id", "draw_index"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("sampling_run.id"), nullable=False)  # no ondelete (AD-7)
+    draw_index: Mapped[int] = mapped_column(Integer, nullable=False)  # position in the draw
+    family_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    proxy_piece_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # newline-joined pièce ids (ASCII hex) — the explicit identifier list FR-22 requires
+    member_piece_ids: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class SamplingVerdict(Base):
+    """One verdict on one drawn family — **APPEND-ONLY** (Story 5.1, FR-22/FR-24).
+
+    A correction is a new row with a greater ``seq``, never an edit: the current verdict is the
+    max-``seq`` view and the earlier one stays readable as the record of a mind changed (AD-7).
+    Verdicts of an abandoned or invalidated run are kept for the same reason — *"an hour of my
+    verdicts"* is never destroyed, only marked as no longer answering the question."""
+
+    __tablename__ = "sampling_verdict"
+    __table_args__ = (
+        UniqueConstraint("run_id", "family_id", "seq", name="uq_sampling_verdict_seq"),
+        Index("ix_sampling_verdict_run", "run_id", "family_id", "seq"),
+    )
+
+    id: Mapped[str] = mapped_column(String(32), primary_key=True)
+    run_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("sampling_run.id"), nullable=False)  # no ondelete (AD-7)
+    family_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)  # monotonic per (run, family)
+    relevant: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    # the reviewer's display name (PII), never a SQL predicate → application-encrypted (AD-31)
+    actor: Mapped[str] = mapped_column(EncryptedText("sampling_verdict.actor"), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

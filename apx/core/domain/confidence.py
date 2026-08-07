@@ -112,8 +112,19 @@ class RecordedBound:
     ``reviewed_at`` is a **record** of when the review happened. It is never an input to the
     freshness decision: staleness is not resolved by the passage of time (FR-58), and no observable
     on :class:`~apx.core.domain.freshness.FreshnessStamp` is a clock.
+
+    ``unit_fr`` names **what was counted** (Story 5.1). A *sampling run* draws near-duplicate
+    FAMILIES, not *pièces* — forty copies of one email are one draw (FR-38) — so
+    ``bound.population`` is a family count. Rendering it as *"des 5 pièces écartées"* would make
+    the one sentence a firm says to a judge false about its own denominator, which is precisely the
+    failure this epic exists to prevent. A legacy ``recall_review`` counted *pièces* and keeps the
+    default. ``piece_count`` is how many *pièces* those units hold, or ``None`` when the two are the
+    same thing; it is stated beside the bound and **never substituted into it** — a bound quoted
+    over a denominator nobody sampled is the same failure with the numbers swapped.
     """
 
     artefact_id: str
     bound: PrevalenceBound
     reviewed_at: datetime
+    unit_fr: str = "pièces écartées"
+    piece_count: int | None = None

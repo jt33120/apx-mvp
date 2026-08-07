@@ -96,7 +96,10 @@ _SCOPED_READS: list[tuple[str, Callable[[SqlStore, str, str, set[str]], object]]
     ("representatives", lambda s, m, t, sc: s.representatives(m, t, sc)),
     ("labels", lambda s, m, t, sc: s.labels(m, t, sc)),
     ("read_audit", lambda s, m, t, sc: s.read_audit(m, t, sc)),
-    ("sample_discards", lambda s, m, t, sc: s.sample_discards(m, t, sc, 5)),
+    # Story 5.1 retired sample_discards (it drew from the Story-2.x label pile). Its successor,
+    # the sampling run, is scope pre-filtered too but follows the Epic-4 NON-DISCLOSING convention
+    # (None, indistinguishable from absent — FR-14) instead of raising, so it is asserted below
+    # rather than in this raises-ScopeDenied list.
 ]
 _IDS = [n for n, _ in _SCOPED_READS]
 
@@ -118,6 +121,18 @@ def test_tenant_is_applied_before_scope_even_holding_bs_scope(
     # optional and not a post-filter (AD-12 tenant-first).
     with pytest.raises(ScopeDenied):
         call(store, B_MATTER, A_TENANT, {B_SCOPE})
+
+
+def test_the_sampling_run_read_of_a_foreign_matter_is_non_disclosing(store: SqlStore) -> None:
+    """Story 5.1 — the newer convention (FR-14/AD-13): out of scope and absent are the SAME answer,
+    so a caller cannot learn that another firm's matter exists by being refused differently."""
+    assert store.read_sampling_run(
+        tenant=A_TENANT, matter=B_MATTER, scopes={A_SCOPE}) is None
+    assert store.read_sampling_run(
+        tenant=A_TENANT, matter=B_MATTER, scopes={B_SCOPE}) is None   # tenant applied FIRST
+    assert store.read_sampling_run(
+        tenant=A_TENANT, matter="no-such-matter", scopes={A_SCOPE}) is None  # same answer
+    assert store.list_sampling_runs(tenant=A_TENANT, matter=B_MATTER, scopes={B_SCOPE}) is None
 
 
 # ── fail closed: an unknown tenant, or no scope, sees nothing ──

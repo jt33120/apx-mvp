@@ -468,7 +468,9 @@ function StalenessBanner(
           {/* AD-23 — the banner names the version it speaks of; the worklist carries only the
               artefacts IN FORCE, so "Le classement" is the one on screen and not a superseded one */}
           <strong>{STALE_SUBJECT[line.kind] ?? line.kind}</strong>
-          {version !== null && line.kind !== "bound" && <> v{version}</>} — périmé depuis&nbsp;:{" "}
+          {version !== null && line.kind !== "bound" && line.kind !== "sampling_run" && (
+            <> v{version}</>
+          )} — périmé depuis&nbsp;:{" "}
           {line.changed_fr.join(", ")}. <span className="apx-hint">{line.offer_fr}</span>
         </p>
       ))}
@@ -483,6 +485,7 @@ const STALE_SUBJECT: Record<string, string> = {
   ranking: "Le classement",
   line: "La ligne",
   bound: "La borne de confiance",
+  sampling_run: "Le tirage sur les écartées",
 };
 
 /** The confidence bound (FR-58/FR-23). A stale bound is visually distinct, cannot be exported as

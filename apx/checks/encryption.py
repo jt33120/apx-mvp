@@ -123,6 +123,23 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     ("ArtefactStamp", "kind"),
     ("ArtefactStamp", "artefact_id"),
     ("ArtefactStamp", "stamp_json"),
+    # Story 5.1 — the sampling run and its frozen draw. Every one of these is an IDENTITY or a
+    # CATEGORICAL value, not content: ``last_retained_piece_id`` is a pièce identity hash (the same
+    # argument as ``LinePlacement.last_retained_piece_id``); ``status`` is a lifecycle enum
+    # (open | completed | abandoned, like ``ImportJob.state``); ``family_id`` is the near-duplicate
+    # text-key hash already plaintext on ``RankedEntry``; ``proxy_piece_id`` and
+    # ``member_piece_ids`` are pièce identity hashes — FR-22's explicit identifier list, which
+    # NFR-56 requires readable so a frozen population is verifiable without decrypting. (The
+    # actors ``started_by``, ``closed_by`` and the verdict's ``actor`` are EncryptedText; ``scope``
+    # is a wall NAME and is plaintext everywhere already, including ``matter_scope.scope``.)
+    ("SamplingRun", "last_retained_piece_id"),
+    ("SamplingRun", "status"),
+    ("SamplingRunItem", "family_id"),
+    ("SamplingRunItem", "proxy_piece_id"),
+    ("SamplingRunItem", "member_piece_ids"),
+    ("SamplingRunItem", "run_id"),      # a uuid4 hex FK — a row identity, like the global ``id``
+    ("SamplingVerdict", "family_id"),
+    ("SamplingVerdict", "run_id"),
 }
 
 

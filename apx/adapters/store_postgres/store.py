@@ -16,7 +16,6 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import random
 import secrets
 from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
@@ -52,6 +51,9 @@ from apx.adapters.store_postgres.models import (
     PinEntry,
     RankedEntry,
     RecallReview,
+    SamplingRun,
+    SamplingRunItem,
+    SamplingVerdict,
     SessionRecord,
     TaxonomyLabelEntry,
     TenantSetting,
@@ -73,7 +75,7 @@ from apx.core.domain.chunking import (
     chunking_config,
     resolve_passage,
 )
-from apx.core.domain.confidence import PrevalenceBound, RecordedBound, prevalence_upper_bound
+from apx.core.domain.confidence import PrevalenceBound, RecordedBound
 from apx.core.domain.config import (
     CONFIG_SCHEMA,
     ConfigError,
@@ -90,7 +92,9 @@ from apx.core.domain.freshness import (
     KIND_BOUND,
     KIND_LINE,
     KIND_RANKING,
+    KIND_SAMPLING_RUN,
     FreshnessStamp,
+    compare_stamps,
     config_digest,
     extraction_digest,
     population_digest,
@@ -126,6 +130,24 @@ from apx.core.domain.ranking import (
     RankingVersion,
 )
 from apx.core.domain.retrieval import DeterministicResult, SemanticResult
+from apx.core.domain.sampling import (
+    NO_CUT_FR,
+    NO_POPULATION_FR,
+    STATUS_ABANDONED,
+    STATUS_COMPLETED,
+    STATUS_OPEN,
+    DrawnFamily,
+    SamplingRunView,
+    SamplingUnit,
+    Sizing,
+    VerdictEntry,
+    bound_for_run,
+    draw_families,
+    group_discarded_families,
+    is_census,
+    no_population_sizing,
+    size_for_target,
+)
 from apx.core.domain.search import snippet
 from apx.core.domain.taxonomy_label import (
     UNLABELLED,
@@ -149,6 +171,7 @@ from apx.core.domain.triage_table import (
     pair_change_log,
 )
 from apx.core.ports.read import ExactSearch, PieceView
+from apx.core.ports.sampling import InvalidatedRun, RunAlreadyClosed
 from apx.core.projection import Snapshot
 
 _log = logging.getLogger("apx.store")
@@ -648,34 +671,6 @@ class SearchResults:
 def _like_escape(s: str) -> str:
     """Escape LIKE wildcards so a query is matched literally (escape char: backslash)."""
     return s.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-@dataclass(frozen=True)
-class SampledDiscard:
-    piece_id: str
-    provenance: str
-    excerpt: str
-
-
-@dataclass(frozen=True)
-class RecallSample:
-    population: int                       # the whole discard pile
-    sample: tuple[SampledDiscard, ...]    # the pieces drawn for review
-
-
-@dataclass(frozen=True)
-class RecallResult:
-    population: int
-    sample_size: int
-    relevant_found: int      # false discards found in the sample
-    confidence: float
-    count_upper: int         # at most this many of the pile were wrongly discarded
-    prevalence_upper: float
-
-
-def _excerpt(text: str, width: int = 240) -> str:
-    flat = " ".join(text.split())
-    return flat[:width] + ("…" if len(flat) > width else "")
 
 
 # Story 3.5b: a coarse media kind for the viewer, DERIVED from the filename extension (no new
@@ -1769,89 +1764,14 @@ class SqlStore:
         discarded = sum(1 for p in pieces if p.label == "discard")
         return LabelSummary(relevant, uncertain, discarded, len(pieces), pieces)
 
-    def sample_discards(self, matter: str, tenant: str, scopes: set[str], n: int,
-                        *, seed: int | None = None) -> RecallSample:
-        """Draw a random sample of the matter's discard pile for review — scope-checked.
-        A review's bound is only sound if the sample is random w.r.t. relevance, so this
-        samples uniformly (seedable, for reproducible tests)."""
-        with self._sf() as session:
-            scope = session.scalar(
-                select(MatterScope.scope).where(
-                    MatterScope.matter == matter, MatterScope.tenant == tenant
-                )
-            )
-            if scope is None or scope not in scopes:
-                raise ScopeDenied(matter)
-            rows = session.execute(
-                select(LabelRecord.piece_id, Piece.provenance_path, Piece.full_text)
-                .join(Piece, (Piece.id == LabelRecord.piece_id) & (Piece.tenant == tenant))
-                .where(
-                    LabelRecord.matter == matter, LabelRecord.tenant == tenant,
-                    LabelRecord.label == "discard",
-                )
-            ).all()
-        chosen = random.Random(seed).sample(rows, min(n, len(rows))) if rows else []
-        sample = tuple(SampledDiscard(pid, prov, _excerpt(full)) for pid, prov, full in chosen)
-        return RecallSample(population=len(rows), sample=sample)
-
-    def record_recall_review(self, matter: str, tenant: str, scopes: set[str],
-                             verdicts: dict[str, bool], actor: str,
-                             *, confidence: float = 0.95) -> RecallResult:
-        """Record a recall check: from the reviewed sample of the discard pile, compute
-        the finite-population upper confidence bound on wrongly-discarded pieces, persist
-        it, and append the act to the audit trail (atomic). ``verdicts`` maps a sampled
-        piece_id to whether it was actually relevant (a false discard). Scope-checked;
-        rejects any reviewed piece that is not currently discarded."""
-        now = datetime.now(UTC)
-        with self._sf() as session, session.begin():
-            scope = session.scalar(
-                select(MatterScope.scope).where(
-                    MatterScope.matter == matter, MatterScope.tenant == tenant
-                )
-            )
-            if scope is None or scope not in scopes:
-                raise ScopeDenied(matter)
-            discard_ids = {
-                pid for (pid,) in session.execute(
-                    select(LabelRecord.piece_id).where(
-                        LabelRecord.matter == matter, LabelRecord.tenant == tenant,
-                        LabelRecord.label == "discard",
-                    )
-                ).all()
-            }
-            unknown = set(verdicts) - discard_ids
-            if unknown:
-                raise ValueError(f"reviewed pieces are not discarded: {sorted(unknown)}")
-            population = len(discard_ids)
-            sample_size = len(verdicts)
-            relevant_found = sum(1 for v in verdicts.values() if v)
-            bound = prevalence_upper_bound(
-                population, sample_size, relevant_found, confidence=confidence
-            )
-            review_id = uuid4().hex
-            session.add(RecallReview(
-                id=review_id, tenant=tenant, matter=matter, population=population,
-                sample_size=sample_size, relevant_found=relevant_found, confidence=confidence,
-                count_upper=bound.count_upper, prevalence_upper=bound.prevalence_upper,
-                reviewer=actor, reviewed_at=now,
-            ))
-            detail = (
-                f"population={population} sample={sample_size} relevant={relevant_found} "
-                f"bound={bound.prevalence_upper:.4f}@{confidence}"
-            )
-            self._append_audit(session, tenant, matter, actor, "recall-review", detail, now)
-            # The bound is the artefact FR-58 protects hardest: it is the sentence quoted to a
-            # court, and it is false the moment its population moves. Stamp it with its own write.
-            current_version_no = session.scalar(
-                select(func.max(RankingVersionRow.version_no)).where(
-                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter))
-            self._write_stamp(
-                session, tenant=tenant, matter=matter, kind=KIND_BOUND, artefact_id=review_id,
-                version_no=current_version_no, now=now)
-        return RecallResult(
-            population, sample_size, relevant_found, confidence,
-            bound.count_upper, bound.prevalence_upper,
-        )
+    # ── RETIRED (Story 5.1, planning decision A1) ────────────────────────────────────────────
+    # ``sample_discards`` and ``record_recall_review`` used to draw from and bound the Story-2.x
+    # LABEL PILE (``label_record WHERE label='discard'``). Epic 5's discarded set is the Epic-4
+    # DERIVED view, so both acts are superseded by the *sampling run* (``start_sampling_run`` ...
+    # ``complete_sampling_run``) below. This is a supersession, not a deletion: every existing
+    # ``recall_review`` row stays readable forever with its bound (AD-7), ``read_current_bound``
+    # still falls back to them when a matter has no run, and ``no_new_legacy_bound`` asserts no
+    # code path can start writing them again.
 
     def search(
         self, tenant: str, scopes: set[str], query: str, *, limit: int = 100
@@ -4107,6 +4027,73 @@ class SqlStore:
 
     # ── Story 4.13: freshness and staleness of derived artefacts (FR-58/AD-23/AD-40) ─────────────
 
+    @staticmethod
+    def _pin_ledger_seq(session: Session, tenant: str, matter: str) -> int:
+        """The ``pin_ledger_seq`` observable: the SUM over *pièces* of each one's highest
+        ``pin_entry.seq``. Every pin act — a pin AND an unpin — appends a row with a strictly
+        greater per-*pièce* seq (AD-49), so the sum strictly increases on both. A count of pins in
+        force would not move when one is added and another removed in the same read window.
+
+        ONE derivation, shared by the freshness stamp and by the *sampling run*'s freeze (Story
+        5.1): a run whose recorded ``pin_ledger_seq`` came from different arithmetic than the
+        observable it is later compared against would read valid while its population had moved."""
+        pin_max_per_piece = (
+            select(func.max(PinEntry.seq).label("s"))
+            .where(PinEntry.tenant == tenant, PinEntry.matter == matter)
+            .group_by(PinEntry.piece_id).subquery())
+        return int(session.scalar(select(func.coalesce(func.sum(pin_max_per_piece.c.s), 0))) or 0)
+
+    @staticmethod
+    def _derived_discarded(
+        session: Session, tenant: str, matter: str, version_no: int | None
+    ) -> tuple[str, tuple[tuple[str, str], ...]] | None:
+        """The **derived** discarded set of a *ranking version*, as ``(version_id, ((piece_id,
+        family_id), ...))`` in rank order — the ONE population Epic 5 audits (Story 5.1, planning
+        decision A1).
+
+        This is ``derive_triage_sets(order, line, pins).discarded`` (AD-39), never
+        ``label_record WHERE label='discard'``: the label pile has no *ranking version* and no line,
+        so FR-22's freeze cannot be stated over it, and a *pièce* the lawyer pinned back across the
+        line would still be in it.
+
+        ``None`` when the *matter* has no such ranking version **or no line is placed** — without a
+        cut there is no discarded set, and calling the whole ranked order "écartée" is the lie FR-16
+        forbids. Session-scoped and scope-free: every caller has already checked the wall.
+        """
+        pinned = [RankingVersionRow.version_no == version_no] if version_no is not None else []
+        target = session.execute(
+            select(RankingVersionRow.id)
+            .where(RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter, *pinned)
+            .order_by(RankingVersionRow.version_no.desc()).limit(1)).first()
+        if target is None:
+            return None
+        version_id = target[0]
+        rows = session.execute(
+            select(RankedEntry.piece_id, RankedEntry.rank, RankedEntry.family_id)
+            .where(RankedEntry.ranking_version_id == version_id)
+            .order_by(RankedEntry.rank.is_(None), RankedEntry.rank, RankedEntry.piece_id)).all()
+        ranked = [pid for pid, rank, _ in rows if rank is not None]
+        unscored = [pid for pid, rank, _ in rows if rank is None]
+        family_of = {pid: fam for pid, _, fam in rows}
+        placement = session.scalars(
+            select(LinePlacement)
+            .where(LinePlacement.ranking_version_id == version_id)
+            .order_by(LinePlacement.seq.desc()).limit(1)).first()
+        if placement is None:
+            return None
+        pin_rows = session.execute(
+            select(PinEntry.piece_id, PinEntry.seq, PinEntry.action)
+            .where(PinEntry.tenant == tenant, PinEntry.matter == matter)).all()
+        pins = current_pins(
+            PinLogEntry(pid, seq, PinAction(action)) for pid, seq, action in pin_rows)
+        # a version-independent pin may name a pièce this version never scored — dormant here, and
+        # applying it would crash the whole derivation (the same rule as read_triage_sets).
+        ranked_set = set(ranked)
+        sets = derive_triage_sets(
+            ranked=ranked, unscored=unscored, line=Line(placement.last_retained_piece_id),
+            pins=tuple(p for p in pins if p.piece_id in ranked_set), version_id=version_id)
+        return version_id, tuple((pid, family_of[pid]) for pid in sets.discarded)
+
     def _compute_stamp(
         self, session: Session, tenant: str, matter: str, version_no: int | None
     ) -> FreshnessStamp:
@@ -4133,16 +4120,7 @@ class SqlStore:
                 .join(RankingVersionRow, RankingVersionRow.id == LinePlacement.ranking_version_id)
                 .where(RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter,
                        RankingVersionRow.version_no == version_no))
-        # The pin observable is the SUM of each pièce's highest seq. Every pin act — a pin AND an
-        # unpin — appends a row with a strictly greater per-pièce seq (AD-49), so the sum strictly
-        # increases on both. A count of pins in force would not move when one is added and another
-        # removed in the same read window.
-        pin_max_per_piece = (
-            select(func.max(PinEntry.seq).label("s"))
-            .where(PinEntry.tenant == tenant, PinEntry.matter == matter)
-            .group_by(PinEntry.piece_id).subquery())
-        pin_ledger_seq = session.scalar(
-            select(func.coalesce(func.sum(pin_max_per_piece.c.s), 0))) or 0
+        pin_ledger_seq = self._pin_ledger_seq(session, tenant, matter)
         case_theory_version_no = session.scalar(
             select(func.max(CaseTheoryVersion.version_no)).where(
                 CaseTheoryVersion.tenant == tenant, CaseTheoryVersion.matter == matter)) or 0
@@ -4158,21 +4136,22 @@ class SqlStore:
             select(Piece.id, Piece.text_identity)
             .where(Piece.tenant == tenant, Piece.matter == matter)
             .order_by(Piece.id)).all()
+        derived = self._derived_discarded(session, tenant, matter, version_no)
+        discarded = derived[1] if derived is not None else ()
         return FreshnessStamp(
             ranking_version_no=ranking_version_no,
             line_seq=line_seq,
-            pin_ledger_seq=int(pin_ledger_seq),
+            pin_ledger_seq=pin_ledger_seq,
             case_theory_version_no=case_theory_version_no,
             config_digest=config_digest(self._retrieval_config(session, tenant)),
             scope_identity=scope_identity,
             corpus_count=corpus_count,
             extraction_digest=extraction_digest((pid, ti) for pid, ti in pairs),
-            discard_population=population_digest(
-                pid for (pid,) in session.execute(
-                    select(LabelRecord.piece_id)
-                    .where(LabelRecord.tenant == tenant, LabelRecord.matter == matter,
-                           LabelRecord.label == "discard")
-                    .order_by(LabelRecord.piece_id)).all()),
+            # the DERIVED discarded set of THIS version (decision A1), sorted by pièce id: the
+            # digest must be a function of the membership, not of the rank order the derivation
+            # emitted, or a re-rank that discarded exactly the same pièces in a different order
+            # would report a population change that did not happen.
+            discard_population=population_digest(sorted(pid for pid, _ in discarded)),
         )
 
     @staticmethod
@@ -4283,24 +4262,67 @@ class SqlStore:
                 .order_by(LinePlacement.seq.desc()).limit(1)).first()
             if placement is not None:
                 live[KIND_LINE] = placement.id
-        bound = session.scalars(
-            select(RecallReview)
-            .where(RecallReview.tenant == tenant, RecallReview.matter == matter)
-            .order_by(RecallReview.reviewed_at.desc(), RecallReview.id.desc()).limit(1)).first()
-        if bound is not None:
-            live[KIND_BOUND] = bound.id
+        # The sampling run in force is the most recently STARTED one that was not ABANDONED.
+        #
+        # Started, not completed: an open run started after a completed one supersedes it, and it is
+        # the open run the lawyer is working in. Not abandoned: abandoning IS discharging the offer
+        # — she looked at the invalidated draw and decided not to have a bound — so an abandoned run
+        # must stop generating a worklist line, or the banner demands a re-sample forever and the
+        # true alarm is dismissed with it (the Story 4.13 rule, applied to a status instead of a
+        # successor). With every run abandoned there is NO live sampling run, and every one of them
+        # reads superseded, which is what "no offer" means here.
+        run = session.scalars(
+            select(SamplingRun)
+            .where(SamplingRun.tenant == tenant, SamplingRun.matter == matter,
+                   SamplingRun.status != STATUS_ABANDONED)
+            .order_by(SamplingRun.started_at.desc(), SamplingRun.id.desc()).limit(1)).first()
+        if run is not None:
+            live[KIND_SAMPLING_RUN] = run.id
+        # A legacy `recall_review` bound is live ONLY while the *matter* has never had a sampling
+        # run. Once one exists the label-pile era is over for this dossier, and the legacy bound is
+        # superseded by it.
+        #
+        # This is not tidiness. A legacy bound stamped between 4.13 and 5.1 carries a label-pile
+        # digest, so it compares unequal against the derived-view digest FOREVER — and nothing can
+        # ever write a `recall_review` row again (``no_new_legacy_bound``). Left live, it would put
+        # a permanently stale line on the worklist offering a re-sample that no act in the product
+        # can discharge: the banner growing a paragraph nobody can clear, which is exactly the
+        # failure Story 4.13 introduced supersession to prevent.
+        any_run = session.scalar(
+            select(func.count()).select_from(SamplingRun).where(
+                SamplingRun.tenant == tenant, SamplingRun.matter == matter)) or 0
+        if any_run == 0:
+            bound = session.scalars(
+                select(RecallReview)
+                .where(RecallReview.tenant == tenant, RecallReview.matter == matter)
+                .order_by(
+                    RecallReview.reviewed_at.desc(), RecallReview.id.desc()).limit(1)).first()
+            if bound is not None:
+                live[KIND_BOUND] = bound.id
         return live
 
     @staticmethod
     def _artefact_versions(
         session: Session, tenant: str, matter: str, rows: Sequence[ArtefactStamp]
     ) -> dict[tuple[str, str], int]:
-        """Resolve each stamped artefact to the *ranking version* it belongs to, in TWO queries —
-        never one per artefact. A ``bound`` is absent from the result: it has no version of its
-        own."""
+        """Resolve each stamped artefact to the *ranking version* it belongs to, in THREE
+        queries — never one per artefact. A legacy ``bound`` is absent from the result: a
+        ``recall_review`` was computed over the label pile and has no version of its own.
+
+        A **sampling run** does have one, and it matters: a run drawn over version 2 must be
+        assessed against version 2's line and version 2's discarded set. Resolving it to the
+        *matter*'s maximum instead would read a run as fresh while its own population had moved —
+        the catastrophic direction, and the exact defect Story 4.13's review found on the line."""
         ranking_ids = [r.artefact_id for r in rows if r.kind == KIND_RANKING]
         line_ids = [r.artefact_id for r in rows if r.kind == KIND_LINE]
+        run_ids = [r.artefact_id for r in rows if r.kind == KIND_SAMPLING_RUN]
         out: dict[tuple[str, str], int] = {}
+        if run_ids:
+            for rid, no in session.execute(
+                    select(SamplingRun.id, SamplingRun.ranking_version_no).where(
+                        SamplingRun.tenant == tenant, SamplingRun.matter == matter,
+                        SamplingRun.id.in_(run_ids))).all():
+                out[(KIND_SAMPLING_RUN, rid)] = no
         if ranking_ids:
             for vid, no in session.execute(
                     select(RankingVersionRow.id, RankingVersionRow.version_no).where(
@@ -4321,10 +4343,37 @@ class SqlStore:
         self, *, tenant: str, matter: str, scopes: set[str]
     ) -> RecordedBound | None:
         """The *matter*'s most recent recorded *confidence bound* (FR-58/FR-23). Scope pre-filtered;
-        ``None`` when out of scope, absent, or when no bound has been recorded. Not audited."""
+        ``None`` when out of scope, absent, or when no bound has been recorded. Not audited.
+
+        A **completed sampling run** is the bound from Story 5.1 onward, and it wins over any legacy
+        ``recall_review`` unconditionally — not by date. The two are computed over *different
+        populations* (the derived discarded view vs the Story-2.x label pile, decision A1), and
+        picking the more recent of two incomparable things is exactly the nearly-right referent this
+        build keeps being bitten by. Once a run exists, the label-pile bound is history.
+
+        The bound is stated over the unit the run **drew**: near-duplicate families, not *pièces*
+        (FR-38). ``population_pieces`` is carried on the run for the sentence Story 5.4 will write;
+        it is deliberately not substituted here, because a bound quoted over a denominator nobody
+        sampled is the failure this whole epic exists to prevent."""
         with self._sf() as session:
             if not self._matter_held(session, tenant, matter, scopes):
                 return None
+            run = session.scalars(
+                select(SamplingRun)
+                .where(SamplingRun.tenant == tenant, SamplingRun.matter == matter,
+                       SamplingRun.status == STATUS_COMPLETED)
+                .order_by(SamplingRun.completed_at.desc(), SamplingRun.id.desc()).limit(1)).first()
+            if run is not None:
+                return RecordedBound(
+                    artefact_id=run.id,
+                    bound=PrevalenceBound(
+                        population=run.population_families, sample_size=run.sample_size,
+                        relevant_in_sample=run.relevant_found or 0, confidence=run.confidence,
+                        count_upper=run.count_upper or 0,
+                        prevalence_upper=run.prevalence_upper or 0.0),
+                    reviewed_at=run.completed_at or run.started_at,
+                    unit_fr="familles de quasi-doublons écartées",
+                    piece_count=run.population_pieces)
             row = session.scalars(
                 select(RecallReview)
                 .where(RecallReview.tenant == tenant, RecallReview.matter == matter)
@@ -4338,3 +4387,393 @@ class SqlStore:
                     relevant_in_sample=row.relevant_found, confidence=row.confidence,
                     count_upper=row.count_upper, prevalence_upper=row.prevalence_upper),
                 reviewed_at=row.reviewed_at)
+
+    # ── Story 5.1: the sampling run — a frozen random draw from the DERIVED discarded set ────────
+
+    def _run_population(
+        self, session: Session, tenant: str, matter: str, version_no: int | None
+    ) -> tuple[str, int, tuple[SamplingUnit, ...], int] | None:
+        """``(version_id, version_no, families, piece_count)`` for the *matter*'s discarded set.
+
+        The population and the stamp's ``discard_population`` observable come from the **same**
+        derivation (:meth:`_derived_discarded`), so a run can never be drawn over one set and
+        invalidated against another. ``None`` when there is no such ranking version, no line, or an
+        empty discarded set."""
+        derived = self._derived_discarded(session, tenant, matter, version_no)
+        if derived is None:
+            return None
+        version_id, pairs = derived
+        if not pairs:
+            return None  # nothing discarded — no bound applies, never a flattering 0%
+        resolved_no = session.scalar(
+            select(RankingVersionRow.version_no).where(RankingVersionRow.id == version_id))
+        if resolved_no is None:  # pragma: no cover - the id came from that table one query ago
+            return None
+        return version_id, resolved_no, group_discarded_families(pairs), len(pairs)
+
+    def size_for_target_bound(
+        self, *, tenant: str, matter: str, scopes: set[str], target_prevalence: float,
+        confidence: float = 0.95, max_size: int | None = None, version_no: int | None = None,
+    ) -> Sizing | None:
+        """How many families must be drawn to reach ``target_prevalence`` (FR-22). A preview: writes
+        nothing, audits nothing. ``None`` when out of scope, absent, not ranked, or no line."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            derived = self._derived_discarded(session, tenant, matter, version_no)
+        if derived is None:
+            # no ranking version, or no line placed. NOT the same fact as an empty discarded set:
+            # saying "le jeu écarté est vide" here would tell the lawyer the tool looked and found
+            # nothing, when the tool never looked.
+            return no_population_sizing(
+                target_prevalence=target_prevalence, confidence=confidence, reason_fr=NO_CUT_FR)
+        families = group_discarded_families(derived[1])
+        if not families:
+            return no_population_sizing(
+                target_prevalence=target_prevalence, confidence=confidence,
+                reason_fr=NO_POPULATION_FR)
+        return size_for_target(
+            population=len(families), target_prevalence=target_prevalence, confidence=confidence,
+            max_size=max_size)
+
+    def start_sampling_run(
+        self, *, tenant: str, matter: str, actor: str, scopes: set[str],
+        sample_size: int | None = None, target_prevalence: float | None = None,
+        confidence: float = 0.95, max_size: int | None = None, version_no: int | None = None,
+        seed: int | None = None,
+    ) -> SamplingRunView | None:
+        """Draw, freeze, stamp and audit — ONE transaction (AD-22/AD-37, FR-22).
+
+        The draw is over the near-duplicate **families** of the derived discarded set, uniform and
+        without replacement. Everything FR-22 requires frozen is written in the same transaction as
+        the draw, so a run whose population is not recorded cannot exist."""
+        if (sample_size is None) == (target_prevalence is None):
+            raise ValueError("give exactly one of sample_size or target_prevalence")
+        box: list[str] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            scope = session.scalar(
+                select(MatterScope.scope).where(
+                    MatterScope.tenant == tenant, MatterScope.matter == matter,
+                    MatterScope.scope.in_(sorted(scopes))))
+            if scope is None:
+                raise ScopeDenied(matter)
+            population = self._run_population(session, tenant, matter, version_no)
+            if population is None:
+                return  # no version / no line / empty discarded set — box stays empty
+            version_id, resolved_no, families, piece_count = population
+            # FR-58/AD-23: a run over a SUPERSEDED version would become the matter's current bound
+            # (read_current_bound takes the latest completed run) while describing a population the
+            # re-rank replaced — and it would read FRESH, because every observable it watches is the
+            # matter's, not the old version's. The catastrophic direction. Refuse at the draw.
+            latest = session.scalar(
+                select(func.max(RankingVersionRow.version_no)).where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter))
+            if latest is not None and resolved_no != latest:
+                raise ValueError(
+                    f"le classement v{resolved_no} a été remplacé par la v{latest} : un tirage "
+                    "porte sur le classement en vigueur, sinon sa borne décrirait un jeu écarté "
+                    "que personne ne regarde plus")
+            if sample_size is not None:
+                size = max(1, min(sample_size, len(families)))
+            else:
+                sizing = size_for_target(
+                    population=len(families), target_prevalence=float(target_prevalence or 0.0),
+                    confidence=confidence, max_size=max_size)
+                # an unreachable target still draws — the best achievable IS the offer FR-22 makes,
+                # and refusing would leave the lawyer with no sample at all. `is None` and not
+                # `or`: a max_size of 0 is a real (if useless) cap, and `or` would read it as
+                # "unset" and silently draw a CENSUS — the opposite of what was asked.
+                cap = len(families) if max_size is None else max_size
+                size = sizing.size if sizing.size is not None else max(
+                    1, min(cap, len(families)))
+            # the seed is recorded for reproducing a draw in a test; FR-22 is explicit that it is
+            # NOT the record — sampling_run_item is.
+            draw_seed = seed if seed is not None else secrets.randbelow(2**31)
+            drawn = draw_families(families, size, seed=draw_seed)
+            pin_ledger_seq = self._pin_ledger_seq(session, tenant, matter)
+            run_id = uuid4().hex
+            session.add(SamplingRun(
+                id=run_id, tenant=tenant, matter=matter,
+                ranking_version_id=version_id, ranking_version_no=resolved_no,
+                last_retained_piece_id=self._line_identity(session, version_id),
+                pin_ledger_seq=pin_ledger_seq, scope=scope, seed=draw_seed,
+                confidence=confidence, population_families=len(families),
+                population_pieces=piece_count, sample_size=len(drawn),
+                is_census=is_census(population=len(families), sample_size=len(drawn)),
+                status=STATUS_OPEN, started_by=actor, started_at=now))
+            for index, unit in enumerate(drawn):
+                session.add(SamplingRunItem(
+                    id=uuid4().hex, run_id=run_id, draw_index=index, family_id=unit.family_id,
+                    proxy_piece_id=unit.proxy_piece_id,
+                    member_piece_ids="\n".join(unit.member_piece_ids)))
+            census = is_census(population=len(families), sample_size=len(drawn))
+            detail = (
+                f"version={resolved_no} families={len(drawn)}/{len(families)} "
+                f"pieces={piece_count} census={census}")
+            self._append_audit(session, tenant, matter, actor, "sampling-run-start", detail, now)
+            self._write_stamp(
+                session, tenant=tenant, matter=matter, kind=KIND_SAMPLING_RUN,
+                artefact_id=run_id, version_no=resolved_no, now=now)
+            box.append(run_id)
+
+        self._audited_tx(_work)
+        if not box:
+            return None
+        # box[-1] like every other boxed write in this store: _audited_tx RETRIES on an audit-seq
+        # collision, so a retried transaction appends a second id and the FIRST one names a
+        # transaction that was rolled back.
+        return self.read_sampling_run(tenant=tenant, matter=matter, scopes=scopes, run_id=box[-1])
+
+    @staticmethod
+    def _line_identity(session: Session, version_id: str) -> str:
+        """The identity of the last retained *pièce* over a version — FR-17's position of **the
+        line**, never a bare integer. The caller has already established a line exists (the
+        population derivation returns None without one)."""
+        placement = session.scalars(
+            select(LinePlacement)
+            .where(LinePlacement.ranking_version_id == version_id)
+            .order_by(LinePlacement.seq.desc()).limit(1)).first()
+        if placement is None:  # pragma: no cover - guarded by _derived_discarded
+            raise ValueError("sampling: no line is placed over this ranking version")
+        return placement.last_retained_piece_id
+
+    def _run_changed_inputs(
+        self, session: Session, tenant: str, matter: str, run: SamplingRun
+    ) -> tuple[bool, tuple[str, ...]]:
+        """``(stamped, changed trigger keys)`` for one run — Story 4.13's comparison, read on a run
+        that is still in flight. The rule lives in the Domain
+        (:func:`~apx.core.domain.freshness.compare_stamps`); the store only supplies observables."""
+        row = session.scalars(
+            select(ArtefactStamp).where(
+                ArtefactStamp.tenant == tenant, ArtefactStamp.matter == matter,
+                ArtefactStamp.kind == KIND_SAMPLING_RUN,
+                ArtefactStamp.artefact_id == run.id)).first()
+        if row is None:
+            return False, ()
+        recorded = FreshnessStamp.from_json(row.stamp_json)
+        current = self._compute_stamp(session, tenant, matter, run.ranking_version_no)
+        return True, compare_stamps(recorded, current, kind=KIND_SAMPLING_RUN)
+
+    def _guard_open_run(
+        self, session: Session, tenant: str, matter: str, run: SamplingRun
+    ) -> None:
+        """Refuse to touch a run that is closed or whose frozen population has moved.
+
+        Refusing is the strongest form of FR-22's *"tells the user immediately"*: a verdict recorded
+        against a population that no longer exists is worse than no verdict, because it looks like
+        evidence. The verdicts already recorded stay readable — nothing is destroyed (AD-7)."""
+        if run.status != STATUS_OPEN:
+            raise RunAlreadyClosed(run.status)
+        stamped, changed = self._run_changed_inputs(session, tenant, matter, run)
+        if not stamped or changed:
+            raise InvalidatedRun(", ".join(changed) or "unstamped")
+
+    def record_sampling_verdict(
+        self, *, tenant: str, matter: str, actor: str, scopes: set[str], run_id: str,
+        family_id: str, relevant: bool,
+    ) -> SamplingRunView | None:
+        """Append one verdict on one drawn family — append-only, attributed, audited (FR-22/FR-24).
+        A correction is a NEW row with a greater ``seq``; the earlier one stays readable."""
+        found: list[bool] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return
+            run = session.scalars(
+                select(SamplingRun).where(
+                    SamplingRun.id == run_id, SamplingRun.tenant == tenant,
+                    SamplingRun.matter == matter)).first()
+            if run is None:
+                return
+            item = session.scalars(
+                select(SamplingRunItem).where(
+                    SamplingRunItem.run_id == run_id,
+                    SamplingRunItem.family_id == family_id)).first()
+            if item is None:
+                return  # a family this run did not draw — not a verdict, and not disclosed
+            self._guard_open_run(session, tenant, matter, run)
+            last = session.scalar(
+                select(func.max(SamplingVerdict.seq)).where(
+                    SamplingVerdict.run_id == run_id,
+                    SamplingVerdict.family_id == family_id)) or 0
+            session.add(SamplingVerdict(
+                id=uuid4().hex, run_id=run_id, family_id=family_id, seq=last + 1,
+                relevant=relevant, actor=actor, at=now))
+            self._append_audit(
+                session, tenant, matter, actor, "sampling-verdict",
+                f"run={run_id} family={family_id} relevant={relevant} seq={last + 1}", now)
+            found.append(True)
+
+        self._audited_tx(_work)
+        if not found:
+            return None
+        return self.read_sampling_run(tenant=tenant, matter=matter, scopes=scopes, run_id=run_id)
+
+    def complete_sampling_run(
+        self, *, tenant: str, matter: str, actor: str, scopes: set[str], run_id: str,
+    ) -> SamplingRunView | None:
+        """Close the run: tally, bound, audit — one transaction (AD-22/FR-53).
+
+        Refuses a run that is not fully judged. An unjudged family is **not** a verdict of "not
+        relevant" (AD-19 — nothing imputed), and counting it as one would make every bound look
+        better than the evidence supports."""
+        found: list[bool] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return
+            run = session.scalars(
+                select(SamplingRun).where(
+                    SamplingRun.id == run_id, SamplingRun.tenant == tenant,
+                    SamplingRun.matter == matter)).first()
+            if run is None:
+                return
+            self._guard_open_run(session, tenant, matter, run)
+            verdicts = self._current_verdicts(session, run_id)
+            drawn = session.scalar(
+                select(func.count()).select_from(SamplingRunItem).where(
+                    SamplingRunItem.run_id == run_id)) or 0
+            if len(verdicts) < drawn:
+                raise ValueError(
+                    f"the run is not fully judged: {len(verdicts)}/{drawn} families")
+            relevant_found = sum(1 for v in verdicts.values() if v.relevant)
+            bound = bound_for_run(
+                population=run.population_families, sample_size=run.sample_size,
+                relevant_found=relevant_found, confidence=run.confidence)
+            run.status = STATUS_COMPLETED
+            run.closed_by = actor
+            run.completed_at = now
+            run.relevant_found = relevant_found
+            run.count_upper = bound.count_upper
+            run.prevalence_upper = bound.prevalence_upper
+            self._append_audit(
+                session, tenant, matter, actor, "sampling-run-complete",
+                f"run={run_id} population={run.population_families} sample={run.sample_size} "
+                f"relevant={relevant_found} bound={bound.prevalence_upper:.4f}@{run.confidence}",
+                now)
+            found.append(True)
+
+        self._audited_tx(_work)
+        if not found:
+            return None
+        return self.read_sampling_run(tenant=tenant, matter=matter, scopes=scopes, run_id=run_id)
+
+    def abandon_sampling_run(
+        self, *, tenant: str, matter: str, actor: str, scopes: set[str], run_id: str,
+    ) -> SamplingRunView | None:
+        """Give up an open run, audited. The draw and every verdict stay readable forever (AD-7) —
+        an invalidated run is abandoned and redrawn, never silently reused."""
+        found: list[bool] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return
+            run = session.scalars(
+                select(SamplingRun).where(
+                    SamplingRun.id == run_id, SamplingRun.tenant == tenant,
+                    SamplingRun.matter == matter)).first()
+            if run is None:
+                return
+            if run.status != STATUS_OPEN:
+                raise RunAlreadyClosed(run.status)
+            run.status = STATUS_ABANDONED
+            run.closed_by = actor
+            verdicts = self._current_verdicts(session, run_id)
+            self._append_audit(
+                session, tenant, matter, actor, "sampling-run-abandon",
+                f"run={run_id} verdicts_kept={len(verdicts)}", now)
+            found.append(True)
+
+        self._audited_tx(_work)
+        if not found:
+            return None
+        return self.read_sampling_run(tenant=tenant, matter=matter, scopes=scopes, run_id=run_id)
+
+    @staticmethod
+    def _current_verdicts(session: Session, run_id: str) -> dict[str, VerdictEntry]:
+        """The CURRENT verdict per family — the max-``seq`` row of the append-only ledger. Earlier
+        rows stay readable as the record of a mind changed (FR-24)."""
+        rows = session.scalars(
+            select(SamplingVerdict)
+            .where(SamplingVerdict.run_id == run_id)
+            .order_by(SamplingVerdict.family_id, SamplingVerdict.seq.asc())).all()
+        current: dict[str, VerdictEntry] = {}
+        for r in rows:  # ascending seq, so the last write per family wins
+            current[r.family_id] = VerdictEntry(
+                family_id=r.family_id, relevant=r.relevant, actor=r.actor, at=r.at, seq=r.seq)
+        return current
+
+    def _run_view(self, session: Session, run: SamplingRun) -> SamplingRunView:
+        items = session.scalars(
+            select(SamplingRunItem)
+            .where(SamplingRunItem.run_id == run.id)
+            .order_by(SamplingRunItem.draw_index.asc())).all()
+        verdicts = self._current_verdicts(session, run.id)
+        return SamplingRunView(
+            run_id=run.id, matter=run.matter, version_id=run.ranking_version_id,
+            version_no=run.ranking_version_no,
+            last_retained_piece_id=run.last_retained_piece_id,
+            pin_ledger_seq=run.pin_ledger_seq, scope=run.scope, confidence=run.confidence,
+            population_families=run.population_families, population_pieces=run.population_pieces,
+            sample_size=run.sample_size, is_census=run.is_census, seed=run.seed,
+            status=run.status, started_by=run.started_by, started_at=run.started_at,
+            completed_at=run.completed_at, relevant_found=run.relevant_found,
+            count_upper=run.count_upper, prevalence_upper=run.prevalence_upper,
+            drawn=tuple(
+                DrawnFamily(
+                    unit=SamplingUnit(
+                        family_id=i.family_id, proxy_piece_id=i.proxy_piece_id,
+                        member_piece_ids=tuple(i.member_piece_ids.split("\n"))),
+                    draw_index=i.draw_index, verdict=verdicts.get(i.family_id))
+                for i in items))
+
+    def read_sampling_run(
+        self, *, tenant: str, matter: str, scopes: set[str], run_id: str | None = None,
+    ) -> SamplingRunView | None:
+        """One run with its frozen draw and current verdicts — the most recent when ``run_id`` is
+        ``None``. Scope pre-filtered (AD-13); ``None`` when out of scope, absent or no run. Not
+        audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            pinned = [SamplingRun.id == run_id] if run_id is not None else []
+            run = session.scalars(
+                select(SamplingRun)
+                .where(SamplingRun.tenant == tenant, SamplingRun.matter == matter, *pinned)
+                .order_by(SamplingRun.started_at.desc(), SamplingRun.id.desc()).limit(1)).first()
+            if run is None:
+                return None
+            return self._run_view(session, run)
+
+    def list_sampling_runs(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> tuple[SamplingRunView, ...] | None:
+        """Every run of the *matter*, newest first. ``()`` = readable with no run yet; ``None`` =
+        out of scope or absent — the surface must not render the two the same way."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            runs = session.scalars(
+                select(SamplingRun)
+                .where(SamplingRun.tenant == tenant, SamplingRun.matter == matter)
+                .order_by(SamplingRun.started_at.desc(), SamplingRun.id.desc())).all()
+            return tuple(self._run_view(session, r) for r in runs)
+
+    def read_run_freshness(
+        self, *, tenant: str, matter: str, scopes: set[str], run_id: str
+    ) -> tuple[bool, tuple[str, ...]] | None:
+        """``(stamped, changed trigger keys)`` for one run — the observables FR-22's
+        invalidated-in-flight verdict is derived from. The store reports; the Domain decides
+        (:func:`~apx.core.domain.sampling.derive_run_state`). ``None`` when out of scope or
+        absent."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            run = session.scalars(
+                select(SamplingRun).where(
+                    SamplingRun.id == run_id, SamplingRun.tenant == tenant,
+                    SamplingRun.matter == matter)).first()
+            if run is None:
+                return None
+            return self._run_changed_inputs(session, tenant, matter, run)

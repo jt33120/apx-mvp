@@ -62,9 +62,15 @@ class BoundReading:
         the numeric fields could omit it — which is why the surface copies this and nothing else.
         """
         b = self.bound.bound
+        # The denominator is labelled with the unit it was COMPUTED over (Story 5.1): a sampling
+        # run draws near-duplicate families, and calling a family count "pièces" would make the
+        # sentence false about its own denominator. The pièce count is stated beside it, never
+        # substituted into it.
+        held = (f" ({self.bound.piece_count} pièces)"
+                if self.bound.piece_count is not None else "")
         return (
             f"Avec une confiance de {b.confidence:.0%}, au plus {b.count_upper} des "
-            f"{b.population} pièces écartées étaient pertinentes "
+            f"{b.population} {self.bound.unit_fr}{held} étaient pertinentes "
             f"(prévalence ≤ {b.prevalence_upper:.1%}) — "
             f"revue du {self.bound.reviewed_at.date().isoformat()} — {self.status_fr}."
         )

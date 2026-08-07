@@ -15,6 +15,7 @@ from apx.core.domain.freshness import (
     KIND_BOUND,
     KIND_LINE,
     KIND_RANKING,
+    KIND_SAMPLING_RUN,
     TRIGGER_KEYS,
     TRIGGERS,
     FreshnessStamp,
@@ -163,7 +164,8 @@ def test_fresh_is_derived_from_changed_and_cannot_disagree_with_it() -> None:
 def test_every_artefact_kind_assesses_and_an_unknown_one_raises() -> None:
     for kind in ARTEFACT_KINDS:
         assert _assess(kind=kind).kind == kind
-    assert set(ARTEFACT_KINDS) == {KIND_RANKING, KIND_LINE, KIND_BOUND}
+    assert set(ARTEFACT_KINDS) == {
+        KIND_RANKING, KIND_LINE, KIND_BOUND, KIND_SAMPLING_RUN}
     with pytest.raises(ValueError, match="unknown artefact kind"):
         _assess(kind="estimate")
 

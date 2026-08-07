@@ -71,6 +71,13 @@ ENCRYPTED_COLUMNS = [
     ("piece_justification", "id", "evidence_json", "piece_justification.evidence_json"),
     ("justification_rejection", "id", "reason", "justification_rejection.reason"),
     ("justification_rejection", "id", "set_by", "justification_rejection.set_by"),
+    # Story 5.1: the sampling run — the actor who started it, the actor who closed it, and the
+    # reviewer on each verdict (all PII). Single-PK (`id`) on all three tables, so key rotation
+    # addresses them directly. Everything else on these tables is an identity hash or a categorical
+    # value and is deliberately plaintext (see checks/encryption.py's qualified allowlist).
+    ("sampling_run", "id", "started_by", "sampling_run.started_by"),
+    ("sampling_run", "id", "closed_by", "sampling_run.closed_by"),
+    ("sampling_verdict", "id", "actor", "sampling_verdict.actor"),
 ]
 
 

@@ -78,23 +78,45 @@ def _ranked_matter(tmp_path: Path, monkeypatch, *, with_line: bool = True):  # n
     return store, client, pieces
 
 
-def _record_bound(store, client: TestClient) -> str:
-    """Record a real confidence bound over the matter's discard pile, through the product's own
-    act. Returns its artefact id."""
-    reps = store.representatives(MATTER, TENANT, {WALL})
-    store.save_labels(
-        MATTER, TENANT, {WALL},
-        TriageOutcome(tuple(PieceLabel(pid, Label.DISCARD, "écartée") for pid, _ in reps)),
-        "criteria", actor="seed")
-    sample = client.get(
-        f"/api/matters/{MATTER}/recall/sample", params={"n": 2}).json()["sample"]
-    r = client.post(f"/api/matters/{MATTER}/recall/review", json={
-        "verdicts": [{"piece_id": s["piece_id"], "relevant": False} for s in sample],
-        "confidence": 0.95})
+def _ensure_a_discarded_set(store) -> None:  # noqa: ANN001
+    """Give the *matter* a non-empty DERIVED discarded set.
+
+    On this four-pièce corpus the tool's recall-first placement retains everything, so
+    ``derive_triage_sets(...).discarded`` is empty and there is nothing to audit — which is the
+    honest answer (no bound applies), but not what these tests are about. Move the line to the
+    top-ranked pièce through the real priced act."""
+    order = store.read_ranked_order(tenant=TENANT, matter=MATTER, scopes={WALL})
+    top = order[0].piece_id
+    current = store.read_current_line(tenant=TENANT, matter=MATTER, scopes={WALL})
+    if current.last_retained_piece_id == top:
+        return
+    priced = store.price_line_move(
+        tenant=TENANT, matter=MATTER, scopes={WALL}, candidate_last_retained_piece_id=top)
+    move_line(
+        store, tenant=TENANT, matter=MATTER, actor="me.durand", scopes={WALL},
+        last_retained_piece_id=top, expected_seq=current.seq,
+        priced_statement=f"{priced.pieces_to_read_delta:+d} pièces à lire")
+
+
+def _record_bound(store, client: TestClient) -> str:  # noqa: ANN001
+    """Record a real confidence bound through the product's own act — a completed *sampling run*
+    over the DERIVED discarded set (Story 5.1, decision A1). Returns its artefact id, which is the
+    run's own id: a completed run IS the bound."""
+    _ensure_a_discarded_set(store)
+    r = client.post(f"/api/matters/{MATTER}/sampling/runs", json={"sample_size": 1})
     assert r.status_code == 200, r.text
+    run = r.json()
+    for drawn in run["drawn"]:
+        v = client.post(
+            f"/api/matters/{MATTER}/sampling/runs/{run['run_id']}/verdicts",
+            json={"family_id": drawn["unit"]["family_id"], "relevant": False})
+        assert v.status_code == 200, v.text
+    c = client.post(f"/api/matters/{MATTER}/sampling/runs/{run['run_id']}/complete")
+    assert c.status_code == 200, c.text
     bound = client.get(f"/api/matters/{MATTER}/bound")
     assert bound.status_code == 200, bound.text
-    return bound.json()["artefact_id"]
+    assert bound.json()["artefact_id"] == run["run_id"]
+    return run["run_id"]
 
 
 def _freshness(client: TestClient) -> list[dict]:
@@ -269,7 +291,8 @@ def test_every_enumerated_trigger_has_a_test_here(key: str) -> None:
         "scope_identity": "test_a_scope_change_makes_the_artefacts_stale",
         "corpus_count": "test_an_ingestion_into_a_ranked_matter_makes_the_ranking_stale",
         "extraction_digest": "test_a_re_extraction_of_a_piece_makes_the_ranking_stale",
-        "discard_population": "test_a_re_judge_makes_the_bound_stale_and_unexportable",
+        "discard_population": (
+            "test_the_discard_population_observable_is_the_derived_set_not_the_label_pile"),
     }
     assert key in covered, f"trigger {key!r} has no test in this file (FR-58)"
     assert covered[key] in globals()
@@ -552,46 +575,41 @@ def _relabel(store, discarded: list[str]) -> None:
         "criteria", actor="me.durand")
 
 
-def test_a_re_judge_makes_the_bound_stale_and_unexportable(tmp_path: Path, monkeypatch) -> None:
-    """FR-23: a bound is stale when *"the population it was drawn from"* has changed. That
-    population is the discarded pile, and a re-judge moves it while touching no ranking version, no
-    line, no pin and no corpus count. Before this observable existed the bound read *à jour* and
-    exported 200 while speaking about a set that was no longer the set — AD-23's named failure with
-    a different cause."""
-    store, client, pieces = _ranked_matter(tmp_path, monkeypatch)
-    _record_bound(store, client)                     # drawn over ALL pièces, discarded
-    fresh = client.get(f"/api/matters/{MATTER}/bound").json()
-    assert fresh["exportable_as_current"] is True
-    population = fresh["population"]
-
-    _relabel(store, discarded=list(pieces[:2]))      # the pile is a DIFFERENT set now
-    stale = client.get(f"/api/matters/{MATTER}/bound").json()
-    assert stale["population"] == population          # the bound still says what it said
-    assert stale["exportable_as_current"] is False    # …but it no longer says it as current
-    assert "discard_population" in stale["freshness"]["changed"]
-    assert "jeu écarté" in stale["copy_text"]
-    assert client.get(f"/api/matters/{MATTER}/bound/export").status_code == 409
-
-
-def test_a_re_judge_that_keeps_the_count_but_changes_the_set_is_still_stale(
+def test_the_discard_population_observable_is_the_derived_set_not_the_label_pile(
     tmp_path: Path, monkeypatch
 ) -> None:
-    """The observable is a digest, not a count: swapping one pièce out of the pile and another in
-    leaves the cardinality identical while the population is a different set — and a bound is a
-    statement about a set."""
+    """Story 5.1 / decision A1 — the population a bound is drawn over is
+    ``derive_triage_sets(order, line, pins).discarded``, not ``label_record WHERE label='discard'``.
+
+    So a **re-judge** — which rewrites the label pile and touches no ranking version, no line, no
+    pin and no corpus count — must leave the bound alone. Before A1 it marked the bound stale, and
+    that was the wrong referent: the sentence a lawyer says describes the set she saw on screen,
+    which is the line's cut, not Epic 2's relevance verdict."""
     store, client, pieces = _ranked_matter(tmp_path, monkeypatch)
-    _relabel(store, discarded=list(pieces[:2]))
-    sample = client.get(f"/api/matters/{MATTER}/recall/sample", params={"n": 2}).json()["sample"]
-    r = client.post(f"/api/matters/{MATTER}/recall/review", json={
-        "verdicts": [{"piece_id": s["piece_id"], "relevant": False} for s in sample],
-        "confidence": 0.95})
-    assert r.status_code == 200, r.text
+    _record_bound(store, client)
     assert client.get(f"/api/matters/{MATTER}/bound").json()["exportable_as_current"] is True
 
-    _relabel(store, discarded=list(pieces[1:3]))      # same COUNT (2), different SET
-    body = client.get(f"/api/matters/{MATTER}/bound").json()
-    assert body["exportable_as_current"] is False
-    assert "discard_population" in body["freshness"]["changed"]
+    _relabel(store, discarded=list(pieces[:2]))       # the LABEL pile is a different set now
+    still = client.get(f"/api/matters/{MATTER}/bound").json()
+    assert still["exportable_as_current"] is True     # the DERIVED set did not move
+    assert still["freshness"]["changed"] == []
+    assert client.get(f"/api/matters/{MATTER}/bound/export").status_code == 200
+
+
+def test_moving_the_line_moves_the_population_and_says_so_once(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """The other half of the same property: an act that DOES change the derived discarded set
+    invalidates the bound — and names the act, once. ``discard_population`` is subsumed by
+    ``line_seq`` here, because saying *"le jeu écarté a changé"* beside *"un déplacement de la
+    ligne"* would present one act as two."""
+    store, client, pieces = _ranked_matter(tmp_path, monkeypatch)
+    bound_id = _record_bound(store, client)
+    _move(store, 1, avoid="", pieces=pieces)
+    after = {a["artefact_id"]: a for a in _freshness(client)}
+    assert after[bound_id]["changed"] == ["line_seq"]
+    assert "discard_population" not in after[bound_id]["changed"]
+    assert client.get(f"/api/matters/{MATTER}/bound/export").status_code == 409
 
 
 def test_accepting_the_offered_re_rank_discharges_the_worklist_line(

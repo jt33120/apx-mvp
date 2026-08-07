@@ -40,7 +40,6 @@ ENCRYPTED_COLUMNS = [
     ("audit_record", "detail"),
     ("piece_label", "rationale"),
     ("user_account", "mfa_secret"),
-    ("recall_review", "reviewer"),
 ]
 
 
@@ -70,8 +69,10 @@ def seeded(tmp_path):  # noqa: ANN001, ANN201
         TriageOutcome(labels=(PieceLabel("piece-1", Label.DISCARD, f"écarté car {TOKEN}"),)),
         "criteria", "avocat",
     )
-    # a recall review seeds recall_review.reviewer (PII) with the token
-    store.record_recall_review(MATTER, TENANT, {SCOPE}, {"piece-1": False}, f"reviewer {TOKEN}")
+    # Story 5.1 retired record_recall_review; the actor PII that used to land on
+    # recall_review.reviewer now lands on sampling_run.started_by and sampling_verdict.actor,
+    # both EncryptedText. Seeding a run needs a ranked order and a line, which this fixture has
+    # no reason to build — the run's encryption is asserted in tests/adapters/test_sampling.py.
     uid = store.create_user(TENANT, "a@a.test", "password1", "Avocat A", set())
     store.set_mfa_secret(uid, f"TOTPSEED{TOKEN}")
     store.record_auth_event(TENANT, "system:auth", "login_failed", f"email={TOKEN}@x ip=1.2.3.4")

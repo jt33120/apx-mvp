@@ -207,8 +207,9 @@ def _seed_failure(store: SqlStore, matter: str) -> None:
 
 
 def _seed_discards(store: SqlStore, matter: str) -> None:
-    """Label every pièce discarded so the recall draw has a population to sample (Story 2.x). This
-    is ARRANGEMENT, not a probed action — the probed act is POST /api/matters/{m}/recall/review."""
+    """Label every pièce discarded (Story 2.x). Since Story 5.1 this is NOT the population a
+    *sampling run* draws over — that is the Epic-4 derived view (decision A1) — but it is still
+    real arrangement: it gives the label ledger rows the probe must prove nothing destroys."""
     reps = store.representatives(matter, TENANT, {WALL})
     labels = tuple(PieceLabel(pid, Label.DISCARD, "mise à l'écart") for pid, _ in reps)
     store.save_labels(matter, TENANT, {WALL}, TriageOutcome(labels), "criteria", actor="seed")
@@ -278,13 +279,67 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             state["job_id"] = resp.json()["job_id"]
             _run_import(store, resp.json()["job_id"], embedder=FakeEmbedder())
 
-        def _recall_review() -> None:
-            sample = client.get(
-                f"/api/matters/{MATTER}/recall/sample", params={"n": 2}).json()["sample"]
-            verdicts = [{"piece_id": s["piece_id"], "relevant": False} for s in sample]
-            r = client.post(f"/api/matters/{MATTER}/recall/review",
-                            json={"verdicts": verdicts, "confidence": 0.95})
+        # ── Story 5.1: the sampling run over the DERIVED discarded set ──
+        _BOTH = {WALL, WALL2}   # the matter is rescoped late in the probe; hold both walls
+
+        def _cut_the_line_for_sampling() -> None:
+            """ARRANGEMENT: move the line to the TOP-ranked pièce so the derived discarded set is
+            non-empty. On this tiny corpus the tool's own recall-first placement retains
+            everything, and a run over an empty discarded set is correctly refused (no bound
+            applies — never a flattering 0%)."""
+            order = store.read_ranked_order(tenant=TENANT, matter=MATTER, scopes=_BOTH)
+            top = order[0].piece_id
+            current = store.read_current_line(tenant=TENANT, matter=MATTER, scopes=_BOTH)
+            assert current is not None
+            if current.last_retained_piece_id == top:
+                return
+            priced = price_line_move(
+                store, tenant=TENANT, matter=MATTER, scopes=_BOTH,
+                candidate_last_retained_piece_id=top)
+            move_line(
+                store, tenant=TENANT, matter=MATTER, actor="me.durand", scopes=_BOTH,
+                last_retained_piece_id=top, expected_seq=current.seq,
+                priced_statement=str(priced))
+
+        def _start_run() -> None:
+            r = client.post(f"/api/matters/{MATTER}/sampling/runs", json={"sample_size": 2})
             assert r.status_code == 200, r.text
+            state["run"] = r.json()
+
+        def _judge_one() -> None:
+            run = state["run"]
+            family = run["drawn"][0]["unit"]["family_id"]   # type: ignore[index]
+            r = client.post(
+                f"/api/matters/{MATTER}/sampling/runs/{run['run_id']}/verdicts",  # type: ignore[index]
+                json={"family_id": family, "relevant": False})
+            assert r.status_code == 200, r.text
+            state["run"] = r.json()
+
+        def _complete_run() -> None:
+            run = state["run"]
+            for drawn in run["drawn"]:                      # type: ignore[index]
+                if drawn["relevant"] is None:
+                    v = client.post(
+                        f"/api/matters/{MATTER}/sampling/runs/{run['run_id']}/verdicts",  # type: ignore[index]
+                        json={"family_id": drawn["unit"]["family_id"], "relevant": False})
+                    assert v.status_code == 200, v.text
+            r = client.post(
+                f"/api/matters/{MATTER}/sampling/runs/{run['run_id']}/complete")  # type: ignore[index]
+            assert r.status_code == 200, r.text
+
+        def _abandon_run() -> None:
+            """Start a run and give it up. Its draw and verdicts stay readable forever (AD-7) —
+            which is exactly the property this probe measures."""
+            r = client.post(f"/api/matters/{MATTER}/sampling/runs", json={"sample_size": 1})
+            assert r.status_code == 200, r.text
+            run_id = r.json()["run_id"]
+            a = client.post(f"/api/matters/{MATTER}/sampling/runs/{run_id}/abandon")
+            assert a.status_code == 200, a.text
+
+        def _fresh_bound() -> None:
+            """A completed run over the CURRENT population — the bound the export step needs."""
+            _start_run()
+            _complete_run()
 
         def _create_user() -> None:
             r = client.post("/api/admin/users", json={
@@ -344,8 +399,14 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             _Step(("read-triage",), lambda: _get(f"/api/matters/{MATTER}/triage")),
             _Step(("read-labels",), lambda: _get(f"/api/matters/{MATTER}/labels")),
             _Step(("read-inventory",), lambda: _get(f"/api/matters/{MATTER}/inventory")),
-            _Step(("draw-recall-sample",),
-                  lambda: _get(f"/api/matters/{MATTER}/recall/sample", n=2)),
+            # Story 5.1 — the sampling run's reads. Pure: they render the DERIVED
+            # invalidated-in-flight verdict and write nothing.
+            _Step(("sampling-sizing",),
+                  lambda: _get(f"/api/matters/{MATTER}/sampling/sizing", target=0.2)),
+            _Step(("read-sampling-run",),
+                  lambda: _get(f"/api/matters/{MATTER}/sampling/runs/current")),
+            _Step(("list-sampling-runs",),
+                  lambda: _get(f"/api/matters/{MATTER}/sampling/runs")),
             _Step(("read-piece-meta",), lambda: _get(f"/api/pieces/{piece}")),
             # a text pièce carries no OCR layer: the honest non-disclosing 404 IS the served path
             _Step(("read-piece-layout",),
@@ -376,7 +437,7 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             arrangement. The proof that the export really happened is the 200 assertion, not the
             census: had it refused, this step would fail loudly here rather than pass because the
             arrangement happened to write."""
-            _recall_review()
+            _fresh_bound()
             _get(f"/api/matters/{MATTER}/bound/export")
         def _as_unscoped(path: str) -> None:
             """Drive a SUGGESTIVE endpoint. Its vector query is Postgres-only (``<=>``), so on this
@@ -418,10 +479,19 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
                   lambda: _delete(f"/api/matters/{MATTER}/case-theory")),
             _Step(("judge-matter",),
                   lambda: _post(f"/api/matters/{MATTER}/judge", {"question": "bail"})),
-            _Step(("record-recall-review",), _recall_review),
             _Step(("rank.produce_ranking",), _rank),
             _Step(("line.place_line",), _place),
             _Step(("line.move_line",), _move),
+            # Story 5.1 — the sampling run. AFTER the order and the line exist: its population is
+            # derive_triage_sets(order, line, pins).discarded, so there is nothing to draw before.
+            # The line cut is its OWN step, declaring no action: arrangement inside a probed step
+            # would let the arrangement's write satisfy the step's changes_state assertion, and the
+            # probe would be measuring itself.
+            _Step((), _cut_the_line_for_sampling),
+            _Step(("start-sampling-run", "sampling.start_sampling_run"), _start_run),
+            _Step(("record-sampling-verdict", "sampling.record_sampling_verdict"), _judge_one),
+            _Step(("complete-sampling-run", "sampling.complete_sampling_run"), _complete_run),
+            _Step(("abandon-sampling-run", "sampling.abandon_sampling_run"), _abandon_run),
             _Step(("pin.pin_piece",), lambda: pin_piece(
                 store, tenant=TENANT, matter=MATTER, actor="me.durand", piece_id=pieces[-1],
                 side=PinSide.RETAIN, reason="pièce décisive", scopes={WALL})),

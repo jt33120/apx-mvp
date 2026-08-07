@@ -23,6 +23,7 @@ from apx.core.domain.freshness import (
     KIND_BOUND,
     KIND_LINE,
     KIND_RANKING,
+    KIND_SAMPLING_RUN,
     Freshness,
 )
 
@@ -36,6 +37,12 @@ _OFFER_BY_KIND = {
     KIND_RANKING: OFFER_RERANK,
     KIND_LINE: OFFER_REPLACE_LINE,
     KIND_BOUND: OFFER_RESAMPLE,
+    # A *sampling run* (Story 5.1) offers the same act whether it is an OPEN run whose population
+    # moved under it (FR-22's "invalidated in flight") or a COMPLETED one whose bound has gone
+    # stale: draw again. One offer, because "abandon and redraw" and "re-sample" are the same
+    # gesture to the lawyer — and because two offers for one kind would let a surface pick the
+    # wrong one. The run's own reading carries ``invalidated_in_flight`` for the immediate telling.
+    KIND_SAMPLING_RUN: OFFER_RESAMPLE,
 }
 
 # The French sentence each offer says on the surface. Verb-first, the lawyer's voice (DESIGN.md).

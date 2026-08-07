@@ -48,7 +48,12 @@ from typing import Any
 KIND_RANKING = "ranking"
 KIND_LINE = "line"
 KIND_BOUND = "bound"
-ARTEFACT_KINDS: tuple[str, ...] = (KIND_RANKING, KIND_LINE, KIND_BOUND)
+# Story 5.1: a *sampling run* is a stamped derived artefact too, and FR-22's
+# "invalidated-in-flight" is precisely this comparison read on a run that is still open. The kind
+# is separate from ``bound`` because a run has a lifetime BEFORE it has a bound — the window in
+# which the population can move under an hour of verdicts is exactly what FR-22 is about.
+KIND_SAMPLING_RUN = "sampling_run"
+ARTEFACT_KINDS: tuple[str, ...] = (KIND_RANKING, KIND_LINE, KIND_BOUND, KIND_SAMPLING_RUN)
 
 
 @dataclass(frozen=True)
@@ -80,10 +85,15 @@ TRIGGERS: tuple[Trigger, ...] = (
     Trigger("corpus_count", "une importation dans le dossier", "FR-58"),
     Trigger("extraction_digest", "une ré-extraction d'une pièce", "AD-40"),
     # FR-23's clause, which AD-23's seven-plus-one does not name separately: a *confidence bound*
-    # is stale when "the population it was drawn from" has changed. That population is the
-    # *discarded pile* the draw is taken over, and it moves on a re-judge — an act that touches no
-    # ranking version, no line, no pin, no corpus count. Without this observable the north-star
-    # sentence reads "à jour" while speaking about a set that is no longer the set.
+    # is stale when "the population it was drawn from" has changed. Story 5.1 (planning decision
+    # A1) fixed WHICH population that is: the Epic-4 DERIVED discarded view, never the Story-2.x
+    # label pile. Formally this observable is now redundant — the derived set is a function of
+    # ``ranking_version_no`` + ``line_seq`` + ``pin_ledger_seq``, all three already watched. It is
+    # kept because inferring "no input we watch moved, therefore the population is unchanged" is a
+    # comparison against a NEARLY-right referent, and it fails toward *falsely fresh* the day
+    # someone adds a fourth input to the derivation. A direct digest is the EXACT referent, costs
+    # one query the stamp already makes, and cannot be defeated by a future change to the
+    # derivation. Redundant evidence about the one artefact quoted to a judge is not waste.
     Trigger("discard_population", "une modification du jeu écarté", "FR-23"),
 )
 
@@ -128,11 +138,13 @@ class FreshnessStamp:
       ``piece_id`` byte order. Both are ASCII hex, so the digest is collation-independent — the same
       reason AD-23's tie-break is computed over the *pièce* identity hash and never over collated
       text.
-    - ``discard_population`` — a hash over the identities of the *pièces* currently carrying the
-      ``discard`` relevance verdict, in ``piece_id`` byte order: **the population a *confidence
-      bound* is drawn over** (FR-23). A digest, not a count, because a re-judge that moves one
-      *pièce* out of the pile and another in leaves the count identical while the population is a
-      different set — and a bound is a statement about a set, not about a cardinality.
+    - ``discard_population`` — a hash over the identities of the *pièces* in the **derived
+      discarded set** (``derive_triage_sets(order, line, pins).discarded``) for the version being
+      stamped, in ``piece_id`` byte order: **the population a *confidence bound* and a *sampling
+      run* are drawn over** (FR-23/FR-22, and the population fixed by planning decision A1). A
+      digest, not a count, because a change that moves one *pièce* out of the set and another in
+      leaves the count identical while the population is a different set — and a bound is a
+      statement about a set, not about a cardinality.
 
     ``corpus_count`` and ``extraction_digest`` both move on an ingestion, and collapsing them would
     be cheaper. They stay apart because FR-58 requires the assessment to **name which input
@@ -258,6 +270,13 @@ INPUTS_BY_KIND: Mapping[str, frozenset[str]] = {
     # the cascade produces the order, and the label ledger is downstream of it (asserted by
     # ``label_not_a_ranking_input``).
     KIND_BOUND: _ALL,
+    # A *sampling run* (Story 5.1) depends on every observable for the same reason the bound does,
+    # and one more: its population IS the derived discarded view, so a pin — which moves exactly one
+    # pièce across the line (FR-43) — changes the very set it drew from. FR-22's list ("ingestion,
+    # re-ranking or a line move") is a floor, not a ceiling, and under-invalidating a run means an
+    # hour of verdicts silently answering the wrong question. The structural check asserts this
+    # entry is the complete enumeration.
+    KIND_SAMPLING_RUN: _ALL,
 }
 
 
@@ -284,24 +303,36 @@ def compare_stamps(
     return _subsume(changed, keys)
 
 
-# One observable implies another, so reporting both would name an act that never happened. The
-# extraction digest covers EVERY pièce's text identity, so an ingestion moves it too — but nobody
-# re-read anything. Naming the implied one is a false statement to a lawyer, and this product's
-# whole argument is that it does not make those. Never the other way round: an implication only
-# ever REMOVES a redundant name from a set that is already non-empty, so no staleness is hidden.
-_IMPLIED_BY: Mapping[str, str] = {"extraction_digest": "corpus_count"}
+# One observable implies another, so reporting both would name an act that never happened. Naming
+# the implied one is a false statement to a lawyer, and this product's whole argument is that it
+# does not make those. Never the other way round: an implication only ever REMOVES a redundant name
+# from a set that is already non-empty, so no staleness is hidden.
+#
+# - ``extraction_digest`` covers EVERY pièce's text identity, so an ingestion moves it too — but
+#   nobody re-read anything.
+# - ``discard_population`` is a digest over the DERIVED discarded set (Story 5.1), which is a
+#   function of the ranked order, **the line** and the *pins*. Any of those three moving moves it,
+#   and saying *"le jeu écarté a changé"* beside *"un déplacement de la ligne"* would present one
+#   act as two. It is kept as an observable precisely because it is the EXACT referent — it fires
+#   on its own the day the derivation gains an input nobody added a trigger for.
+_IMPLIED_BY: Mapping[str, tuple[str, ...]] = {
+    "extraction_digest": ("corpus_count",),
+    "discard_population": ("ranking_version_no", "line_seq", "pin_ledger_seq"),
+}
 
 
 def _subsume(changed: tuple[str, ...], keys: tuple[str, ...]) -> tuple[str, ...]:
     """Drop an observable whose change is fully explained by another that also changed.
 
-    Applied only when BOTH keys are inputs of the artefact being assessed: if the implying
-    observable is not one of its inputs, the implied one is the only evidence there is and must be
-    reported."""
+    An implying observable counts only when it is itself an input of the artefact being assessed: if
+    it is not, the implied observable is the only evidence there is and must be reported. Several
+    observables may imply the same one (the derived discarded set has three causes); ANY of them
+    firing is enough to explain it."""
     fired = set(changed)
     return tuple(
         k for k in changed
-        if not (k in _IMPLIED_BY and _IMPLIED_BY[k] in fired and _IMPLIED_BY[k] in keys))
+        if not any(
+            implier in fired and implier in keys for implier in _IMPLIED_BY.get(k, ())))
 
 
 def assess_freshness(
@@ -327,9 +358,13 @@ def config_digest(values: Mapping[str, Any]) -> str:
 
 
 def population_digest(piece_ids: Iterable[str]) -> str:
-    """The ``discard_population`` observable: a hash over the *pièce* identities in the discarded
-    pile, supplied **ordered by ``piece_id``** (the store orders in SQL). ASCII hex, so byte order
-    is codepoint order and the digest is collation-independent."""
+    """The ``discard_population`` observable: a hash over the *pièce* identities in the **derived**
+    discarded set (Story 5.1 / decision A1 — never the label pile), supplied **sorted by
+    ``piece_id``**. The caller sorts because the set is derived in Python from the ranked order, not
+    read back from SQL: the digest must be a function of the *membership*, not of the rank order the
+    derivation happened to produce, or a re-rank that discarded exactly the same *pièces* in a
+    different order would read as a changed population. ASCII hex, so byte order is codepoint order
+    and the digest is collation-independent."""
     digest = hashlib.sha256()
     for piece_id in piece_ids:
         digest.update(piece_id.encode("utf-8"))

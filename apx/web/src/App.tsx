@@ -3,9 +3,10 @@ import { Link } from "react-router";
 import {
   ApiError, changePassword, createUser, exhaustiveExportUrl, grantScope, importStatus, ingestUpload,
   judgeMatter, listMatters, listUsers, login, logout, me, readAudit, readLabels, readTriage,
-  recallReview, recallSample, revokeScope, searchExhaustive, searchSuggestive, suggestiveExportUrl,
+  abandonSamplingRun, completeSamplingRun, currentSamplingRun, recordSamplingVerdict,
+  revokeScope, searchExhaustive, searchSuggestive, startSamplingRun, suggestiveExportUrl,
   type AdminUser, type AuditTrail, type ExhaustiveResult, type Identity, type ImportProgress,
-  type ImportStarted, type Labels, type MatterSummary, type RecallBound, type RecallSample,
+  type ImportStarted, type Labels, type MatterSummary, type SamplingRun,
   type SuggestiveResult, type Triage,
 } from "./api";
 
@@ -787,9 +788,12 @@ function MatterRow({ m }: { m: MatterSummary }) {
           {triage && <TriageView t={triage} />}
           <Judging question={question} setQuestion={setQuestion} judging={judging}
             onJudge={judge} labels={labels} />
-          {labels && labels.discarded > 0 && (
-            <RecallPanel matter={m.matter} discarded={labels.discarded} />
-          )}
+          {/* Deliberately NOT gated on labels.discarded. The population a run draws over is the
+              DERIVED discarded set — the ranked order cut by la ligne and overridden by the
+              épingles — never the Story-2.x label pile (decision A1). Gating on the pile would
+              hide the audit exactly when the two disagree, which is the case the decision is
+              about. The panel renders "aucun tirage" as its own state. */}
+          <SamplingPanel matter={m.matter} />
           {trail && <Journal trail={trail} />}
         </div>
       )}
@@ -857,75 +861,131 @@ function Judging({ question, setQuestion, judging, onJudge, labels }: {
   );
 }
 
-/** The recall guarantee, from the UI: sample the discard pile, mark any wrongly
- *  discarded, and get the provable bound ("at most X% discarded in error, at 95%"). */
-function RecallPanel({ matter, discarded }: { matter: string; discarded: number }) {
-  const [sample, setSample] = useState<RecallSample | null>(null);
-  const [marks, setMarks] = useState<Record<string, boolean>>({});
-  const [bound, setBound] = useState<RecallBound | null>(null);
+/** The *sampling run* (Story 5.1, FR-22): draw a random sample of the DERIVED discarded set —
+ *  the pièces below **la ligne**, not the Story-2.x label pile — judge each drawn family, and
+ *  close the run to get the bound.
+ *
+ *  Two things are deliberately NOT decided here. The population is the server's
+ *  `derive_triage_sets(order, line, pins).discarded` (decision A1), and validity is the server's
+ *  `invalidated_in_flight` — derived from the run's freshness stamp. A client that computed either
+ *  could carry on judging against a population that had moved, which is the exact failure FR-22
+ *  exists to prevent. */
+function SamplingPanel({ matter }: { matter: string }) {
+  const [run, setRun] = useState<SamplingRun | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  async function draw() {
+  useEffect(() => {
+    let live = true;
+    currentSamplingRun(matter)
+      .then((r) => { if (live) { setRun(r); setLoaded(true); } })
+      .catch((e) => { if (live) { setErr(e instanceof Error ? e.message : String(e)); setLoaded(true); } });
+    return () => { live = false; };
+  }, [matter]);
+
+  async function act<T>(fn: () => Promise<T>, apply: (v: T) => void) {
     setBusy(true);
     setErr(null);
-    setBound(null);
     try {
-      setSample(await recallSample(matter, Math.min(30, discarded)));
-      setMarks({});
+      apply(await fn());
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
+      // a refusal (409 invalidated / closed) is authoritative — re-read the server's verdict
+      currentSamplingRun(matter).then(setRun).catch(() => undefined);
     } finally {
       setBusy(false);
     }
   }
 
-  async function compute() {
-    if (!sample) return;
-    setBusy(true);
-    setErr(null);
-    try {
-      const verdicts = sample.sample.map((s) => ({ piece_id: s.piece_id, relevant: !!marks[s.piece_id] }));
-      setBound(await recallReview(matter, verdicts));
-    } catch (e) {
-      setErr(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
-  }
+  const draw = () => act(() => startSamplingRun(matter, { sample_size: 20 }), setRun);
+  const judge = (familyId: string, relevant: boolean) =>
+    act(() => recordSamplingVerdict(matter, run!.run_id, familyId, relevant), setRun);
+  const close = () => act(() => completeSamplingRun(matter, run!.run_id), setRun);
+  const abandon = () => act(() => abandonSamplingRun(matter, run!.run_id), setRun);
+
+  // `status` is what a person did to the run; `state` adds the DERIVED invalidation. The buttons
+  // gate on `status`, because an invalidated run must still be abandonable — the banner tells the
+  // lawyer to abandon and redraw, so hiding the button would leave her with nowhere to go.
+  const stillOpen = run !== null && run.status === "open";
+  const invalidated = run !== null && run.invalidated_in_flight;
 
   return (
     <div className="apx-block" style={{ borderTop: "1px dashed var(--apx-line)", paddingTop: ".7rem" }}>
       <button className="apx-btn-sm apx-ghost" onClick={draw} disabled={busy}>
-        Vérifier le rappel ({discarded} écartées)
+        {run === null ? "Tirer un échantillon des écartées" : "Nouveau tirage"}
       </button>
       {err && <p className="apx-error" role="alert">{err}</p>}
-      {sample && (
-        <div style={{ marginTop: ".5rem" }}>
-          <p className="apx-hint" style={{ margin: "0 0 .3rem" }}>
-            Cochez les pièces écartées <strong>à tort</strong> (population {sample.population},
-            échantillon {sample.sample.length}) :
-          </p>
-          {sample.sample.map((s) => (
-            <label key={s.piece_id}
-              style={{ display: "block", fontSize: ".85rem", marginBottom: ".2rem", cursor: "pointer" }}>
-              <input type="checkbox" checked={!!marks[s.piece_id]}
-                onChange={(e) => setMarks((m) => ({ ...m, [s.piece_id]: e.target.checked }))} />{" "}
-              <span className="apx-mono">{s.provenance}</span>{" "}
-              <span style={{ color: "var(--apx-muted)" }}>— {s.excerpt}</span>
-            </label>
-          ))}
-          <button className="apx-btn-sm" onClick={compute} disabled={busy} style={{ marginTop: ".3rem" }}>
-            {busy ? "Calcul…" : "Calculer la garantie"}
-          </button>
-        </div>
-      )}
-      {bound && (
-        <p className="apx-seal apx-seal--ok" style={{ marginTop: ".5rem" }}>
-          🛡 Relu {bound.sample_size}/{bound.population} · {bound.relevant_found} à tort → au plus{" "}
-          <strong>{bound.count_upper}</strong> pièces ({(bound.prevalence_upper * 100).toFixed(1)}%)
-          écartées à tort, à {Math.round(bound.confidence * 100)}%.
+      {loaded && run === null && !err && (
+        <p className="apx-hint" style={{ margin: ".4rem 0 0" }}>
+          Aucun tirage. Le tirage porte sur les pièces <strong>sous la ligne</strong> ; il faut donc
+          un classement et une ligne posée.
         </p>
+      )}
+      {run && (
+        <div style={{ marginTop: ".5rem" }}>
+          {/* Every surface names its ranking version (AD-23 — no unqualified reference). */}
+          <p className="apx-hint" style={{ margin: "0 0 .3rem" }}>
+            Classement v{run.version_no} · {run.sample_size} famille(s) tirée(s) sur{" "}
+            {run.population_families} ({run.population_pieces} pièces écartées)
+            {run.is_census && <strong> · recensement</strong>}
+          </p>
+          {invalidated && (
+            <p className="apx-stale" role="alert">
+              ⚠ {run.state_fr}. Les verdicts déjà saisis restent consultables ; il faut abandonner
+              ce tirage et en refaire un.
+            </p>
+          )}
+          {run.drawn.map((d) => (
+            <div key={d.unit.family_id}
+              style={{ display: "flex", gap: ".4rem", alignItems: "center", marginBottom: ".2rem", fontSize: ".85rem" }}>
+              <span className="apx-mono" style={{ flex: 1 }}>{d.unit.proxy_piece_id.slice(0, 12)}</span>
+              {d.unit.member_piece_ids.length > 1 && (
+                <span className="apx-chip apx-chip--review">
+                  {d.unit.member_piece_ids.length} quasi-doublons
+                </span>
+              )}
+              {d.relevant === null ? (
+                <>
+                  <button className="apx-btn-sm apx-ghost"
+                    disabled={busy || !stillOpen || invalidated}
+                    onClick={() => judge(d.unit.family_id, false)}>Non pertinente</button>
+                  <button className="apx-btn-sm" disabled={busy || !stillOpen || invalidated}
+                    onClick={() => judge(d.unit.family_id, true)}>Pertinente</button>
+                </>
+              ) : (
+                <span className={d.relevant ? "apx-chip apx-chip--kept" : "apx-chip"}>
+                  {d.relevant ? "pertinente" : "non pertinente"}
+                </span>
+              )}
+            </div>
+          ))}
+          {stillOpen && (
+            <div style={{ display: "flex", gap: ".4rem", marginTop: ".4rem" }}>
+              <button className="apx-btn-sm" onClick={close}
+                disabled={busy || invalidated || run.verdicts_recorded < run.sample_size}>
+                Clore le tirage
+              </button>
+              <button className="apx-btn-sm apx-ghost" onClick={abandon} disabled={busy}>
+                Abandonner
+              </button>
+            </div>
+          )}
+          {/* A census states a FACT and never a percentage; a sample states a bound. */}
+          {run.census_fr ? (
+            <p className="apx-seal apx-seal--ok" style={{ marginTop: ".5rem" }}>🛡 {run.census_fr}</p>
+          ) : run.status === "completed" ? (
+            <p className="apx-seal apx-seal--ok" style={{ marginTop: ".5rem" }}>
+              🛡 {run.sample_size}/{run.population_families} familles relues ·{" "}
+              {run.relevant_found} pertinente(s) → au plus <strong>{run.count_upper}</strong>{" "}
+              ({((run.prevalence_upper ?? 0) * 100).toFixed(1)}%) à{" "}
+              {Math.round(run.confidence * 100)}%.
+            </p>
+          ) : null}
+          {run.status === "abandoned" && (
+            <p className="apx-hint" style={{ marginTop: ".5rem" }}>{run.state_fr}</p>
+          )}
+        </div>
       )}
     </div>
   );

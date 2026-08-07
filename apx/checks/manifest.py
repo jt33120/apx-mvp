@@ -49,6 +49,7 @@ from apx.checks import (
     line_placement_ownership,
     line_projection_not_a_bound,
     line_stored_by_piece_identity,
+    no_legacy_bound,
     no_truncation,
     originals_encrypted,
     payload_schema,
@@ -61,6 +62,8 @@ from apx.checks import (
     read_path,
     register_ownership,
     renders_sanitized,
+    sampling_freeze,
+    sampling_population,
     scope_admin,
     secrets,
     staleness_triggers,
@@ -563,6 +566,24 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "ArtefactStamp constructions outside the store adapter and every UPDATE/DELETE idiom "
        "against artefact_stamp — rewriting a recorded stamp would make a stale artefact read "
        "fresh (Story 4.13)"),
+    # ── story 5.1: the sampling run — the population it draws over, the freeze that makes a seed
+    # insufficient, and the legacy bound writer that cannot come back ────────────────────────────
+    _p("sampling-population-derived", "FR-22", "AD-39",
+       "the sampling population is the derived discarded set",
+       sampling_population.sampling_population_is_the_derived_view,
+       "the sampling-run functions in the store adapter — the draw and the discard_population "
+       "observable must both go through derive_triage_sets, and none of them may read the "
+       "Story-2.x label pile (Story 5.1, decision A1)"),
+    _p("sampling-freeze-identifiers", "FR-22", "AD-23",
+       "a sampling run freezes identifiers, not a seed",
+       sampling_freeze.a_sampling_run_freezes_its_identifiers,
+       "SamplingRun's five freeze columns and SamplingRunItem's identifier columns in models.py — "
+       "FR-22 says a seed alone is insufficient, so the explicit identifier list is a shape "
+       "(Story 5.1)"),
+    _p("no-new-legacy-bound", "FR-23", "AD-7", "no new legacy bound is written",
+       no_legacy_bound.no_new_legacy_bound_is_written,
+       "RecallReview constructions across apx/** — the label-pile bound is readable history, "
+       "never a second live writer over a second population (Story 5.1)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

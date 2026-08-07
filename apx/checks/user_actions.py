@@ -212,8 +212,10 @@ USER_ACTIONS: tuple[UserAction, ...] = (
     _http("POST", "/api/matters/{matter}/judge", "judge-matter",
           "upserts piece_label rows (session.merge) atomically with one audit entry — a re-judge "
           "overwrites a value, never removes a row"),
-    _http("POST", "/api/matters/{matter}/recall/review", "record-recall-review",
-          "inserts recall_review rows and returns the bound"),
+    # RETIRED in Story 5.1 (decision A1): POST /recall/review and GET /recall/sample drew from
+    # and bounded the Story-2.x LABEL PILE. Epic 5's discarded set is the Epic-4 derived view, so
+    # both are superseded by the sampling-run routes below. Their recall_review rows stay readable
+    # forever (AD-7) — this registry describes actions that EXIST, and these no longer do.
 
     # ── Story 4.10: the triage table. Note what is NOT here — no route sets a côté, a rank or a
     # confidence: those are derived views (AD-39/AD-19) and the table only renders them. ──
@@ -270,8 +272,33 @@ USER_ACTIONS: tuple[UserAction, ...] = (
           "AUDITED on serve when it succeeds — an export of the bound is a recorded egress act "
           "(FR-53/FR-58). A STALE bound is refused 409 and writes nothing: the refusal is not an "
           "export", changes_state=True),
-    _read("/api/matters/{matter}/recall/sample", "draw-recall-sample",
-          "draws a random sample of the discard pile; the draw itself persists nothing"),
+    # ── Story 5.1: the sampling run. The population is the Epic-4 DERIVED discarded view, so a
+    # run records the ranking version and the position of the line — FR-22's freeze. ──
+    _read("/api/matters/{matter}/sampling/sizing", "sampling-sizing",
+          "how many families reach a target bound; a pure preview that writes nothing, audits "
+          "nothing and starts nothing"),
+    _read("/api/matters/{matter}/sampling/runs/current", "read-sampling-run",
+          "one run with its frozen draw and the DERIVED verdict on its population; a read"),
+    _read("/api/matters/{matter}/sampling/runs", "list-sampling-runs",
+          "every run of the matter including abandoned ones, with their verdicts (AD-7); a read"),
+    _http("POST", "/api/matters/{matter}/sampling/runs", "start-sampling-run",
+          "inserts one sampling_run + its sampling_run_item rows + one artefact_stamp + one "
+          "audit_record entry, in one transaction (AD-22) — the draw and its freeze cannot come "
+          "apart"),
+    _http("POST", "/api/matters/{matter}/sampling/runs/{run_id}/verdicts",
+          "record-sampling-verdict",
+          "appends one sampling_verdict row + one audit entry; a correction is a NEW row with a "
+          "greater seq, never an edit (FR-24)"),
+    _http("POST", "/api/matters/{matter}/sampling/runs/{run_id}/complete", "complete-sampling-run",
+          "updates the run's status/tally/bound in place and appends one audit entry — no row is "
+          "removed, and the drawn items and verdicts are untouched"),
+    _http("POST", "/api/matters/{matter}/sampling/runs/{run_id}/abandon", "abandon-sampling-run",
+          "flips the run's status to abandoned and appends one audit entry. Reads as giving up an "
+          "hour of verdicts, so it declares itself: the draw and EVERY verdict stay readable "
+          "forever (AD-7)",
+          reads_as_deletion=True,
+          reversal="start a new run — the abandoned one keeps its frozen identifier list and its "
+                   "verdicts, and both stay readable through GET /sampling/runs"),
     _read("/api/pieces/{piece_id}", "read-piece-meta", "viewer metadata; a read"),
     _read("/api/pieces/{piece_id}/layout", "read-piece-layout", "the stored OCR layout; a read"),
     _read("/api/search", "search-corpus", "the combined search surface; not itself audited"),
@@ -384,6 +411,29 @@ USER_ACTIONS: tuple[UserAction, ...] = (
           changes_state=False),
     _seam("read.freshness.read_bound",
           "the current confidence bound plus the verdict on it; a read", changes_state=False),
+    # Story 5.1 — the sampling run's owning seams (AD-37). The four acts write; the two reads do
+    # not, and nothing here resolves an invalidation: FR-22 resolves it only by a human redraw.
+    _seam("sampling.size_for_target_bound",
+          "sizes a draw against a target bound; a pure preview over the port, writes nothing",
+          changes_state=False),
+    _seam("sampling.start_sampling_run",
+          "the owning seam for the draw: one sampling_run, its items, its stamp and one audit "
+          "entry in one transaction", changes_state=True),
+    _seam("sampling.record_sampling_verdict",
+          "appends one sampling_verdict row and one audit entry; refuses an invalidated or closed "
+          "run rather than recording against a population that moved", changes_state=True),
+    _seam("sampling.complete_sampling_run",
+          "tallies, bounds over the unit drawn and audits — atomically; refuses a run that is not "
+          "fully judged (an unjudged family is not a verdict of not-relevant, AD-19)",
+          changes_state=True),
+    _seam("sampling.abandon_sampling_run",
+          "flips the run to abandoned and audits; the draw and the verdicts stay readable (AD-7)",
+          changes_state=True),
+    _seam("read.sampling.read_sampling_run",
+          "one run plus the DERIVED invalidated-in-flight verdict; a read that resolves nothing",
+          changes_state=False),
+    _seam("read.sampling.read_sampling_runs",
+          "the matter's run history, newest first; a read", changes_state=False),
 )
 
 

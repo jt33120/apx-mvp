@@ -36,11 +36,35 @@ export type Identity = { actor: string; tenant: string; scopes: string[]; is_adm
 export type AdminUser = {
   id: string; email: string; display_name: string; is_admin: boolean; scopes: string[];
 };
-export type SampledDiscard = { piece_id: string; provenance: string; excerpt: string };
-export type RecallSample = { population: number; sample: SampledDiscard[] };
-export type RecallBound = {
-  population: number; sample_size: number; relevant_found: number;
-  confidence: number; count_upper: number; prevalence_upper: number;
+// ── Story 5.1 — the sampling run over the DERIVED discarded set (FR-22) ────────────────────
+// The population is derive_triage_sets(order, line, pins).discarded, NEVER the Story-2.x label
+// pile (decision A1). Everything the client renders about validity comes from the SERVER: `state`,
+// `invalidated_in_flight`, `state_fr` and `census_fr` are derived server-side from the run's
+// freshness stamp, so a client cannot decide a run is still good.
+export type SamplingUnit = {
+  family_id: string; proxy_piece_id: string; member_piece_ids: string[];
+};
+export type DrawnFamily = {
+  unit: SamplingUnit; draw_index: number; relevant: boolean | null;
+  verdict_by: string | null; verdict_at: string | null; verdict_seq: number | null;
+};
+export type SamplingRun = {
+  run_id: string;
+  version_id: string; version_no: number; last_retained_piece_id: string;
+  pin_ledger_seq: number; scope: string;
+  confidence: number; population_families: number; population_pieces: number;
+  sample_size: number; is_census: boolean;
+  status: string; state: string; invalidated_in_flight: boolean;
+  changed: string[]; changed_fr: string[]; state_fr: string; census_fr: string | null;
+  started_by: string; started_at: string; completed_at: string | null;
+  verdicts_recorded: number;
+  relevant_found: number | null; count_upper: number | null; prevalence_upper: number | null;
+  drawn: DrawnFamily[];
+};
+export type Sizing = {
+  population: number; target_prevalence: number; confidence: number;
+  size: number | null; is_census: boolean; achievable_prevalence_upper: number;
+  reason_fr: string;
 };
 
 // The session cookie (owned auth) carries tenant + scopes; the client never sends them.
@@ -222,22 +246,72 @@ export function exhaustiveExportUrl(q: string): string {
   return `/api/search/exhaustive/export?${new URLSearchParams({ q })}`;
 }
 
-// Draw a random sample of a matter's discard pile to review (the recall guarantee).
-export async function recallSample(matter: string, n = 30): Promise<RecallSample> {
-  const params = new URLSearchParams({ n: String(n) });
-  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/recall/sample?${params}`);
+// ── the sampling run (Story 5.1, FR-22) ────────────────────────────────────────────────────
+// A 404 here is the honest "nothing to audit / no draw yet" state, NOT an error to hide: the
+// surface must render it as its own state rather than as an empty run.
+const runsBase = (matter: string) => `/api/matters/${encodeURIComponent(matter)}/sampling/runs`;
+
+export async function samplingSizing(
+  matter: string, target: number, maxSize?: number,
+): Promise<Sizing> {
+  const params = new URLSearchParams({ target: String(target) });
+  if (maxSize !== undefined) params.set("max_size", String(maxSize));
+  const res = await fetch(
+    `/api/matters/${encodeURIComponent(matter)}/sampling/sizing?${params}`);
   if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }
 
-// Record the reviewed sample and get the recall bound (persisted + audited server-side).
-export async function recallReview(
-  matter: string, verdicts: { piece_id: string; relevant: boolean }[], confidence = 0.95,
-): Promise<RecallBound> {
-  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/recall/review`, {
+// Draw. The server freezes the ranking version, the line, the pins, the scope and the explicit
+// identifier list — a seed alone would be insufficient (FR-22), so the client sends none.
+export async function startSamplingRun(
+  matter: string, body: { sample_size?: number; target_prevalence?: number },
+): Promise<SamplingRun> {
+  const res = await fetch(runsBase(matter), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ verdicts, confidence }),
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+export async function currentSamplingRun(matter: string): Promise<SamplingRun | null> {
+  const res = await fetch(`${runsBase(matter)}/current`);
+  if (res.status === 404) return null;   // no draw yet — its own state, not a failure
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+// A 409 means the run was invalidated in flight (or is already closed): the population moved
+// under the verdicts. The server REFUSES rather than warns, and the message names what moved.
+export async function recordSamplingVerdict(
+  matter: string, runId: string, familyId: string, relevant: boolean,
+): Promise<SamplingRun> {
+  const res = await fetch(`${runsBase(matter)}/${encodeURIComponent(runId)}/verdicts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ family_id: familyId, relevant }),
+  });
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+export async function completeSamplingRun(
+  matter: string, runId: string,
+): Promise<SamplingRun> {
+  const res = await fetch(`${runsBase(matter)}/${encodeURIComponent(runId)}/complete`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+export async function abandonSamplingRun(
+  matter: string, runId: string,
+): Promise<SamplingRun> {
+  const res = await fetch(`${runsBase(matter)}/${encodeURIComponent(runId)}/abandon`, {
+    method: "POST",
   });
   if (!res.ok) throw new Error(await detail(res));
   return res.json();

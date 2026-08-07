@@ -33,6 +33,7 @@ from apx.checks import (
     line_projection_not_a_bound,
     line_stored_by_piece_identity,
     manifest,
+    no_legacy_bound,
     no_truncation,
     originals_encrypted,
     payload_schema,
@@ -45,6 +46,8 @@ from apx.checks import (
     read_path,
     register_ownership,
     renders_sanitized,
+    sampling_freeze,
+    sampling_population,
     scope_admin,
     secrets,
     staleness_triggers,
@@ -175,6 +178,10 @@ CHECKS: list[Callable[[], CheckResult]] = [
     staleness_triggers.every_staleness_trigger_has_an_observable,
     freshness_never_time_based.freshness_is_never_time_based,
     artefact_stamp_ownership.artefact_stamp_is_append_only,
+    # Story 5.1 — the sampling run over the DERIVED discarded set (FR-22/AD-39/AD-23/AD-7).
+    sampling_population.sampling_population_is_the_derived_view,
+    sampling_freeze.a_sampling_run_freezes_its_identifiers,
+    no_legacy_bound.no_new_legacy_bound_is_written,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

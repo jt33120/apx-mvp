@@ -65,12 +65,20 @@ from apx.core.app.read.deterministic import MovingPopulation, search_exhaustive
 from apx.core.app.read.freshness import BoundReading, read_bound, read_freshness, read_worklist
 from apx.core.app.read.piece import open_piece
 from apx.core.app.read.render import render_piece
+from apx.core.app.read.sampling import SamplingRunReading, read_sampling_run, read_sampling_runs
 from apx.core.app.read.scan import read_scan_page
 from apx.core.app.read.semantic import search_semantic
 from apx.core.app.read.triage_table import (
     read_matter_change_log,
     read_piece_change_log,
     read_triage_table,
+)
+from apx.core.app.sampling import (
+    abandon_sampling_run,
+    complete_sampling_run,
+    record_sampling_verdict,
+    size_for_target_bound,
+    start_sampling_run,
 )
 from apx.core.app.triage import triage_pieces
 from apx.core.domain import capacity
@@ -90,6 +98,7 @@ from apx.core.domain.triage_table import ChangeLogEntry
 from apx.core.ports.embedding import Embedder
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
+from apx.core.ports.sampling import InvalidatedRun, RunAlreadyClosed
 from apx.core.projection import project_all
 
 
@@ -531,36 +540,6 @@ class ExhaustiveOut(BaseModel):
     normalization: str
     results: list[DeterministicResultOut]
 
-
-
-class SampledDiscardOut(BaseModel):
-    piece_id: str
-    provenance: str
-    excerpt: str
-
-
-class RecallSampleOut(BaseModel):
-    population: int          # the whole discard pile
-    sample: list[SampledDiscardOut]
-
-
-class RecallVerdictIn(BaseModel):
-    piece_id: str
-    relevant: bool           # true = the piece was actually relevant (a false discard)
-
-
-class RecallReviewIn(BaseModel):
-    verdicts: list[RecallVerdictIn]
-    confidence: float = 0.95
-
-
-class RecallBoundOut(BaseModel):
-    population: int
-    sample_size: int
-    relevant_found: int
-    confidence: float
-    count_upper: int         # at most this many of the pile were wrongly discarded
-    prevalence_upper: float
 
 
 class MatterOut(BaseModel):
@@ -1868,50 +1847,6 @@ def read_labels(matter: str, ident: Identity = Depends(current_identity)) -> Lab
     )
 
 
-@app.get("/api/matters/{matter}/recall/sample", response_model=RecallSampleOut)
-def recall_sample(
-    matter: str, n: int = 30, ident: Identity = Depends(current_identity)
-) -> RecallSampleOut:
-    """Draw a random sample of the matter's discard pile to review (403 outside scope).
-    A sound recall bound needs a random sample, so the server draws it."""
-    store = _require_store()
-    try:
-        result = store.sample_discards(matter, ident.tenant, ident.scopes, max(1, min(n, 500)))
-    except ScopeDenied as exc:
-        raise HTTPException(status_code=403, detail="outside your scope") from exc
-    return RecallSampleOut(
-        population=result.population,
-        sample=[
-            SampledDiscardOut(piece_id=s.piece_id, provenance=s.provenance, excerpt=s.excerpt)
-            for s in result.sample
-        ],
-    )
-
-
-@app.post("/api/matters/{matter}/recall/review", response_model=RecallBoundOut)
-def recall_review(
-    matter: str, req: RecallReviewIn, ident: Identity = Depends(current_identity)
-) -> RecallBoundOut:
-    """Record a reviewed sample of the discard pile and return the recall bound: with
-    confidence c, at most `count_upper` of the discards were wrongly discarded. The act
-    is audited (403 outside scope; 400 if a reviewed piece is not discarded)."""
-    store = _require_store()
-    verdicts = {v.piece_id: v.relevant for v in req.verdicts}
-    try:
-        result = store.record_recall_review(
-            matter, ident.tenant, ident.scopes, verdicts, ident.actor, confidence=req.confidence
-        )
-    except ScopeDenied as exc:
-        raise HTTPException(status_code=403, detail="outside your scope") from exc
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return RecallBoundOut(
-        population=result.population, sample_size=result.sample_size,
-        relevant_found=result.relevant_found, confidence=result.confidence,
-        count_upper=result.count_upper, prevalence_upper=result.prevalence_upper,
-    )
-
-
 @app.get("/api/matters/{matter}/inventory", response_model=InventoryOut)
 def read_inventory(matter: str, ident: Identity = Depends(current_identity)) -> InventoryOut:
     """The durable inventory for a matter — 403 if its scope is not held (fail
@@ -2276,6 +2211,277 @@ def export_bound(matter: str, ident: Identity = Depends(current_identity)) -> Bo
                 f"bound={reading.bound.bound.prevalence_upper:.4f}"
                 f"@{reading.bound.bound.confidence}"))
     return _bound_out(reading)
+
+
+# ── Story 5.1: the sampling run — a frozen random draw from the DISCARDED SET (FR-22) ──────────
+#
+# The population is the Epic-4 DERIVED discarded view (order + the line + pins), never the
+# Story-2.x label pile: planning decision A1. The two legacy routes that drew from and bounded the
+# label pile (`GET /recall/sample`, `POST /recall/review`) are RETIRED here — superseded, not
+# deleted: every recorded recall_review row stays readable and `GET /bound` still falls back to
+# them when a matter has no run.
+
+
+class SamplingUnitOut(BaseModel):
+    family_id: str
+    proxy_piece_id: str          # the pièce the lawyer reads — a verdict on it judges the family
+    member_piece_ids: list[str]  # the family's DISCARDED members only (FR-22's identifier list)
+
+
+class DrawnFamilyOut(BaseModel):
+    unit: SamplingUnitOut
+    draw_index: int              # position in the DRAW, deliberately not rank order
+    relevant: bool | None        # the current verdict; None == not judged yet, never "not relevant"
+    verdict_by: str | None
+    verdict_at: datetime | None
+    verdict_seq: int | None
+
+
+class SamplingRunOut(BaseModel):
+    run_id: str
+    # ── the freeze (FR-22) ──────────────────────────────────────────────────────────────────────
+    version_id: str
+    version_no: int
+    last_retained_piece_id: str  # the position of THE LINE, by identity — never a bare integer
+    pin_ledger_seq: int
+    scope: str
+    # ── the draw ────────────────────────────────────────────────────────────────────────────────
+    confidence: float
+    population_families: int     # the unit the bound is computed over
+    population_pieces: int       # how many pièces those families hold — NOT the bound's denominator
+    sample_size: int
+    is_census: bool
+    # ── state (derived, never stored) ───────────────────────────────────────────────────────────
+    status: str                  # open | completed | abandoned — what a person did to it
+    state: str                   # open | invalidated | completed | abandoned — what it IS
+    invalidated_in_flight: bool
+    changed: list[str]
+    changed_fr: list[str]
+    state_fr: str
+    census_fr: str | None        # a census estimates nothing, so it never carries a percentage
+    started_by: str
+    started_at: datetime
+    completed_at: datetime | None
+    verdicts_recorded: int
+    relevant_found: int | None
+    count_upper: int | None
+    prevalence_upper: float | None
+    drawn: list[DrawnFamilyOut]
+
+
+class SizingOut(BaseModel):
+    population: int
+    target_prevalence: float
+    confidence: float
+    size: int | None             # None == unreachable at any size the caller will offer
+    is_census: bool
+    achievable_prevalence_upper: float
+    reason_fr: str
+
+
+class StartRunIn(BaseModel):
+    sample_size: int | None = None
+    target_prevalence: float | None = None
+    confidence: float = 0.95
+    max_size: int | None = None
+    version_no: int | None = None
+
+
+class VerdictIn(BaseModel):
+    family_id: str
+    relevant: bool
+
+
+def _run_out(reading: SamplingRunReading) -> SamplingRunOut:
+    run = reading.run
+    return SamplingRunOut(
+        run_id=run.run_id, version_id=run.version_id, version_no=run.version_no,
+        last_retained_piece_id=run.last_retained_piece_id, pin_ledger_seq=run.pin_ledger_seq,
+        scope=run.scope, confidence=run.confidence,
+        population_families=run.population_families, population_pieces=run.population_pieces,
+        sample_size=run.sample_size, is_census=run.is_census, status=run.status,
+        state=reading.state, invalidated_in_flight=reading.invalidated_in_flight,
+        changed=list(reading.changed), changed_fr=list(reading.changed_fr),
+        state_fr=reading.state_fr, census_fr=reading.census_fr,
+        started_by=run.started_by, started_at=run.started_at, completed_at=run.completed_at,
+        verdicts_recorded=run.verdicts_recorded, relevant_found=run.relevant_found,
+        count_upper=run.count_upper, prevalence_upper=run.prevalence_upper,
+        drawn=[
+            DrawnFamilyOut(
+                unit=SamplingUnitOut(
+                    family_id=d.unit.family_id, proxy_piece_id=d.unit.proxy_piece_id,
+                    member_piece_ids=list(d.unit.member_piece_ids)),
+                draw_index=d.draw_index,
+                relevant=d.verdict.relevant if d.verdict else None,
+                verdict_by=d.verdict.actor if d.verdict else None,
+                verdict_at=d.verdict.at if d.verdict else None,
+                verdict_seq=d.verdict.seq if d.verdict else None)
+            for d in run.drawn])
+
+
+def _reread_run(matter: str, ident: Identity, run_id: str) -> SamplingRunOut:
+    """Re-read a run through the ONE read seam after an act, so the response carries the same
+    derived state a GET would (AD-14) — never a second, hand-assembled truth."""
+    reading = read_sampling_run(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=_require_store(),
+        run_id=run_id)
+    if reading is None:  # pragma: no cover - the act just succeeded inside the same scope
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return _run_out(reading)
+
+
+@app.get("/api/matters/{matter}/sampling/sizing", response_model=SizingOut)
+def get_sampling_sizing(
+    matter: str, target: float, confidence: float = 0.95, max_size: int | None = None,
+    version_no: int | None = None, ident: Identity = Depends(current_identity),
+) -> SizingOut:
+    """How many near-duplicate FAMILIES must be drawn to reach a target bound (FR-22).
+
+    A preview: writes nothing, audits nothing, starts nothing. Where the target is unreachable the
+    answer says so and carries the best achievable — never a refusal and never a silent cap. 404
+    when out of scope, absent, not ranked, or with no line placed (indistinguishable, FR-14)."""
+    try:
+        sizing = size_for_target_bound(
+            _require_store(), tenant=ident.tenant, matter=matter, scopes=ident.scopes,
+            target_prevalence=target, confidence=confidence, max_size=max_size,
+            version_no=version_no)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if sizing is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return SizingOut(
+        population=sizing.population, target_prevalence=sizing.target_prevalence,
+        confidence=sizing.confidence, size=sizing.size, is_census=sizing.is_census,
+        achievable_prevalence_upper=sizing.achievable_prevalence_upper,
+        reason_fr=sizing.reason_fr)
+
+
+@app.post("/api/matters/{matter}/sampling/runs", response_model=SamplingRunOut)
+def start_run(
+    matter: str, req: StartRunIn, ident: Identity = Depends(current_identity)
+) -> SamplingRunOut:
+    """Start a sampling run over the matter's DERIVED discarded set (FR-22).
+
+    Draws near-duplicate families uniformly WITHOUT replacement, freezes the ranking version, the
+    position of the line, the pin ledger, the scope and the explicit identifier list, stamps the run
+    and audits it — one transaction. 404 when out of scope, absent, not ranked, no line placed, or
+    the discarded set is empty (nothing to audit: no bound applies, never a flattering 0%)."""
+    try:
+        run = start_sampling_run(
+            _require_store(), tenant=ident.tenant, matter=matter, actor=ident.actor,
+            scopes=ident.scopes, sample_size=req.sample_size,
+            target_prevalence=req.target_prevalence, confidence=req.confidence,
+            max_size=req.max_size, version_no=req.version_no)
+    except ScopeDenied as exc:
+        # 404, NOT 403: every peer sampling route answers an out-of-scope matter with the same
+        # non-disclosing 404 as an absent one (FR-14/AD-13). A 403 here would be the one place a
+        # caller could learn that another firm's dossier exists by being refused differently.
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return _reread_run(matter, ident, run.run_id)
+
+
+@app.get("/api/matters/{matter}/sampling/runs/current", response_model=SamplingRunOut)
+def get_current_run(
+    matter: str, run_id: str | None = None, ident: Identity = Depends(current_identity)
+) -> SamplingRunOut:
+    """The matter's current run (or a named one) with the verdict on its frozen population.
+
+    `invalidated_in_flight` is FR-22's failure path and is DERIVED — the comparison of the run's
+    freshness stamp against the current observables (Story 4.13), never a stored flag a writer could
+    forget to set. 404 when out of scope, absent, or no run exists."""
+    reading = read_sampling_run(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=_require_store(),
+        run_id=run_id)
+    if reading is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return _run_out(reading)
+
+
+@app.get("/api/matters/{matter}/sampling/runs", response_model=list[SamplingRunOut])
+def list_runs(
+    matter: str, ident: Identity = Depends(current_identity)
+) -> list[SamplingRunOut]:
+    """Every sampling run of the matter, newest first — including abandoned and invalidated ones
+    with their verdicts (AD-7: an hour of verdicts is never destroyed). `[]` means the matter was
+    read and has no run yet; 404 means it was not read."""
+    runs = read_sampling_runs(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=_require_store())
+    if runs is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return [_run_out(reading) for reading in runs]
+
+
+@app.post("/api/matters/{matter}/sampling/runs/{run_id}/verdicts", response_model=SamplingRunOut)
+def record_verdict(
+    matter: str, run_id: str, req: VerdictIn, ident: Identity = Depends(current_identity)
+) -> SamplingRunOut:
+    """Record one verdict on one drawn family — append-only, attributed, audited (FR-22/FR-24).
+
+    409 when the run's frozen population has MOVED: refusing is the strongest form of FR-22's "tells
+    the user immediately", because a verdict against a population that no longer exists is worse
+    than no verdict — it looks like evidence. 409 too when the run is already closed. 404 when out
+    of scope, absent, or the family was not drawn by this run."""
+    try:
+        run = record_sampling_verdict(
+            _require_store(), tenant=ident.tenant, matter=matter, actor=ident.actor,
+            scopes=ident.scopes, run_id=run_id, family_id=req.family_id, relevant=req.relevant)
+    except InvalidatedRun as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"tirage invalidé ; abandonnez-le et retirez ({exc})") from exc
+    except RunAlreadyClosed as exc:
+        raise HTTPException(status_code=409, detail=f"tirage déjà clos ({exc})") from exc
+    if run is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return _reread_run(matter, ident, run_id)
+
+
+@app.post("/api/matters/{matter}/sampling/runs/{run_id}/complete", response_model=SamplingRunOut)
+def complete_run(
+    matter: str, run_id: str, ident: Identity = Depends(current_identity)
+) -> SamplingRunOut:
+    """Close a fully-judged run: tally, bound over the unit DRAWN (families), audit — atomically.
+
+    400 when the run is not fully judged: an unjudged family is not a verdict of "not relevant"
+    (AD-19), and counting it as one would make the bound look better than the evidence supports.
+    409 when the population moved. 404 when out of scope or absent."""
+    try:
+        run = complete_sampling_run(
+            _require_store(), tenant=ident.tenant, matter=matter, actor=ident.actor,
+            scopes=ident.scopes, run_id=run_id)
+    except InvalidatedRun as exc:
+        raise HTTPException(
+            status_code=409,
+            detail=f"tirage invalidé ; abandonnez-le et retirez ({exc})") from exc
+    except RunAlreadyClosed as exc:
+        raise HTTPException(status_code=409, detail=f"tirage déjà clos ({exc})") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if run is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return _reread_run(matter, ident, run_id)
+
+
+@app.post("/api/matters/{matter}/sampling/runs/{run_id}/abandon", response_model=SamplingRunOut)
+def abandon_run(
+    matter: str, run_id: str, ident: Identity = Depends(current_identity)
+) -> SamplingRunOut:
+    """Give up an open run, audited. Its draw and every verdict stay readable forever (AD-7) — an
+    invalidated run is abandoned and redrawn, never silently reused. 409 when already closed; 404
+    when out of scope or absent."""
+    try:
+        run = abandon_sampling_run(
+            _require_store(), tenant=ident.tenant, matter=matter, actor=ident.actor,
+            scopes=ident.scopes, run_id=run_id)
+    except RunAlreadyClosed as exc:
+        raise HTTPException(status_code=409, detail=f"tirage déjà clos ({exc})") from exc
+    if run is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return _reread_run(matter, ident, run_id)
 
 
 # One artifact serves both: the API routes above (/api/*, matched first) and the built

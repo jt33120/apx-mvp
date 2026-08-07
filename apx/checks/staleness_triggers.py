@@ -115,16 +115,24 @@ def _per_kind_problems(keys: set[str]) -> list[str]:
     - every kind's inputs are a SUBSET of the enumerated triggers (no invented input);
     - the UNION over all kinds is the WHOLE enumeration — a trigger every kind excluded is a
       trigger that does nothing, which is a staleness quietly deleted rather than argued;
-    - the *confidence bound* depends on ALL EIGHT. FR-58 is written about the bound
-      (*"a stale confidence bound cannot be exported as current"*), so this is the one entry the
-      requirement fixes literally, and narrowing it is not a judgement call.
+    - the *confidence bound* AND the *sampling run* depend on ALL of them. FR-58 is written about
+      the bound (*"a stale confidence bound cannot be exported as current"*), so that entry is
+      fixed literally by the requirement; the run (Story 5.1) is fixed by FR-22, whose named list
+      ("ingestion, re-ranking or a line move") is a floor rather than a ceiling — its population IS
+      the derived discarded set, so a *pin* moves it too. Under-invalidating a run means an hour of
+      verdicts silently answering the wrong question, so neither is a judgement call.
 
     Imported at call time rather than parsed, because the entries are set arithmetic
     (``_ALL - {...}``) that an AST reading would have to re-implement — and a re-implementation is
     a second source of truth. The keys it is checked against come from the SOURCE above, so a
     monkey-patched TRIGGERS still fails.
     """
-    from apx.core.domain.freshness import ARTEFACT_KINDS, INPUTS_BY_KIND, KIND_BOUND
+    from apx.core.domain.freshness import (
+        ARTEFACT_KINDS,
+        INPUTS_BY_KIND,
+        KIND_BOUND,
+        KIND_SAMPLING_RUN,
+    )
 
     problems: list[str] = []
     missing_kinds = sorted(set(ARTEFACT_KINDS) - set(INPUTS_BY_KIND))
@@ -144,12 +152,17 @@ def _per_kind_problems(keys: set[str]) -> list[str]:
         problems.append(
             f"triggers no artefact depends on: {orphaned} — a trigger every kind excluded is a "
             "staleness deleted rather than argued (AD-23's list is complete by requirement)")
-    bound_inputs = set(INPUTS_BY_KIND.get(KIND_BOUND, ()))
-    if bound_inputs != keys:
-        problems.append(
-            f"the confidence bound must depend on ALL of {sorted(keys)}, not "
-            f"{sorted(bound_inputs)} — FR-58 is written about the bound and fixes its input list "
-            "literally")
+    for kind, why in (
+        (KIND_BOUND, "FR-58 is written about the bound and fixes its input list literally"),
+        (KIND_SAMPLING_RUN,
+         "a run's population IS the derived discarded set, so every input that moves the set "
+         "invalidates the run in flight (FR-22)"),
+    ):
+        declared = set(INPUTS_BY_KIND.get(kind, ()))
+        if declared != keys:
+            problems.append(
+                f"kind {kind!r} must depend on ALL of {sorted(keys)}, not {sorted(declared)} "
+                f"— {why}")
     return problems
 
 
