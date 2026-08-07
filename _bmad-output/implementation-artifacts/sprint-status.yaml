@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-08-07  # EPIC 4 COMPLETE (4-1..4-13 all done); triage UX pass done (EXPERIENCE-EPIC4). Epic 3 done
+last_updated: 2026-08-07  # EPIC 4 COMPLETE (4-1..4-13 all done) + retro done (epic-4-retro-2026-08-07.md); A1 BLOCKS story 5-1; triage UX pass done (EXPERIENCE-EPIC4). Epic 3 done
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -92,7 +92,7 @@ development_status:
   4-11-the-pin-moving-a-single-pi-ce-across-the-line: done  # the pin (FR-43/FR-25): a per-pièce override of the line, exactly one pièce crosses (order + line unchanged); mandatory one-line reason recorded as an override; append-only version-INDEPENDENT ledger so a pin survives re-ranking (dormant when its pièce is unscored in a version); removal is a reversible act; 2 structural checks (Julian, 2026-08-06)
   4-12-never-hard-delete-proven-by-a-bounded-probe: done  # never hard-delete, PROVEN by a bounded runtime probe (FR-21/FR-56/AD-7): an enumerated registry of 70 user-reachable actions (45 HTTP routes, every verb — 8 audited GETs write evidential rows — + 25 Ports-taking core/app seams), complete both ways and fail-closed on any routing/import shape the check cannot read; the probe EXECUTES 57 of them against a real seeded matter and fails on ANY DELETE of an evidential table (statement-level, not a net count) — evidential = every mapped table minus a written transient allow-list, so a new table is protected by default; changes_state is verified by execution, never trusted; each deletion-shaped act is shown to APPEND; 2 structural checks (Julian, 2026-08-06)
   4-13-freshness-and-staleness-of-derived-artefacts: done  # freshness/staleness (FR-58/AD-23/AD-40/FR-23): staleness is a DERIVED COMPARISON of the input stamp an artefact was produced under against the current observables — never a stored flag a writer could forget to set. NINE exact observables, one per enumerated trigger (AD-23's eight + FR-23's population-the-bound-was-drawn-from), each artefact kind depending only on the inputs it actually has; the stamp written INSIDE the producing transaction (AD-22) into an append-only evidential ledger. A stale bound is refused as current (409) and cannot be copied without its staleness; the unranked count is stated wherever the sets are counted; a superseded artefact keeps its verdict but is not work, so the offer discharges. 4 HTTP routes, 3 seams, 3 structural checks (74→77), 1 migration (Julian, 2026-08-07)
-  epic-4-retrospective: optional
+  epic-4-retrospective: done
   epic-5: backlog
   5-1-random-draw-from-the-discarded-set-population-frozen: backlog
   5-2-the-hypergeometric-estimator-and-the-census-crossover: backlog
@@ -112,3 +112,35 @@ development_status:
   6-5-the-language-reaches-the-language-model: backlog
   6-6-the-usability-gate: backlog
   epic-6-retrospective: optional
+
+# Action items committed at the Epic 4 retrospective (2026-08-07).
+# Full context: implementation-artifacts/epic-4-retro-2026-08-07.md
+action_items:
+  - epic: 4
+    action: "A1 BLOCKING — Epic 5 planning review before story 5-1 is created: decide which population the sampling run draws over (the Epic-4 derived discarded VIEW vs the Story-2.x piece_label discard pile), whether the legacy recall_review/sample_discards pair is superseded, and where 4.13's discard_population observable points"
+    owner: "Julian + Dev"
+    status: open
+  - epic: 4
+    action: "A2 — the adversarial review workflow must report any lens or skeptic that errored or stalled, and the story's review section must state the coverage lost; a silent lens currently looks identical to a clean one"
+    owner: "Dev"
+    status: open
+  - epic: 4
+    action: "A3 — add a 'wrong referent' lens to the review prompt set: for every comparison in the diff, is the right-hand side the same thing as the left? Four of ~21 confirmed defects in Epic 4 were this, always failing toward falsely-fresh"
+    owner: "Dev"
+    status: open
+  - epic: 4
+    action: "A4 — weight reviews toward the seams between layers (HTTP<->seam, client<->server, check legs); stories 4.10 and 4.12 produced 42% of all findings there while the engines were clean"
+    owner: "Dev"
+    status: open
+  - epic: 4
+    action: "A5 — decide the fate of the secret-shaped string in tests/api/test_log_redaction.py and tests/_fixtures/secret_violations/hardcoded_key/settings.py (committed in 1.8, 8b35467, identical to the live Mistral key): confirm it is genuinely fake, or rotate the key and purge it from history"
+    owner: "Julian"
+    status: open
+  - epic: 4
+    action: "A6 — run a retrospective at the close of every epic, and audit the previous one's action items at the start of the next"
+    owner: "Dev"
+    status: open
+  - epic: 4
+    action: "A7 — answer the estimator's five hard inputs (OQ-4) in the story 5-2 file before implementation: near-duplicate family structure, census-vs-sample crossover, repeated sampling over one population, population freezing, projection at an unsampled position. Epic 4 already supplies the first via ranked_entry.family_id + is_representative"
+    owner: "Dev"
+    status: open
