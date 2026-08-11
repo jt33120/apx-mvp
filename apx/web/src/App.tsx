@@ -990,6 +990,18 @@ function SamplingPanel({ matter }: { matter: string }) {
                 : <>. Le pire cas en pièces n’est pas calculable pour ce tirage.</>}
             </p>
           )}
+          {/* Story 5.3 — the register that can say no. CONFIRMED by the review: this branch
+              enumerated a register set that had grown, so a COMPLETED counts-only run rendered no
+              outcome at all. A lawyer who has just spent an evening on verdicts and is shown
+              nothing concludes the tool lost her work, not that it refused to state a number. */}
+          {run.estimate_kind === "counts_only" && (
+            <p className="apx-seal apx-seal--review" style={{ marginTop: ".5rem" }}>
+              🛡 {run.sample_size}/{run.population_families} familles relues ·{" "}
+              {run.relevant_found} pertinente(s). Aucune borne n’est énoncée : l’estimateur n’a pas
+              été prouvé par simulation, et le produit ne publie pas un chiffre qu’il ne peut pas
+              défendre.
+            </p>
+          )}
           {/* FR-22: a later draw over the same population is presented ALONGSIDE the earlier ones,
               never merged with them — and the sentence travels alone, so the fact travels with it. */}
           {run.repeated_draw_fr && (

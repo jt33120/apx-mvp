@@ -59,9 +59,12 @@ export type SamplingRun = {
   started_by: string; started_at: string; completed_at: string | null;
   verdicts_recorded: number;
   relevant_found: number | null; count_upper: number | null; prevalence_upper: number | null;
-  // Story 5.2 — what the run supports. `estimate_kind` is census | bound | no_population, or null
-  // while it supports nothing. The census field and the bound fields are never both set.
-  estimate_kind: string | null; estimator_method: string | null;
+  // Stories 5.2/5.3 — what the run supports, or null while it supports nothing. The registers are
+  // disjoint: `counts_only` (the estimator is not proven) and `census` both carry NO bound, and a
+  // census is the only one carrying an exact pièce count. This union was stale — it said
+  // "no_population" and omitted `counts_only`, so the panel had no arm for a register that ships.
+  estimate_kind: "census" | "bound" | "no_population" | "counts_only" | null;
+  estimator_method: string | null;
   count_upper_pieces: number | null;   // WORST CASE in pièces; null = not computable, never 0
   relevant_pieces: number | null;      // EXACT, census only
   run_ordinal: number; repeated_draw_fr: string | null;
@@ -70,6 +73,8 @@ export type SamplingRun = {
 export type Sizing = {
   population: number; target_prevalence: number; confidence: number;
   size: number | null; is_census: boolean; achievable_prevalence_upper: number;
+  // Story 5.3 — whether the run this plan sizes will be allowed to state its bound at all.
+  bound_will_be_stated: boolean; caveat_fr: string | null;
   reason_fr: string;
 };
 
@@ -492,11 +497,11 @@ export type Bound = {
   confidence: number; reviewed_at: string;
   freshness: Freshness | null; exportable_as_current: boolean;
   status_fr: string; copy_text: string;
-  // Story 5.2 — the two registers, disjoint in the TYPE and not only by convention. `kind` says
-  // which one applies; at a census `count_upper` and `prevalence_upper` are NULL, because nothing
-  // is bounded when everything was read and a nullable field cannot be rendered as a residual-risk
-  // figure by accident (FR-22, OQ-4 input 2).
-  kind: "census" | "bound";
+  // Stories 5.2/5.3 — the registers, disjoint in the TYPE and not only by convention. `kind` says
+  // which one applies; ONLY `bound` carries `count_upper`/`prevalence_upper`. At a census nothing
+  // is bounded because everything was read; at `counts_only` the estimator has not passed its
+  // simulation gate and the product states counts and nothing derived from them (FR-22/FR-23).
+  kind: "census" | "bound" | "counts_only";
   count_upper: number | null; prevalence_upper: number | null;
   // The unit the bound was computed over, and the pièce figures that may sit BESIDE it but never
   // inside it. `count_upper_pieces` is a worst case; `relevant_pieces` is exact and census-only;

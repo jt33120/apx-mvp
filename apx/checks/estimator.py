@@ -215,9 +215,15 @@ def piece_figure_is_a_worst_case(targets: Iterable[Path] | None = None) -> Check
 # ── input 2: a census states an exact count, and no bound at all ─────────────────────────────────
 
 _CENSUS_FN = "census_statement_fr"
+# Story 5.3 — the counts-only sentence is under the same ban: an unproven estimator that stated a
+# percentage would be the §0.2 failure with an apology attached.
+_COUNTS_ONLY_FN = "counts_only_statement_fr"
 _ESTIMATE_FN = "estimate_for_run"
 _BOUND_FIELDS = ("prevalence_upper", "count_upper_families", "count_upper_pieces")
 _CENSUS_FIELDS = ("relevant_pieces",)
+# Every register `estimate_for_run` must still build. Losing one is a fail-closed condition, not a
+# silent pass: a branch that quietly disappears takes its disjointness assertion with it.
+_REGISTERS = frozenset({"census", "bound", "counts_only"})
 
 
 def _without_docstring(fn: ast.FunctionDef) -> list[ast.stmt]:
@@ -308,12 +314,16 @@ def a_census_states_no_bound(domain_path: Path | None = None) -> CheckResult:
             name, ad, f"{_CENSUS_FN} or {_ESTIMATE_FN} is not in {path.name} — renamed?")
 
     problems: list[str] = []
-    percent = _percent_reachable(tree, census)
-    if percent is not None:
-        line, where = percent
-        problems.append(
-            f"{_CENSUS_FN} can reach a percentage at line {line} (via {where}) — a census "
-            "estimates nothing, so it never states a prevalence (FR-22)")
+    for sentence_fn in (census, _function(tree, _COUNTS_ONLY_FN)):
+        if sentence_fn is None:
+            return _fail_closed(
+                name, ad, f"{_COUNTS_ONLY_FN} is not in {path.name} — renamed?")
+        percent = _percent_reachable(tree, sentence_fn)
+        if percent is not None:
+            line, where = percent
+            problems.append(
+                f"{sentence_fn.name} can reach a percentage at line {line} (via {where}) — it "
+                "estimates nothing, so it never states a prevalence (FR-22/FR-23)")
 
     seen: set[str] = set()
     for node in ast.walk(estimate):
@@ -336,9 +346,20 @@ def a_census_states_no_bound(domain_path: Path | None = None) -> CheckResult:
                 problems.append(
                     f"the bound branch of {_ESTIMATE_FN} carries census fields {leaked} — a sample "
                     "never states an exact count over a population it did not read")
-    if {"census", "bound"} - seen:
+        elif kind.endswith("KIND_COUNTS_ONLY"):
+            # Story 5.3 — the register that can say no. An unproven estimator states what it
+            # counted and NOTHING derived from it: no bound, no exact projection, no worst case.
+            seen.add("counts_only")
+            leaked = sorted(keywords & (set(_BOUND_FIELDS) | set(_CENSUS_FIELDS)))
+            if leaked:
+                problems.append(
+                    f"the counts-only branch of {_ESTIMATE_FN} carries {leaked} — an unproven "
+                    "estimator emits the counts it observed and nothing derived from them (FR-23)")
+    if _REGISTERS - seen:
         return _fail_closed(
-            name, ad, f"{_ESTIMATE_FN} no longer builds both registers ({sorted(seen)})")
+            name, ad,
+            f"{_ESTIMATE_FN} no longer builds every register ({sorted(seen)}, expected "
+            f"{sorted(_REGISTERS)})")
     if problems:
         return CheckResult(name, ad, False, "; ".join(problems))
     return CheckResult(
@@ -602,6 +623,227 @@ def the_bound_consumes_no_model_number(targets: Iterable[Path] | None = None) ->
         "model-reported number")
 
 
+# ── Story 5.3: the word "proven" is un-writable without the proof running ────────────────────────
+
+_PROVEN_FLAG = "ESTIMATOR_PROVEN"
+_PROVEN_FN = "estimator_is_proven"
+_HARNESS = _APX_ROOT / "eval" / "estimator_simulation.py"
+_GATE_TEST = _APX_ROOT.parent / "tests" / "eval" / "test_estimator_simulation.py"
+# what the harness must NAME, or it is not a gate with a target
+_HARNESS_SYMBOLS = ("COVERAGE_TARGET", "MIN_TRIALS", "SCENARIOS", "run_all", "unsound")
+# the FLOOR (coverage) and the CEILING (tightness) — the test must assert both
+_FLOOR_MARKERS = ("family_coverage", "piece_coverage")
+_CEILING_MARKERS = ("tightness_ceiling", "worst_prevalence_upper")
+_DISABLERS = ("skip", "skipif", "xfail")
+
+
+def _module_flag(tree: ast.Module, flag: str) -> bool | None:
+    """The module-level boolean bound to ``flag``, or ``None`` when that is not what it is.
+
+    CONFIRMED [HIGH] by the review: the first version walked the whole tree and returned the FIRST
+    literal it met, so a ``ESTIMATOR_PROVEN = False`` nested inside any function shadowed the real
+    module-level ``True`` — and Python binds the LAST module-level assignment, not the first, so a
+    module assigning it twice was read wrongly in the other direction too.
+
+    Now: **module level only**, **last assignment wins** (Python's own rule), and any non-literal or
+    multi-target form yields ``None``, which the caller treats as fail-closed."""
+    found: bool | None = None
+    for node in tree.body:                      # top level ONLY — not ast.walk
+        target = None
+        if isinstance(node, ast.Assign) and len(node.targets) == 1:
+            target = node.targets[0]
+        elif isinstance(node, ast.AnnAssign):
+            target = node.target
+        if not (isinstance(target, ast.Name) and target.id == flag):
+            continue
+        value = node.value
+        found = value.value if (
+            isinstance(value, ast.Constant) and isinstance(value.value, bool)) else None
+    return found
+
+
+def _reads_the_flag(tree: ast.Module, function: str, flag: str) -> bool:
+    """Whether ``function`` actually returns the module flag rather than a hard-coded answer.
+
+    CONFIRMED [HIGH] by the review: the gate verified that ``estimator_is_proven()`` EXISTS and
+    never that it consults ``ESTIMATOR_PROVEN``. ``def estimator_is_proven(): return True`` passed
+    every leg — the one seam the whole mechanism hangs from, unchecked."""
+    fn = _function(tree, function)
+    if fn is None:
+        return False
+    return any(
+        isinstance(node, ast.Name) and node.id == flag for node in ast.walk(fn))
+
+
+def _disabled_tests(tree: ast.Module) -> list[str]:
+    """Every way the gate's tests can be turned off while the file still looks like a gate.
+
+    CONFIRMED [HIGH] by the review, which walked past the first version — decorators on ``def
+    test*`` only — using six forms. Now covered:
+
+    - a decorator on a test function (the original leg);
+    - a module-level ``pytestmark = pytest.mark.skip(...)``, which disables the WHOLE file;
+    - a bare ``pytest.skip(...)`` called anywhere, including at import time;
+    - ``pytest.xfail(...)`` / ``pytest.importorskip(...)`` likewise;
+    - a decorator on the enclosing class.
+
+    A gate that is registered and skipped looks exactly like a gate that runs. That is the entire
+    failure mode, so this leg is deliberately blunt: it reports anything skip-shaped anywhere in the
+    module and lets a human argue."""
+    disabled: list[str] = []
+
+    def _marker(node: ast.expr) -> str:
+        return _dotted(node.func if isinstance(node, ast.Call) else node)
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.FunctionDef | ast.ClassDef):
+            for decorator in node.decorator_list:
+                if any(d in _marker(decorator).split(".") for d in _DISABLERS):
+                    disabled.append(f"{node.name} (decorator)")
+        # `pytestmark = pytest.mark.skip(...)` — or a list of markers — kills the whole module
+        if isinstance(node, ast.Assign) and any(
+                isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets):
+            spelled = ast.unparse(node.value)
+            if any(d in spelled for d in _DISABLERS):
+                disabled.append("pytestmark (the whole module)")
+        # an imperative skip, wherever it sits — including at import time
+        if isinstance(node, ast.Call):
+            called = _marker(node)
+            if any(called.endswith(f".{d}") or called == d
+                   for d in (*_DISABLERS, "importorskip")):
+                disabled.append(f"{called}() at line {node.lineno}")
+    return disabled
+
+
+def the_simulation_gate_is_wired(
+    domain_path: Path | None = None, harness_path: Path | None = None,
+    test_path: Path | None = None,
+) -> CheckResult:
+    """``ESTIMATOR_PROVEN`` cannot be true unless the proof actually runs (Story 5.3, FR-23/SM-1).
+
+    FR-23: *"The estimator ships only if it is proven… A failing estimator emits the counts-only
+    sentence instead — it never emits a bound it cannot defend."* A bare boolean satisfying that by
+    assertion would be the §0.2 failure in one line of Python: a claim of soundness nobody checked,
+    written into the product and defended by a green build.
+
+    So, whenever the flag is true, all of this must hold — and the check FAILS CLOSED on anything it
+    cannot read:
+
+    - the simulation harness exists and names its target, its trial floor, its scenarios and its
+      verdict functions;
+    - a registered test module exercises it, asserting the coverage **floor** *and* the tightness
+      **ceiling** — soundness alone is satisfiable by ``count_upper = N``, which covers the truth
+      every time and says nothing;
+    - **no test in that module is skipped or xfailed.** A gate that is registered and skipped looks
+      identical to a gate that runs;
+    - the Domain exposes ``estimator_is_proven()``, so the estimate seam has one name to consult
+      rather than every caller reading a constant for itself.
+
+    This is the shape of the gold-set merge gate (Story 2.12) — a static check cannot verify the
+    mathematics, but it can make the word *"proven"* un-writable without the proof running. When the
+    flag is **false** the check passes trivially and says so: shipping counts-only is an honest
+    state, not a violation."""
+    name, ad = "the simulation gate is wired", "AD-33"
+    domain = domain_path if domain_path is not None else _ESTIMATOR
+    tree = _parse(domain)
+    if tree is None:
+        return _fail_closed(name, ad, f"cannot parse {domain.name}")
+    proven = _module_flag(tree, _PROVEN_FLAG)
+    if proven is None:
+        return _fail_closed(
+            name, ad, f"{_PROVEN_FLAG} is not a module-level boolean in {domain.name}")
+    if not any(
+            isinstance(n, ast.FunctionDef) and n.name == _PROVEN_FN for n in ast.walk(tree)):
+        return _fail_closed(name, ad, f"{_PROVEN_FN}() is not in {domain.name} — renamed?")
+    if not _reads_the_flag(tree, _PROVEN_FN, _PROVEN_FLAG):
+        return CheckResult(
+            name, ad, False,
+            f"{_PROVEN_FN}() does not read {_PROVEN_FLAG} — the one seam the whole mechanism hangs "
+            "from would answer a hard-coded 'yes', and every other leg of this check would still "
+            "pass (FR-23)")
+    if not proven:
+        return CheckResult(
+            name, ad, True,
+            f"{_PROVEN_FLAG} is False — the product emits counts only and states no bound. An "
+            "unproven estimator that says so is not a violation; it is FR-23 working")
+
+    harness = harness_path if harness_path is not None else _HARNESS
+    gate_test = test_path if test_path is not None else _GATE_TEST
+    for path, what in ((harness, "the simulation harness"), (gate_test, "the gate's test module")):
+        if not path.is_file():
+            return CheckResult(
+                name, ad, False,
+                f"{_PROVEN_FLAG} is True but {what} ({path.name}) does not exist — 'proven' is a "
+                "claim about a proof that must therefore run (FR-23/SM-1)")
+    harness_tree, test_tree = _parse(harness), _parse(gate_test)
+    if harness_tree is None or test_tree is None:
+        return _fail_closed(name, ad, f"cannot parse {harness.name} / {gate_test.name}")
+
+    # Functions, classes, plain assignments AND annotated ones. `SCENARIOS: tuple[...] = (...)` is
+    # an ast.AnnAssign, not an ast.Assign — this check reported the harness's own scenario set
+    # missing until the annotated form was handled, which is the fail-closed behaviour working.
+    defined = {
+        n.name for n in ast.walk(harness_tree)
+        if isinstance(n, ast.FunctionDef | ast.ClassDef)} | {
+        t.id for n in ast.walk(harness_tree) if isinstance(n, ast.Assign)
+        for t in n.targets if isinstance(t, ast.Name)} | {
+        n.target.id for n in ast.walk(harness_tree)
+        if isinstance(n, ast.AnnAssign) and isinstance(n.target, ast.Name)}
+    missing = sorted(set(_HARNESS_SYMBOLS) - defined)
+    if missing:
+        return CheckResult(
+            name, ad, False,
+            f"{harness.name} does not name {missing} — a gate with no stated target, no trial "
+            "floor or no scenarios is a gate whose strength nobody can read (FR-23)")
+
+    # CONFIRMED [MEDIUM] by the review, on two counts at once.
+    #
+    # (a) The first version searched `ast.unparse(whole module)`. `unparse` drops comments but KEEPS
+    #     docstrings and string literals, so a marker merely NAMED in prose satisfied the leg. Now
+    #     only the text of real `assert` statements is searched.
+    # (b) The floor markers were joined by `any()`, so mentioning `family_coverage` alone — the
+    #     textbook hypergeometric — satisfied the leg that exists to guarantee the *pièce* claim,
+    #     which is the one this build actually owns. Both are now required.
+    asserted = "\n".join(
+        ast.unparse(node) for node in ast.walk(test_tree) if isinstance(node, ast.Assert))
+    for markers, leg, need_all in ((_FLOOR_MARKERS, "the coverage FLOOR", True),
+                                   (_CEILING_MARKERS, "the tightness CEILING", False)):
+        present = [marker for marker in markers if marker in asserted]
+        if (len(present) < len(markers)) if need_all else (not present):
+            missing = sorted(set(markers) - set(present))
+            return CheckResult(
+                name, ad, False,
+                f"{gate_test.name} asserts nothing about {leg} ({missing} appear in no assert "
+                "statement) — soundness alone is satisfiable by an estimator answering 'at most "
+                "all of them', which covers the truth every time and says nothing (AC-2)")
+    disabled = _disabled_tests(test_tree)
+    # CONFIRMED [LOW] by the review: the only evidence the module is COLLECTED was `is_file()`, and
+    # pytest collection is governed by conftest.py — one `collect_ignore` line turns the gate off
+    # while every other leg stays green. The conftests on the path from the repo root down to the
+    # module are read too.
+    for parent in (gate_test.parent, gate_test.parent.parent):
+        conftest = parent / "conftest.py"
+        if not conftest.is_file():
+            continue
+        conftree = _parse(conftest)
+        if conftree is None:
+            return _fail_closed(name, ad, f"cannot parse {conftest}")
+        spelled = ast.unparse(conftree)
+        if "collect_ignore" in spelled and gate_test.stem in spelled:
+            disabled.append(f"{conftest.name} de-collects it")
+        disabled.extend(f"{conftest.name}: {d}" for d in _disabled_tests(conftree))
+    if disabled:
+        return CheckResult(
+            name, ad, False,
+            f"{gate_test.name} is skipped or de-collected ({disabled}) — a gate that is registered "
+            "and skipped looks exactly like a gate that runs")
+    return CheckResult(
+        name, ad, True,
+        f"{_PROVEN_FLAG} is True and the proof runs: {harness.name} names its target and its trial "
+        f"floor, {gate_test.name} asserts both the coverage floor and the tightness ceiling, and "
+        "nothing in it is skipped")
+
+
 def run() -> list[CheckResult]:
     return [
         piece_figure_is_a_worst_case(),
@@ -609,4 +851,5 @@ def run() -> list[CheckResult]:
         one_run_one_bound_chosen_by_recency(),
         the_bound_is_computed_from_the_freeze(),
         the_bound_consumes_no_model_number(),
+        the_simulation_gate_is_wired(),
     ]

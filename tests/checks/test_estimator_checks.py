@@ -16,6 +16,7 @@ from apx.checks.estimator import (
     piece_figure_is_a_worst_case,
     the_bound_consumes_no_model_number,
     the_bound_is_computed_from_the_freeze,
+    the_simulation_gate_is_wired,
 )
 
 _APX = Path(__file__).resolve().parents[2] / "apx"
@@ -210,7 +211,7 @@ def test_it_fires_when_the_percentage_hides_in_a_module_constant(tmp_path: Path)
 def test_the_census_check_fails_closed_when_a_register_disappears(tmp_path: Path) -> None:
     copy = _mutated(tmp_path, _SAMPLING, "        kind=KIND_BOUND,", '        kind="bound",')
     r = a_census_states_no_bound(copy)
-    assert not r.ok and "no longer builds both registers" in r.detail
+    assert not r.ok and "no longer builds every register" in r.detail
 
 
 def test_the_census_check_fails_closed_when_the_sentence_is_renamed(tmp_path: Path) -> None:
@@ -393,3 +394,191 @@ def test_the_statistical_confidence_level_is_not_a_model_number(tmp_path: Path) 
 def test_the_no_model_number_check_fails_closed_on_an_unparseable_module(tmp_path: Path) -> None:
     r = the_bound_consumes_no_model_number([_module(tmp_path, "broken", "def (:\n")])
     assert not r.ok and "cannot parse" in r.detail
+
+
+# ── Story 5.3: the word "proven" is un-writable without the proof running ────────────────────────
+
+_CONFIDENCE = _APX / "core" / "domain" / "confidence.py"
+_HARNESS = _APX / "eval" / "estimator_simulation.py"
+_GATE_TEST = _APX.parent / "tests" / "eval" / "test_estimator_simulation.py"
+
+
+def test_the_gate_check_passes_the_real_tree() -> None:
+    assert the_simulation_gate_is_wired().ok
+
+
+def test_it_fires_when_proven_is_claimed_and_the_harness_does_not_exist(tmp_path: Path) -> None:
+    """The §0.2 failure in one line of Python: a claim of soundness nobody checked, written into
+    the product and defended by a green build."""
+    r = the_simulation_gate_is_wired(
+        domain_path=_CONFIDENCE, harness_path=tmp_path / "gone.py", test_path=_GATE_TEST)
+    assert not r.ok and "does not exist" in r.detail
+
+
+def test_it_fires_when_the_gate_s_test_module_is_missing(tmp_path: Path) -> None:
+    r = the_simulation_gate_is_wired(
+        domain_path=_CONFIDENCE, harness_path=_HARNESS, test_path=tmp_path / "gone.py")
+    assert not r.ok and "does not exist" in r.detail
+
+
+def test_it_fires_when_the_harness_stops_naming_its_target(tmp_path: Path) -> None:
+    copy = _mutated(tmp_path, _HARNESS, "COVERAGE_TARGET = 0.95", "_target = 0.95")
+    r = the_simulation_gate_is_wired(
+        domain_path=_CONFIDENCE, harness_path=copy, test_path=_GATE_TEST)
+    assert not r.ok and "COVERAGE_TARGET" in r.detail
+
+
+def test_it_fires_when_the_gate_asserts_no_tightness_ceiling(tmp_path: Path) -> None:
+    """AC-2. Soundness alone is satisfiable by an estimator answering "at most all of them", which
+    covers the truth every time and says nothing."""
+    text = _GATE_TEST.read_text(encoding="utf-8")
+    stripped = tmp_path / "no_ceiling.py"
+    stripped.write_text(
+        text.replace("tightness_ceiling", "ceiling_removed")
+            .replace("worst_prevalence_upper", "loosest_removed"), encoding="utf-8")
+    r = the_simulation_gate_is_wired(
+        domain_path=_CONFIDENCE, harness_path=_HARNESS, test_path=stripped)
+    assert not r.ok and "tightness CEILING" in r.detail
+
+
+def test_it_fires_when_the_gate_s_test_is_skipped(tmp_path: Path) -> None:
+    """A gate that is registered and skipped looks exactly like a gate that runs — the Epic 4
+    lesson about silent reviewers, applied to the harness itself."""
+    copy = _mutated(
+        tmp_path, _GATE_TEST,
+        "def test_every_scenario_covers_the_truth_at_the_stated_confidence() -> None:",
+        "@pytest.mark.skip(reason='flaky')\n"
+        "def test_every_scenario_covers_the_truth_at_the_stated_confidence() -> None:")
+    r = the_simulation_gate_is_wired(
+        domain_path=_CONFIDENCE, harness_path=_HARNESS, test_path=copy)
+    assert not r.ok and "is skipped or de-collected" in r.detail
+
+
+def test_an_UNPROVEN_estimator_that_says_so_is_not_a_violation(tmp_path: Path) -> None:
+    """Shipping counts-only is FR-23 working, not FR-23 broken. The check must not push anyone
+    toward flipping the flag back to keep a build green."""
+    copy = _mutated(tmp_path, _CONFIDENCE, "ESTIMATOR_PROVEN = True", "ESTIMATOR_PROVEN = False")
+    r = the_simulation_gate_is_wired(
+        domain_path=copy, harness_path=tmp_path / "nothing.py", test_path=tmp_path / "nothing.py")
+    assert r.ok and "counts only" in r.detail
+
+
+def test_the_gate_check_fails_closed_when_the_flag_is_not_a_literal(tmp_path: Path) -> None:
+    copy = _mutated(
+        tmp_path, _CONFIDENCE, "ESTIMATOR_PROVEN = True", "ESTIMATOR_PROVEN = _read_somewhere()")
+    r = the_simulation_gate_is_wired(domain_path=copy)
+    assert not r.ok and "module-level boolean" in r.detail
+
+
+def test_the_gate_check_fails_closed_when_the_predicate_is_renamed(tmp_path: Path) -> None:
+    copy = _mutated(
+        tmp_path, _CONFIDENCE, "def estimator_is_proven()", "def proven_renamed()")
+    r = the_simulation_gate_is_wired(domain_path=copy)
+    assert not r.ok and "renamed?" in r.detail
+
+
+def test_the_counts_only_register_may_carry_no_bound(tmp_path: Path) -> None:
+    """The fourth register is disjoint like the other three: an unproven estimator states the
+    counts it observed and nothing derived from them."""
+    copy = _mutated(
+        tmp_path, _SAMPLING,
+        "        return Estimate(kind=KIND_COUNTS_ONLY, **common)",
+        "        return Estimate(kind=KIND_COUNTS_ONLY, prevalence_upper=0.0, **common)")
+    r = a_census_states_no_bound(copy)
+    assert not r.ok and "counts-only branch" in r.detail
+
+
+def test_the_census_check_fails_closed_when_the_counts_only_register_disappears(
+    tmp_path: Path
+) -> None:
+    copy = _mutated(
+        tmp_path, _SAMPLING, "kind=KIND_COUNTS_ONLY, **common", 'kind="counts_only", **common')
+    r = a_census_states_no_bound(copy)
+    assert not r.ok and "every register" in r.detail
+
+
+# ── the review's evasions of the Story-5.3 gate, each proven to fire now ─────────────────────────
+
+def test_it_fires_when_the_predicate_ignores_the_flag(tmp_path: Path) -> None:
+    """CONFIRMED [HIGH]. The gate asserted the predicate EXISTS and never that it consults the
+    flag, so `def estimator_is_proven(): return True` passed every leg — the one seam the whole
+    mechanism hangs from, unchecked."""
+    copy = _mutated(
+        tmp_path, _CONFIDENCE, "    return ESTIMATOR_PROVEN", "    return True")
+    r = the_simulation_gate_is_wired(domain_path=copy)
+    assert not r.ok and "does not read ESTIMATOR_PROVEN" in r.detail
+
+
+def test_it_reads_the_LAST_module_level_flag_and_ignores_nested_ones(tmp_path: Path) -> None:
+    """CONFIRMED [HIGH]. `ast.walk` returned the FIRST literal anywhere in the tree, so a
+    `ESTIMATOR_PROVEN = False` nested in any function shadowed the real module-level value — and
+    Python binds the LAST top-level assignment, which the walk order does not respect either."""
+    nested = _mutated(
+        tmp_path, _CONFIDENCE,
+        "def estimator_is_proven() -> bool:",
+        "def _decoy() -> bool:\n    ESTIMATOR_PROVEN = False\n    return ESTIMATOR_PROVEN\n\n\n"
+        "def estimator_is_proven() -> bool:", name="nested.py")
+    r = the_simulation_gate_is_wired(
+        domain_path=nested, harness_path=_HARNESS, test_path=_GATE_TEST)
+    assert r.ok, "a nested assignment is not the module-level flag"
+
+
+def test_it_fires_when_the_floor_is_only_MENTIONED_and_never_asserted(tmp_path: Path) -> None:
+    """CONFIRMED [MEDIUM], on two counts. The leg searched the whole unparsed module, and
+    ``ast.unparse`` keeps DOCSTRINGS — so naming ``piece_coverage`` in prose satisfied the leg that
+    exists to guarantee the pièce claim. And the floor markers were joined by ``any()``, so
+    asserting only ``family_coverage`` — the textbook hypergeometric — was enough."""
+    prose = _module(
+        tmp_path, "prose",
+        'def test_floor():\n'
+        '    """piece_coverage matters a great deal."""\n'
+        '    assert v.family_coverage >= t\n'
+        '    assert v.tightness_ceiling is not None\n')
+    r = the_simulation_gate_is_wired(
+        domain_path=_CONFIDENCE, harness_path=_HARNESS, test_path=prose)
+    assert not r.ok and "piece_coverage" in r.detail and "coverage FLOOR" in r.detail
+
+
+def test_the_floor_leg_is_satisfied_only_by_asserting_BOTH_claims(tmp_path: Path) -> None:
+    both = _module(
+        tmp_path, "both",
+        'def test_floor():\n'
+        '    assert v.family_coverage_lower >= t\n'
+        '    assert v.piece_coverage_lower >= t\n'
+        '    assert v.worst_prevalence_upper <= c\n')
+    assert the_simulation_gate_is_wired(
+        domain_path=_CONFIDENCE, harness_path=_HARNESS, test_path=both).ok
+
+
+def test_it_fires_on_a_module_level_pytestmark_skip(tmp_path: Path) -> None:
+    """CONFIRMED [HIGH]. The first version read decorators on `def test*` only, so one module-level
+    line disabled the whole gate while the check reported nothing skipped."""
+    copy = _mutated(
+        tmp_path, _GATE_TEST, "_VERDICTS = run_all()",
+        "pytestmark = pytest.mark.skip(reason='slow')\n_VERDICTS = run_all()")
+    r = the_simulation_gate_is_wired(
+        domain_path=_CONFIDENCE, harness_path=_HARNESS, test_path=copy)
+    assert not r.ok and "pytestmark" in r.detail
+
+
+def test_it_fires_on_an_imperative_skip_at_import_time(tmp_path: Path) -> None:
+    copy = _mutated(
+        tmp_path, _GATE_TEST, "_VERDICTS = run_all()",
+        "pytest.skip('later', allow_module_level=True)\n_VERDICTS = run_all()")
+    r = the_simulation_gate_is_wired(
+        domain_path=_CONFIDENCE, harness_path=_HARNESS, test_path=copy)
+    assert not r.ok and "skip()" in r.detail
+
+
+def test_it_fires_when_a_conftest_de_collects_the_gate(tmp_path: Path) -> None:
+    """CONFIRMED [LOW]. The check's only evidence the module was COLLECTED was that the file
+    exists, and pytest collection is governed by conftest.py."""
+    home = tmp_path / "eval"
+    home.mkdir()
+    gate = home / "test_estimator_simulation.py"
+    gate.write_text(_GATE_TEST.read_text(encoding="utf-8"), encoding="utf-8")
+    (home / "conftest.py").write_text(
+        "collect_ignore = ['test_estimator_simulation.py']\n", encoding="utf-8")
+    r = the_simulation_gate_is_wired(
+        domain_path=_CONFIDENCE, harness_path=_HARNESS, test_path=gate)
+    assert not r.ok and "de-collects" in r.detail

@@ -82,6 +82,7 @@ from apx.core.app.sampling import (
 )
 from apx.core.app.triage import triage_pieces
 from apx.core.domain import capacity
+from apx.core.domain.confidence import estimator_is_proven
 from apx.core.domain.config import (
     DEFAULT_EXCLUSION_LIST,
     ConfigError,
@@ -93,7 +94,7 @@ from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.freshness import Freshness
 from apx.core.domain.head_journal import open_journal
 from apx.core.domain.inventory import Inventory
-from apx.core.domain.sampling import KIND_CENSUS
+from apx.core.domain.sampling import KIND_BOUND, KIND_CENSUS
 from apx.core.domain.taxonomy_label import OutOfTaxonomyLabel
 from apx.core.domain.triage_table import ChangeLogEntry
 from apx.core.ports.embedding import Embedder
@@ -2146,15 +2147,26 @@ def _bound_out(reading: BoundReading) -> BoundOut:
         artefact_id=reading.bound.artefact_id, population=b.population,
         sample_size=b.sample_size, relevant_found=b.relevant_in_sample,
         confidence=b.confidence, kind=reading.kind,
-        count_upper=None if reading.kind == KIND_CENSUS else b.count_upper,
-        prevalence_upper=None if reading.kind == KIND_CENSUS else b.prevalence_upper,
+        # Every register-dependent field is gated on the register, by ALLOW-list.
+        #
+        # CONFIRMED [HIGH] by two independent lenses: the first version gated `count_upper` and
+        # `prevalence_upper` and left `count_upper_pieces` and `relevant_pieces` ungated, so the
+        # counts-only register shipped a worst-case pièce PROJECTION — through /bound and through
+        # /bound/export — while announcing that it had no bound to state. Gating some of a
+        # register's fields is not gating the register; it is the disjointness defect with a
+        # shorter list.
+        count_upper=b.count_upper if reading.kind == KIND_BOUND else None,
+        prevalence_upper=b.prevalence_upper if reading.kind == KIND_BOUND else None,
+        count_upper_pieces=(
+            reading.bound.count_upper_pieces if reading.kind == KIND_BOUND else None),
+        # exact, and only ever at a census
+        relevant_pieces=reading.bound.relevant_pieces if reading.kind == KIND_CENSUS else None,
         reviewed_at=reading.bound.reviewed_at,
         freshness=_freshness_out(reading.freshness) if reading.freshness is not None else None,
         exportable_as_current=reading.exportable_as_current,
         status_fr=reading.status_fr, copy_text=reading.copy_text,
         unit_fr=reading.bound.unit_fr, piece_count=reading.bound.piece_count,
-        method=reading.bound.method, count_upper_pieces=reading.bound.count_upper_pieces,
-        relevant_pieces=reading.bound.relevant_pieces,
+        method=reading.bound.method,
         run_ordinal=reading.bound.run_ordinal)
 
 
@@ -2307,6 +2319,12 @@ class SizingOut(BaseModel):
     is_census: bool
     achievable_prevalence_upper: float
     reason_fr: str
+    # CONFIRMED [LOW] by the review: a sizing is a PLAN, but it is a quantitative promise about the
+    # bound the run will yield, computed by the same statistic the product may be forbidden to
+    # state. Offering "200 familles suffisent pour 5 %" and then refusing to say 5 % is a promise
+    # broken after an evening of verdicts. The plan now carries whether the promise can be kept.
+    bound_will_be_stated: bool
+    caveat_fr: str | None
 
 
 class StartRunIn(BaseModel):
@@ -2341,7 +2359,13 @@ def _run_out(reading: SamplingRunReading) -> SamplingRunOut:
         state_fr=reading.state_fr, census_fr=reading.census_fr,
         started_by=run.started_by, started_at=run.started_at, completed_at=run.completed_at,
         verdicts_recorded=run.verdicts_recorded, relevant_found=run.relevant_found,
-        count_upper=run.count_upper, prevalence_upper=run.prevalence_upper,
+        # CONFIRMED [HIGH] by two independent lenses: these came straight off the run ROW, so
+        # /sampling/runs shipped a count_upper and a prevalence beside `estimate_kind:
+        # "counts_only"` — the register announced that no bound could be defended and the payload
+        # carried one anyway. The row is where the numbers were RECORDED; the estimate is what the
+        # product is currently entitled to SAY, and only the estimate may reach a surface.
+        count_upper=estimate.count_upper_families if estimate else None,
+        prevalence_upper=estimate.prevalence_upper if estimate else None,
         drawn=[
             DrawnFamilyOut(
                 unit=SamplingUnitOut(
@@ -2388,6 +2412,10 @@ def get_sampling_sizing(
     return SizingOut(
         population=sizing.population, target_prevalence=sizing.target_prevalence,
         confidence=sizing.confidence, size=sizing.size, is_census=sizing.is_census,
+        bound_will_be_stated=estimator_is_proven(),
+        caveat_fr=None if estimator_is_proven() else (
+            "l'estimateur n'a pas été prouvé par simulation : ce tirage produira des comptes, "
+            "pas de borne"),
         achievable_prevalence_upper=sizing.achievable_prevalence_upper,
         reason_fr=sizing.reason_fr)
 

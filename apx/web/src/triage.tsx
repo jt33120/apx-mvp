@@ -532,6 +532,14 @@ function BoundPanel({ bound, matter }: { bound: Bound | null | undefined; matter
         {bound.piece_count !== null && <> ({bound.piece_count} pièces)</>} ·{" "}
         {bound.relevant_found} pertinente(s) trouvée(s)
       </p>
+      {/* Story 5.3 — an estimator that has not passed its simulation gate states counts and
+          nothing derived from them. Said plainly rather than by an absence: a missing figure reads
+          as one the product forgot, not as one it refused (FR-23). */}
+      {bound.kind === "counts_only" && (
+        <p className="apx-chip apx-chip-review" style={{ margin: ".4rem 0 0" }}>
+          Aucune borne — l'estimateur n'a pas été prouvé par simulation
+        </p>
+      )}
       <p style={{ margin: ".5rem 0 0" }}>
         <button type="button" onClick={copy}>Copier la phrase</button>{" "}
         {stale ? (

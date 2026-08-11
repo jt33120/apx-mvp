@@ -605,6 +605,13 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        estimator.the_bound_is_computed_from_the_freeze,
        "complete_sampling_run in the store adapter — the estimator's population and sample are "
        "read off the frozen run row and no live derivation is reached (Story 5.2, OQ-4 input 4)"),
+    # ── story 5.3: the estimator ships only if PROVEN ────────────────────────────────────────────
+    _p("estimator-simulation-gate", "FR-23", "AD-33", "the simulation gate is wired",
+       estimator.the_simulation_gate_is_wired,
+       "ESTIMATOR_PROVEN in core/domain/confidence.py against the simulation harness and its test "
+       "module — the flag cannot be true unless the harness exists, names its coverage target and "
+       "trial floor, and a test asserts BOTH the coverage floor and the tightness ceiling with "
+       "nothing skipped (Story 5.3)"),
     _p("estimator-no-model-number", "FR-42", "AD-19", "the bound consumes no model number",
        estimator.the_bound_consumes_no_model_number,
        "core/domain/confidence.py and core/domain/sampling.py — the estimator reaches neither the "

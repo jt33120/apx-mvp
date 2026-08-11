@@ -24,6 +24,11 @@ jobs:
         run: uv run python -m apx.checks
       - name: Lint
         run: uv run ruff check .
+      # FR-23 / SM-1: the estimator ships only if PROVEN. Run as its own step so a coverage
+      # failure is legible in the CI log rather than one line inside a 1600-test run — this is
+      # the gate that decides whether the product may state a number at all (Story 5.3).
+      - name: The estimator's simulation gate (FR-23/SM-1) — soundness, not reproducibility
+        run: uv run pytest tests/eval/test_estimator_simulation.py -q
       - name: Tests (incl. the layering failure-path regression, AC5)
         run: uv run pytest -q
 

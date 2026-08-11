@@ -20,12 +20,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from apx.core.domain.confidence import RecordedBound
+from apx.core.domain.confidence import RecordedBound, estimator_is_proven
 from apx.core.domain.freshness import Freshness, FreshnessStamp, assess_freshness
 from apx.core.domain.sampling import (
     KIND_BOUND,
     KIND_CENSUS,
+    KIND_COUNTS_ONLY,
     census_statement_fr,
+    counts_only_statement_fr,
     is_census,
 )
 from apx.core.domain.worklist import WorklistLine, worklist_lines
@@ -59,16 +61,28 @@ class BoundReading:
 
     @property
     def kind(self) -> str:
-        """Which register this bound speaks in — ``census`` or ``bound`` (Story 5.2, OQ-4 input 2).
+        """Which register this bound speaks in — ``census``, ``counts_only`` or ``bound``.
 
         Decided **once**, here, and read by every consumer: the sentence, the HTTP payload and the
         export. A payload that carried a prevalence while the sentence said *"all of them were
         read"* would let any client render the residual-risk figure FR-22 forbids over a fully
-        reviewed population — the two registers would be disjoint only in the one string that
-        happened to branch."""
+        reviewed population — the registers would be disjoint only in the one string that happened
+        to branch.
+
+        The order matters and mirrors :func:`~apx.core.domain.sampling.estimate_for_run`:
+
+        1. a **census** first, because it survives an unproven estimator. It makes no statistical
+           claim at all — every unit was read, and the count is a fact about what the lawyer saw.
+           Withholding it because the *estimator* is unproven would suppress a true statement on the
+           grounds that a different, absent one is untrustworthy;
+        2. **counts only** when the simulation gate has not passed (Story 5.3, FR-23). This read
+           path has to consult the flag too: a register that existed only where the estimate is
+           BORN would be bypassed by every reader — which is the defect the Story 5.2 review found
+           three times over, each time on a read path that had its own opinion."""
         b = self.bound.bound
-        return KIND_CENSUS if is_census(
-            population=b.population, sample_size=b.sample_size) else KIND_BOUND
+        if is_census(population=b.population, sample_size=b.sample_size):
+            return KIND_CENSUS
+        return KIND_BOUND if estimator_is_proven() else KIND_COUNTS_ONLY
 
     @property
     def copy_text(self) -> str:
@@ -99,6 +113,14 @@ class BoundReading:
                 unit_fr=self.bound.unit_fr, piece_count=pieces)
             # NOT str.capitalize(): it lowercases everything after the first character, which would
             # quietly mangle any proper noun or unit the sentence grows later.
+            return sentence[:1].upper() + sentence[1:] + f" — {tail}"
+        if self.kind == KIND_COUNTS_ONLY:
+            # FR-23's failure path: counts, and nothing derived from them. The reason travels with
+            # them, because a number withheld without a reason reads as one the product forgot.
+            sentence = counts_only_statement_fr(
+                sample_units=b.sample_size, population_units=b.population,
+                relevant_units=b.relevant_in_sample, unit_fr=self.bound.unit_fr,
+                piece_count=self.bound.piece_count)
             return sentence[:1].upper() + sentence[1:] + f" — {tail}"
         # The denominator is labelled with the unit it was COMPUTED over (Story 5.1): a sampling
         # run draws near-duplicate families, and calling a family count "pièces" would make the

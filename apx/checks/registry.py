@@ -189,6 +189,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     estimator.one_run_one_bound_chosen_by_recency,
     estimator.the_bound_is_computed_from_the_freeze,
     estimator.the_bound_consumes_no_model_number,
+    # Story 5.3 — the simulation gate: "proven" is un-writable without the proof running (FR-23).
+    estimator.the_simulation_gate_is_wired,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

@@ -37,6 +37,7 @@ from datetime import datetime
 
 from apx.core.domain.confidence import (
     PrevalenceBound,
+    estimator_is_proven,
     pieces_upper_bound,
     prevalence_upper_bound,
 )
@@ -64,7 +65,13 @@ STATUSES: tuple[str, ...] = (STATUS_OPEN, STATUS_COMPLETED, STATUS_ABANDONED)
 KIND_CENSUS = "census"
 KIND_BOUND = "bound"
 KIND_NO_POPULATION = "no_population"
-ESTIMATE_KINDS: tuple[str, ...] = (KIND_CENSUS, KIND_BOUND, KIND_NO_POPULATION)
+# Story 5.3 — the fourth register, and the one that can say no. FR-23: an estimator that has not
+# been proven sound by simulation *"never emits a bound it cannot defend"*; it emits the counts it
+# actually observed, and nothing derived from them. Disjoint in the TYPE like the other three, so a
+# surface cannot render a bound the product has not earned by forgetting to consult a flag.
+KIND_COUNTS_ONLY = "counts_only"
+ESTIMATE_KINDS: tuple[str, ...] = (
+    KIND_CENSUS, KIND_BOUND, KIND_NO_POPULATION, KIND_COUNTS_ONLY)
 
 
 @dataclass(frozen=True)
@@ -314,6 +321,33 @@ def census_statement_fr(
     return f"{head}{units} — {pieces} — se sont révélées pertinentes"
 
 
+def counts_only_statement_fr(
+    *, sample_units: int, population_units: int, relevant_units: int, unit_fr: str,
+    piece_count: int | None = None,
+) -> str:
+    """What the product says when the estimator has **not** been proven sound (Story 5.3, FR-23).
+
+    Counts, and nothing derived from them: no percentage, no projection, no worst case — and it says
+    why, because a number withheld without a reason reads as a number the product forgot rather than
+    one it refused. FR-23: *"a failing estimator emits the counts-only sentence instead — it never
+    emits a bound it cannot defend."*"""
+    held = f" ({piece_count} pièces)" if piece_count is not None else ""
+    # CONFIRMED by the review: this read "1 se sont révélées pertinentes" — a plural verb on a
+    # singular count, and no unit noun at all, in the one string a firm reads out loud. The census
+    # sentence attaches its unit; this one did not, so a family count arrived unlabelled beside a
+    # pièce count that was labelled. Same defect as Story 5.1's denominator, in the grammar.
+    if relevant_units == 0:
+        found = "aucune n'était pertinente"
+    elif relevant_units == 1:
+        found = f"1 {_singular(unit_fr)} s'est révélée pertinente"
+    else:
+        found = f"{relevant_units} {unit_fr} se sont révélées pertinentes"
+    return (
+        f"{sample_units} {unit_fr} sur {population_units}{held} ont été tirées au hasard ; "
+        f"{found}. Aucune borne n'est énoncée : l'estimateur n'a pas encore été prouvé par "
+        "simulation, et le produit ne publie pas un chiffre qu'il ne peut pas défendre")
+
+
 def _singular(unit_fr: str) -> str:
     """A crude French singular for the unit label, so *"1 familles"* never reaches a court. The
     labels are a closed, product-owned set (``pièces écartées``, ``familles de quasi-doublons
@@ -415,7 +449,18 @@ def estimate_for_run(
         return Estimate(kind=KIND_NO_POPULATION, **common)
     if is_census(population=population_families, sample_size=sample_families):
         # Nothing is estimated. No bound, no percentage, no worst case — an exact count.
+        #
+        # Story 5.3: a census survives an UNPROVEN estimator, and deliberately so. It makes no
+        # statistical claim at all — every unit was read, and the count is a fact about what the
+        # lawyer saw. Suppressing it because the *estimator* is unproven would withhold a true
+        # statement on the grounds that a different, absent statement is untrustworthy.
         return Estimate(kind=KIND_CENSUS, relevant_pieces=relevant_pieces_drawn, **common)
+    if not estimator_is_proven():
+        # FR-23's failure path (Story 5.3): the simulation gate has not passed, so the product
+        # states what it counted and nothing derived from it — no percentage, no projection, no
+        # worst case. Emitting a bound here is the §0.2 failure exactly: a number said out loud
+        # that nobody has shown to be right.
+        return Estimate(kind=KIND_COUNTS_ONLY, **common)
     if recorded_count_upper is None or recorded_prevalence_upper is None:
         raise ValueError(
             "a completed run in the bound register recorded no bound — there is nothing to state, "

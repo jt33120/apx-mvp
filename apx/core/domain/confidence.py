@@ -34,6 +34,36 @@ from math import comb
 # favourable the number is.
 ESTIMATOR_METHOD = "hypergeometric-upper-bound.v1"
 
+# Whether the estimator has been PROVEN sound by simulation (Story 5.3, FR-23 / SM-1).
+#
+# FR-23: *"The estimator ships only if it is proven. Its soundness is asserted by simulation in CI:
+# over populations whose relevant-item prevalence and duplicate structure are known by construction,
+# a stated C% bound must hold in at least C% of runs. A failing estimator emits the counts-only
+# sentence instead — it never emits a bound it cannot defend."*
+#
+# This flag is what :func:`~apx.core.domain.sampling.estimate_for_run` consults, at the ONE place a
+# bound is born. False means the product emits counts only: N, n and k — no percentage, no
+# projection — and says why.
+#
+# **A bare boolean a developer can flip is worth nothing on its own, and this one is not on its
+# own.** The structural check ``estimator-simulation-gate`` refuses the build when it is True while
+# the simulation harness does not exist, does not name its coverage target, does not assert BOTH the
+# coverage floor and the tightness ceiling, or is not exercised by a registered test. That is the
+# shape of the gold-set merge gate (Story 2.12), and it is the honest maximum a static check can
+# reach: it cannot verify the mathematics, but it can make the word "proven" un-writable without the
+# proof running.
+ESTIMATOR_PROVEN = True
+
+
+def estimator_is_proven() -> bool:
+    """Whether a *confidence bound* may be stated at all (Story 5.3, FR-23).
+
+    A function rather than a bare read, so there is one name to search for, one place the answer
+    comes from, and one thing a structural check can require the estimate seam to consult. The
+    alternative — every caller reading the constant for itself — is a caller that forgets, and a
+    caller that forgets emits a bound the product has not earned."""
+    return ESTIMATOR_PROVEN
+
 
 @dataclass(frozen=True)
 class PrevalenceBound:

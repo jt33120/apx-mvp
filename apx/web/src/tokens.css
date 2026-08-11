@@ -249,6 +249,9 @@ button:focus-visible { box-shadow: var(--apx-ring); }
 .apx-seal { font-size: 0.9rem; margin: 0 0 0.5rem; }
 .apx-seal--ok { color: var(--apx-kept); }
 .apx-seal--bad { color: var(--apx-danger); }
+/* Story 5.3 — the counts-only register: the product refusing to state a number it cannot
+   defend. The review tier, not the danger tier: nothing is wrong, something is withheld. */
+.apx-seal--review { color: var(--apx-review); }
 .apx-inline-list { margin: 0; padding-left: 1.2rem; }
 .apx-inline-list li { margin-bottom: 0.2rem; }
 

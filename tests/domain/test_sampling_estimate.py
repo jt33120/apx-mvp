@@ -18,9 +18,11 @@ from apx.core.domain.confidence import (
 from apx.core.domain.sampling import (
     KIND_BOUND,
     KIND_CENSUS,
+    KIND_COUNTS_ONLY,
     KIND_NO_POPULATION,
     bound_for_run,
     census_statement_fr,
+    counts_only_statement_fr,
     estimate_for_run,
 )
 
@@ -274,3 +276,51 @@ def test_a_confidence_outside_the_open_unit_interval_is_refused() -> None:
         _estimate(confidence=1.0)
     with pytest.raises(ValueError):
         _estimate(confidence=0.0)
+
+
+# ── Story 5.3: the register that can say no ──────────────────────────────────────────────────────
+
+def test_an_unproven_estimator_states_counts_and_nothing_derived_from_them(
+    monkeypatch  # noqa: ANN001
+) -> None:
+    """FR-23's failure path. Every derived field is absent — not zero, not a widened bound. A
+    product that emitted a number here would be committing §0.2's failure knowingly."""
+    import apx.core.domain.sampling as sampling
+    monkeypatch.setattr(sampling, "estimator_is_proven", lambda: False)
+    estimate = _estimate(family_sizes=[3] * 120)
+    assert estimate.kind == KIND_COUNTS_ONLY
+    assert estimate.prevalence_upper is None
+    assert estimate.count_upper_families is None
+    assert estimate.count_upper_pieces is None
+    assert estimate.relevant_pieces is None
+    # the counts themselves survive: they are what was observed, not what was inferred
+    assert estimate.population_families == 120 and estimate.sample_families == 30
+
+
+def test_a_CENSUS_survives_an_unproven_estimator(monkeypatch) -> None:  # noqa: ANN001
+    """The deliberate asymmetry. A census makes no statistical claim at all — every unit was read,
+    and the count is a fact about what the lawyer saw. Suppressing it because the ESTIMATOR is
+    unproven would withhold a true statement on the grounds that a different, absent statement is
+    untrustworthy."""
+    import apx.core.domain.sampling as sampling
+    monkeypatch.setattr(sampling, "estimator_is_proven", lambda: False)
+    estimate = _estimate(
+        population_families=40, sample_families=40, relevant_families=3, relevant_pieces_drawn=47,
+        family_sizes=[10] * 40)
+    assert estimate.kind == KIND_CENSUS
+    assert estimate.relevant_pieces == 47
+
+
+def test_the_counts_only_sentence_states_no_percentage_and_says_why() -> None:
+    sentence = counts_only_statement_fr(
+        sample_units=200, population_units=1400, relevant_units=3,
+        unit_fr="familles de quasi-doublons écartées", piece_count=2100)
+    assert "%" not in sentence
+    assert "Aucune borne" in sentence and "prouvé par simulation" in sentence
+    assert "200" in sentence and "1400" in sentence and "2100 pièces" in sentence
+
+
+def test_the_counts_only_sentence_does_not_pretend_something_was_found() -> None:
+    sentence = counts_only_statement_fr(
+        sample_units=200, population_units=1400, relevant_units=0, unit_fr="pièces écartées")
+    assert "aucune n'était pertinente" in sentence and "%" not in sentence

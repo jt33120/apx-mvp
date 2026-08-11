@@ -68,6 +68,40 @@ def _schema_frozen() -> None:
     assert not forbidden, f"chunk carries a forbidden scope/custodian column: {forbidden}"
 
 
+def _estimator_proven_sound() -> None:
+    """The estimator covers the truth at its stated confidence, offline (story 5.3, FR-23/SM-1).
+
+    The runtime counterpart of the static ``estimator-simulation-gate``: the check asserts the proof
+    EXISTS and runs, this asserts it PASSES — and it passes here, inside the offline frame, with no
+    network and no database, because a statistical claim must never depend on either (FR-55/FR-36).
+
+    A failure here is not a reason to adjust the statistic until it goes green. It is the reason
+    ``ESTIMATOR_PROVEN`` exists: the product falls back to counts only and states no bound."""
+    from apx.core.domain.confidence import ESTIMATOR_PROVEN
+    from apx.eval.estimator_simulation import SCENARIOS, run_all, unsound
+
+    if not ESTIMATOR_PROVEN:
+        return  # counts-only is an honest state; nothing to prove
+    verdicts = run_all()
+    failed = unsound(verdicts)
+    assert not failed, (
+        "the estimator does NOT cover at its stated confidence: "
+        + ", ".join(f"{v.scenario} (families lower-bound {v.family_coverage_lower:.4f}, pièces "
+                    f"{v.piece_coverage_lower:.4f}, target {v.target})" for v in failed))
+    # Soundness alone is satisfiable by an estimator answering "at most all of them" — CONFIRMED by
+    # the review, which noted this stage asserted the floor and not the ceiling, so a vacuous
+    # estimator reached the fitness frame green.
+    ceilings = {s.name: s.tightness_ceiling for s in SCENARIOS}
+    vacuous = [
+        v for v in verdicts
+        if ceilings.get(v.scenario) is not None
+        and v.best_prevalence_upper > ceilings[v.scenario]]
+    assert not vacuous, (
+        "the estimator covers but states nothing useful: "
+        + ", ".join(f"{v.scenario} ({v.best_prevalence_upper:.3f} at zero found)"
+                    for v in vacuous))
+
+
 # The pipeline. Order is the FR-55 sequence. `needs_model=True` marks a capability
 # that does NOT survive the model provider's absence (the degradation list, AC4).
 STAGES: list[Stage] = [
@@ -80,6 +114,13 @@ STAGES: list[Stage] = [
     Stage("rank (relevance judgement)", "4.2", PENDING, needs_model=True),
     Stage("justifications", "4.6", PENDING, needs_model=True),
     Stage("place the line", "4.8", PENDING, needs_model=True),
+    Stage(
+        "the estimator is proven sound (simulation)",
+        "5.3",
+        ASSERTED,
+        check=_estimator_proven_sound,
+        invariant="soundness, not reproducibility — and no network, no database",
+    ),
     Stage("produce an audit record", "5.5", PENDING),
     Stage(
         "confidence bound",

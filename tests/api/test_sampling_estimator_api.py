@@ -301,3 +301,64 @@ def test_the_bound_is_computed_over_the_frozen_population_not_the_current_one(
     _cut_to(store, order[-1])                             # retain everything: the set is now empty
     after = _current(client)
     assert (after["population_families"], after["count_upper"], after["prevalence_upper"]) == frozen
+
+
+# ── Story 5.3: the register that can say no, over HTTP ───────────────────────────────────────────
+
+def _unproven(monkeypatch) -> None:  # noqa: ANN001
+    """Flip the proven flag everywhere it is READ. Both modules import the predicate by name."""
+    import apx.api.app as api
+    import apx.core.app.read.freshness as read_freshness
+    import apx.core.domain.sampling as sampling
+    for module in (sampling, read_freshness, api):
+        monkeypatch.setattr(module, "estimator_is_proven", lambda: False)
+
+
+def test_an_unproven_estimator_ships_no_bound_on_any_surface(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """CONFIRMED [HIGH] ×2 by the review, on two different payloads. `/sampling/runs` read its
+    numbers off the frozen ROW and `/bound` passed the worst-case pièce figure through ungated, so
+    both announced `counts_only` and carried a bound anyway. The register is now disjoint on
+    the WIRE, not only in the sentence."""
+    _store, client, _order = _duplicated_matter(tmp_path, monkeypatch)
+    run = _start(client, sample_size=1)
+    done = _complete(client, _judge_all(client, run)["run_id"])
+    assert done["estimate_kind"] == "bound" and done["count_upper"] is not None
+
+    _unproven(monkeypatch)
+    again = client.get(f"/api/matters/{MATTER}/sampling/runs/current").json()
+    assert again["estimate_kind"] == "counts_only"
+    for field in ("count_upper", "prevalence_upper", "count_upper_pieces", "relevant_pieces"):
+        assert again[field] is None, f"/sampling/runs leaked {field} in the counts-only register"
+    # the counts themselves survive — they are what was observed, not what was inferred
+    assert again["sample_size"] >= 1 and again["relevant_found"] is not None
+
+    bound = client.get(f"/api/matters/{MATTER}/bound").json()
+    assert bound["kind"] == "counts_only"
+    for field in ("count_upper", "prevalence_upper", "count_upper_pieces", "relevant_pieces"):
+        assert bound[field] is None, f"/bound leaked {field} in the counts-only register"
+    assert "%" not in bound["copy_text"]
+    assert "Aucune borne" in bound["copy_text"]
+
+    export = client.get(f"/api/matters/{MATTER}/bound/export")
+    if export.status_code == 200:
+        for field in ("count_upper", "prevalence_upper", "count_upper_pieces"):
+            assert export.json()[field] is None, f"/bound/export leaked {field}"
+
+
+def test_the_sizing_plan_says_when_the_bound_it_promises_will_not_be_stated(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """CONFIRMED [LOW] by the review. A sizing is a plan, but it is a quantitative promise about the
+    bound the run will yield — offering "n familles suffisent pour 5 %" and then refusing to say
+    5 % is a promise broken after an evening of verdicts."""
+    _store, client, _order = _duplicated_matter(tmp_path, monkeypatch)
+    ok = client.get(f"/api/matters/{MATTER}/sampling/sizing", params={"target": 0.6}).json()
+    assert ok["bound_will_be_stated"] is True and ok["caveat_fr"] is None
+
+    _unproven(monkeypatch)
+    refused = client.get(f"/api/matters/{MATTER}/sampling/sizing", params={"target": 0.6}).json()
+    assert refused["bound_will_be_stated"] is False
+    assert refused["caveat_fr"] is not None and "pas de borne" in refused["caveat_fr"]
+    assert refused["size"] == ok["size"], "the reading burden is unchanged; only the promise is"

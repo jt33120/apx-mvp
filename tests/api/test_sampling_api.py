@@ -252,7 +252,14 @@ def test_a_census_states_a_fact_and_never_a_percentage(tmp_path: Path, monkeypat
     done = _complete(client, run["run_id"])
     assert done["census_fr"] is not None
     assert "recensement" in done["census_fr"] and "%" not in done["census_fr"]
-    assert done["prevalence_upper"] == 0.0             # exact at a census, not an estimate
+    # CONFIRMED [HIGH] by the Story 5.3 review. This asserted `prevalence_upper == 0.0` — a bound
+    # of zero on a payload for a population that was read in full. The register is disjoint on the
+    # WIRE now, not only in the sentence: `/sampling/runs` reads its numbers off the register-aware
+    # estimate rather than off the run row, so a census carries NULL where a bound would sit and no
+    # client can render a residual-risk figure by reaching for a field that should not be there.
+    assert done["prevalence_upper"] is None
+    assert done["count_upper"] is None
+    assert done["estimate_kind"] == "census"
 
 
 def test_a_target_bound_sizes_the_run_it_starts(tmp_path: Path, monkeypatch) -> None:
