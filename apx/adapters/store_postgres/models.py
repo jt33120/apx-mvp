@@ -961,6 +961,13 @@ class SamplingRun(Base):
     confidence: Mapped[float] = mapped_column(Float, nullable=False)
     population_families: Mapped[int] = mapped_column(Integer, nullable=False)  # the bound's unit
     population_pieces: Mapped[int] = mapped_column(Integer, nullable=False)
+    # Story 5.2 — the size of EVERY family in the frozen population, sorted descending and
+    # comma-joined, including the ones nobody drew. It is what makes the *pièce* worst case
+    # computable from the freeze rather than from a set that may since have moved (OQ-4 inputs 1
+    # and 4): if at most D families are relevant, at most the D LARGEST are. Nullable because a
+    # Story-5.1 run genuinely does not have one — an absent input is left absent, never
+    # back-filled with a plausible-looking guess (AD-19). Counts only: no content, no PII.
+    population_family_sizes: Mapped[str | None] = mapped_column(Text, nullable=True)
     sample_size: Mapped[int] = mapped_column(Integer, nullable=False)
     is_census: Mapped[bool] = mapped_column(Boolean, nullable=False)
     # ── lifecycle ───────────────────────────────────────────────────────────────────────────────
@@ -976,6 +983,10 @@ class SamplingRun(Base):
     relevant_found: Mapped[int | None] = mapped_column(Integer, nullable=True)
     count_upper: Mapped[int | None] = mapped_column(Integer, nullable=True)
     prevalence_upper: Mapped[float | None] = mapped_column(Float, nullable=True)
+    # Story 5.2 — the statistic that produced them, by name (FR-23: changing the method produces a
+    # NEW bound rather than silently restating the old one). A bound whose recorded method differs
+    # from today's is a bound computed by a different method and reads as one.
+    estimator_method: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
 
 class SamplingRunItem(Base):

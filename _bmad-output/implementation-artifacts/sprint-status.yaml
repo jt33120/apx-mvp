@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-08-07  # EPIC 5 OPEN; A1 discharged; 5-1 DONE (sampling run over the derived discarded view)
+last_updated: 2026-08-11  # EPIC 5 OPEN; A1 + A7 discharged; 5-1 and 5-2 DONE (the estimator and OQ-4's five answers)
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -95,7 +95,7 @@ development_status:
   epic-4-retrospective: done
   epic-5: in-progress
   5-1-random-draw-from-the-discarded-set-population-frozen: done  # the sampling run over the DERIVED discarded set (decision A1): families as the unit of the draw (FR-38), the freeze by explicit identifier list (a seed is insufficient), invalidated-in-flight = the 4.13 stamp comparison, the legacy recall pair SUPERSEDED (rows readable, no new writer); 3 structural checks (77→80); review 8 confirmed / 18 refuted, 2 skeptics lost (Julian, 2026-08-07)
-  5-2-the-hypergeometric-estimator-and-the-census-crossover: backlog
+  5-2-the-hypergeometric-estimator-and-the-census-crossover: done  # OQ-4's five hard inputs answered in the story file BEFORE implementation (action item A7): the unit is the family and the pièce figure is a WORST CASE over the frozen sizes (never prevalence x pièces); the census crossover is n == N exactly, two disjoint registers; runs never pool and the current bound is chosen by recency, with the ordinal keyed on the discard_population digest and counting abandoned runs; the estimator's inputs are the freeze; the FR-19 projection is not calibratable against TREC and ships as counts only. 5 structural checks (80 -> 85). Review: 9 confirmed + 2 unadjudicated, all fixed; the seams lens and 2 skeptics lost to a usage limit (Julian, 2026-08-11)
   5-3-the-simulation-gate-the-estimator-ships-only-if-proven: backlog
   5-4-the-confidence-bound-as-a-sentence-or-counts-only: backlog
   5-5-the-audit-record: backlog
@@ -144,4 +144,5 @@ action_items:
   - epic: 4
     action: "A7 — answer the estimator's five hard inputs (OQ-4) in the story 5-2 file before implementation: near-duplicate family structure, census-vs-sample crossover, repeated sampling over one population, population freezing, projection at an unsampled position. Epic 4 already supplies the first via ranked_entry.family_id + is_representative"
     owner: "Dev"
-    status: open
+    status: done
+    resolution: "5-2-the-hypergeometric-estimator-and-the-census-crossover.md section 'The five hard inputs (OQ-4)' — written before implementation, each answer bound by one named structural check (estimator-piece-worst-case, estimator-census-no-bound, estimator-one-run-one-bound, estimator-bound-from-the-freeze, estimator-no-model-number), each proven to FIRE on the reversal of its answer"

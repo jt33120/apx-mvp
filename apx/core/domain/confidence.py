@@ -20,9 +20,19 @@ discarded pieces were actually relevant (a prevalence of `prevalence_upper`)."
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from math import comb
+
+# The statistical method, by name (Story 5.2, FR-23: *"the statistical method producing X is
+# stated… changing it produces a NEW confidence bound rather than silently restating the old
+# one"*). Recorded on every bound this build writes, so a bound computed by a different method
+# reads as one instead of inheriting the authority of this one. Exactly one method exists and
+# selecting among methods is deliberately NOT offered as a tenant configuration key — see the
+# stated deviation in the Story 5.2 file: a knob choosing the estimator is a knob choosing how
+# favourable the number is.
+ESTIMATOR_METHOD = "hypergeometric-upper-bound.v1"
 
 
 @dataclass(frozen=True)
@@ -98,6 +108,38 @@ def prevalence_upper_bound(
     )
 
 
+def pieces_upper_bound(
+    *, count_upper_families: int, family_sizes: Sequence[int] | None
+) -> int | None:
+    """How many *pièces* at most, given that at most ``count_upper_families`` FAMILIES are relevant.
+
+    OQ-4's first hard input, second half (Story 5.2). The bound is computed over the unit that was
+    drawn — near-duplicate families — but the lawyer counts her discarded pile in *pièces*, and
+    FR-23's sentence contains *"about Y pièces"*. The conversion must not be
+    ``prevalence_upper × population_pieces``: that product assumes the relevant families are of
+    AVERAGE size, and where the few large thread-families are the relevant ones it understates —
+    **in the flattering direction**, which is the one direction a number said to a judge may never
+    be biased in.
+
+    The honest conversion is the worst case the same confidence already covers: if at most ``D``
+    families are relevant, then at most the ``D`` **largest** families are, so at most the sum of
+    the ``D`` largest frozen family sizes is relevant in *pièces*. It is loose by construction and
+    says so; a loose true statement is admissible and a tight false one is not.
+
+    ``family_sizes`` is the run's FROZEN size list — every family in the population as it was at
+    draw time, not only the drawn ones and not the set as it is now. ``None`` when the run predates
+    that freeze (Story 5.1 runs): the answer is then *not computable*, and comes back as ``None``
+    rather than estimated, because an absent input is never imputed (AD-19).
+    """
+    if family_sizes is None:
+        return None
+    if count_upper_families < 0:
+        raise ValueError(f"count_upper_families must be non-negative: {count_upper_families}")
+    if any(s < 1 for s in family_sizes):
+        raise ValueError("a family holds at least one pièce")
+    return sum(sorted(family_sizes, reverse=True)[:count_upper_families])
+
+
 @dataclass(frozen=True)
 class RecordedBound:
     """A *confidence bound* that was **recorded** and can be read back later — the derived artefact
@@ -121,6 +163,21 @@ class RecordedBound:
     default. ``piece_count`` is how many *pièces* those units hold, or ``None`` when the two are the
     same thing; it is stated beside the bound and **never substituted into it** — a bound quoted
     over a denominator nobody sampled is the same failure with the numbers swapped.
+
+    ``method`` is the statistical method that produced the number, by name (Story 5.2, FR-23).
+    ``None`` means *no method was recorded* — true of every legacy ``recall_review`` row, which
+    predates the requirement — and it is left as ``None`` rather than back-filled with today's
+    method, because claiming a provenance a row does not have is the same failure as claiming a
+    freshness it does not have (AD-19).
+
+    ``count_upper_pieces`` is the worst-case *pièce* figure derived from the frozen family sizes
+    (:func:`pieces_upper_bound`), or ``None`` when it is not computable. It is never substituted for
+    ``bound.count_upper`` and never rendered as the bound's own denominator.
+
+    ``relevant_pieces`` is the **exact** *pièce* count of the relevant units, and is meaningful only
+    at a census, where every unit was read. The two *pièce* fields are deliberately separate: a
+    worst case and an exact count are different kinds of statement and must not share a slot, since
+    a slot shared is a slot a renderer can mistake (Story 5.2, OQ-4 input 2).
     """
 
     artefact_id: str
@@ -128,3 +185,9 @@ class RecordedBound:
     reviewed_at: datetime
     unit_fr: str = "pièces écartées"
     piece_count: int | None = None
+    method: str | None = None
+    count_upper_pieces: int | None = None
+    relevant_pieces: int | None = None
+    # How many runs over this same frozen population came first, counting the abandoned ones. FR-22
+    # requires a bound resting on a later draw to say so, and the sentence travels alone.
+    run_ordinal: int = 1

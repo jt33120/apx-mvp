@@ -37,6 +37,7 @@ from apx.checks import (
     configuration,
     credential_storage,
     encryption,
+    estimator,
     forward_looking,
     freshness_never_time_based,
     gold_gate,
@@ -584,6 +585,30 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        no_legacy_bound.no_new_legacy_bound_is_written,
        "RecallReview constructions across apx/** — the label-pile bound is readable history, "
        "never a second live writer over a second population (Story 5.1)"),
+    # ── story 5.2: OQ-4's five hard inputs, one structural check each ────────────────────────────
+    _p("estimator-piece-worst-case", "FR-38", "AD-19", "the pièce figure is a worst case",
+       estimator.piece_figure_is_a_worst_case,
+       "every count_upper_pieces= assignment and every multiplication across apx/** — the bound is "
+       "over FAMILIES, and the pièce figure is the sum of the D largest frozen families, never "
+       "prevalence × pièces (Story 5.2, OQ-4 input 1)"),
+    _p("estimator-census-no-bound", "FR-22", "AD-19", "a census states no bound",
+       estimator.a_census_states_no_bound,
+       "census_statement_fr and estimate_for_run in core/domain/sampling.py — a census carries an "
+       "exact count and no percentage, the bound register carries no exact count (Story 5.2, "
+       "OQ-4 input 2)"),
+    _p("estimator-one-run-one-bound", "FR-22", "AD-37", "one run, one bound, chosen by recency",
+       estimator.one_run_one_bound_chosen_by_recency,
+       "prevalence_upper_bound call sites across apx/** and read_current_bound's ordering — runs "
+       "are never pooled and the current bound is the most recent, never the most flattering "
+       "(Story 5.2, OQ-4 input 3)"),
+    _p("estimator-bound-from-the-freeze", "FR-22", "AD-23", "the bound is computed from the freeze",
+       estimator.the_bound_is_computed_from_the_freeze,
+       "complete_sampling_run in the store adapter — the estimator's population and sample are "
+       "read off the frozen run row and no live derivation is reached (Story 5.2, OQ-4 input 4)"),
+    _p("estimator-no-model-number", "FR-42", "AD-19", "the bound consumes no model number",
+       estimator.the_bound_consumes_no_model_number,
+       "core/domain/confidence.py and core/domain/sampling.py — the estimator reaches neither the "
+       "FR-19 projection nor any model-reported confidence field (Story 5.2, OQ-4 input 5)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

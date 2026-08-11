@@ -59,6 +59,12 @@ export type SamplingRun = {
   started_by: string; started_at: string; completed_at: string | null;
   verdicts_recorded: number;
   relevant_found: number | null; count_upper: number | null; prevalence_upper: number | null;
+  // Story 5.2 — what the run supports. `estimate_kind` is census | bound | no_population, or null
+  // while it supports nothing. The census field and the bound fields are never both set.
+  estimate_kind: string | null; estimator_method: string | null;
+  count_upper_pieces: number | null;   // WORST CASE in pièces; null = not computable, never 0
+  relevant_pieces: number | null;      // EXACT, census only
+  run_ordinal: number; repeated_draw_fr: string | null;
   drawn: DrawnFamily[];
 };
 export type Sizing = {
@@ -483,9 +489,22 @@ export type WorklistLine = {
 };
 export type Bound = {
   artefact_id: string; population: number; sample_size: number; relevant_found: number;
-  confidence: number; count_upper: number; prevalence_upper: number; reviewed_at: string;
+  confidence: number; reviewed_at: string;
   freshness: Freshness | null; exportable_as_current: boolean;
   status_fr: string; copy_text: string;
+  // Story 5.2 — the two registers, disjoint in the TYPE and not only by convention. `kind` says
+  // which one applies; at a census `count_upper` and `prevalence_upper` are NULL, because nothing
+  // is bounded when everything was read and a nullable field cannot be rendered as a residual-risk
+  // figure by accident (FR-22, OQ-4 input 2).
+  kind: "census" | "bound";
+  count_upper: number | null; prevalence_upper: number | null;
+  // The unit the bound was computed over, and the pièce figures that may sit BESIDE it but never
+  // inside it. `count_upper_pieces` is a worst case; `relevant_pieces` is exact and census-only;
+  // null means not computable and is never rendered as zero.
+  unit_fr: string; piece_count: number | null; method: string | null;
+  count_upper_pieces: number | null; relevant_pieces: number | null;
+  // 1 = the first draw over this population, abandoned runs counted (OQ-4 input 3).
+  run_ordinal: number;
 };
 
 export async function readFreshness(matter: string): Promise<Freshness[]> {

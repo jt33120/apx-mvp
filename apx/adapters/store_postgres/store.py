@@ -22,7 +22,7 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
-from sqlalchemy import Text, cast, delete, event, func, or_, select, text
+from sqlalchemy import Text, and_, cast, delete, event, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
@@ -75,7 +75,12 @@ from apx.core.domain.chunking import (
     chunking_config,
     resolve_passage,
 )
-from apx.core.domain.confidence import PrevalenceBound, RecordedBound
+from apx.core.domain.confidence import (
+    ESTIMATOR_METHOD,
+    PrevalenceBound,
+    RecordedBound,
+    pieces_upper_bound,
+)
 from apx.core.domain.config import (
     CONFIG_SCHEMA,
     ConfigError,
@@ -190,6 +195,27 @@ _BACKUP_TABLES = (
     "backup_record", "truncation_marker", "taxonomy_label_entry", "line_placement", "pin_entry",
     "piece_justification", "justification_rejection",
 )
+
+
+def _join_family_sizes(families: Sequence[SamplingUnit]) -> str:
+    """The population's family sizes, sorted descending and comma-joined (Story 5.2, OQ-4 input 1).
+
+    Sorted at the freeze so the *pièce* worst case — the sum of the D largest — is a prefix sum of
+    what was stored, and so a later reader cannot accidentally take the FIRST D (draw order) for the
+    LARGEST D and understate. Counts only: no identity, no content, no PII."""
+    return ",".join(str(n) for n in sorted(
+        (len(u.member_piece_ids) for u in families), reverse=True))
+
+
+def _split_family_sizes(raw: str | None) -> tuple[int, ...] | None:
+    """The frozen sizes back, or ``None`` for a run that never froze them (a Story-5.1 run).
+
+    ``None`` is *not computable* and is carried as such all the way to the surface; it is never
+    softened into an empty tuple, which would read as *a population of no families* and silently
+    make the worst case zero — the flattering direction (AD-19)."""
+    if raw is None:
+        return None
+    return tuple(int(part) for part in raw.split(",") if part)
 
 
 class ScopeDenied(Exception):
@@ -4358,22 +4384,40 @@ class SqlStore:
         with self._sf() as session:
             if not self._matter_held(session, tenant, matter, scopes):
                 return None
+            # ORDERED BY RECENCY, and never by how favourable the number is (OQ-4 input 3). Pooling
+            # two runs over one population is the textbook multiple-comparisons trap; picking the
+            # nicest of them is the one someone will ask for in good faith. Neither happens here,
+            # and `estimator-one-run-one-bound` fails the build if this ordering ever mentions
+            # prevalence_upper or count_upper.
             run = session.scalars(
                 select(SamplingRun)
                 .where(SamplingRun.tenant == tenant, SamplingRun.matter == matter,
                        SamplingRun.status == STATUS_COMPLETED)
                 .order_by(SamplingRun.completed_at.desc(), SamplingRun.id.desc()).limit(1)).first()
             if run is not None:
+                count_upper = run.count_upper or 0
+                census = is_census(
+                    population=run.population_families, sample_size=run.sample_size)
                 return RecordedBound(
+                    relevant_pieces=self._census_relevant_pieces(session, run),
+                    run_ordinal=self._run_ordinal(session, run),
                     artefact_id=run.id,
                     bound=PrevalenceBound(
                         population=run.population_families, sample_size=run.sample_size,
                         relevant_in_sample=run.relevant_found or 0, confidence=run.confidence,
-                        count_upper=run.count_upper or 0,
+                        count_upper=count_upper,
                         prevalence_upper=run.prevalence_upper or 0.0),
                     reviewed_at=run.completed_at or run.started_at,
                     unit_fr="familles de quasi-doublons écartées",
-                    piece_count=run.population_pieces)
+                    piece_count=run.population_pieces,
+                    method=run.estimator_method,
+                    # the WORST CASE in pièces — the D largest frozen families, never
+                    # prevalence × pièces. None on a run frozen before the sizes existed, and None
+                    # at a CENSUS, where nothing is bounded and a worst case would be a bound
+                    # smuggled into the register that states an exact count (OQ-4 input 2).
+                    count_upper_pieces=None if census else pieces_upper_bound(
+                        count_upper_families=count_upper,
+                        family_sizes=_split_family_sizes(run.population_family_sizes)))
             row = session.scalars(
                 select(RecallReview)
                 .where(RecallReview.tenant == tenant, RecallReview.matter == matter)
@@ -4409,7 +4453,59 @@ class SqlStore:
             select(RankingVersionRow.version_no).where(RankingVersionRow.id == version_id))
         if resolved_no is None:  # pragma: no cover - the id came from that table one query ago
             return None
-        return version_id, resolved_no, group_discarded_families(pairs), len(pairs)
+        families = self._with_collapsed_twins(
+            session, tenant, matter, group_discarded_families(pairs))
+        return version_id, resolved_no, families, sum(len(f.member_piece_ids) for f in families)
+
+    @staticmethod
+    def _with_collapsed_twins(
+        session: Session, tenant: str, matter: str, families: tuple[SamplingUnit, ...]
+    ) -> tuple[SamplingUnit, ...]:
+        """Give each drawn family the *pièces* the **deduplication** collapsed into it (FR-38,
+        Story 5.2).
+
+        This is what makes the family a family. The ranked order holds one entry per near-duplicate
+        cluster — ``store.representatives`` groups by ``Piece.text_key`` and the cascade rejects the
+        non-representative members at stage 1 (AD-36) — so ``derive_triage_sets`` can only ever hand
+        back one *pièce* per family, and without this step ``member_piece_ids`` would be a singleton
+        forever, ``population_pieces`` would equal ``population_families``, and the *pièce* worst
+        case would be an identity dressed up as a statistic.
+
+        Expanded here rather than inside :meth:`_derived_discarded` on purpose: that derivation also
+        feeds the ``discard_population`` freshness observable, which watches what the RANKING
+        produced. A new twin arriving does move the run's population — and it is already caught,
+        because ``corpus_count`` and ``extraction_digest`` observe every *pièce* in the *matter*.
+
+        The membership referent is ``Piece.text_key`` — the **same** key ``representatives`` grouped
+        by. Using a different one would put a *pièce* in a family the ranking never collapsed, which
+        is the nearly-right referent this epic exists to keep out of the denominator."""
+        proxies = [f.proxy_piece_id for f in families]
+        if not proxies:
+            return families
+        keys = dict(session.execute(
+            select(Piece.id, Piece.text_key).where(
+                Piece.tenant == tenant, Piece.matter == matter, Piece.id.in_(proxies))).all())
+        by_key: dict[str, list[str]] = {}
+        if keys:
+            for pid, key in session.execute(
+                    select(Piece.id, Piece.text_key).where(
+                        Piece.tenant == tenant, Piece.matter == matter,
+                        Piece.text_key.in_(sorted(set(keys.values()))))).all():
+                by_key.setdefault(key, []).append(pid)
+        expanded: list[SamplingUnit] = []
+        for family in families:
+            key = keys.get(family.proxy_piece_id)
+            twins = sorted(by_key.get(key, ())) if key is not None else []
+            # the proxy FIRST — it is the pièce the lawyer actually reads — then its twins, in
+            # identity order. A pièce the ranking already gave this family is never added twice.
+            members = tuple(dict.fromkeys(
+                (*family.member_piece_ids, *(t for t in twins if t not in family.member_piece_ids))
+            ))
+            expanded.append(
+                SamplingUnit(
+                    family_id=family.family_id, proxy_piece_id=family.proxy_piece_id,
+                    member_piece_ids=members))
+        return tuple(expanded)
 
     def size_for_target_bound(
         self, *, tenant: str, matter: str, scopes: set[str], target_prevalence: float,
@@ -4499,7 +4595,13 @@ class SqlStore:
                 last_retained_piece_id=self._line_identity(session, version_id),
                 pin_ledger_seq=pin_ledger_seq, scope=scope, seed=draw_seed,
                 confidence=confidence, population_families=len(families),
-                population_pieces=piece_count, sample_size=len(drawn),
+                population_pieces=piece_count,
+                # Story 5.2 / OQ-4 input 1: the size of EVERY family in the population, drawn or
+                # not, as it is right now. The *pièce* worst case is the sum of the D largest, so
+                # the D largest have to be knowable later without re-deriving a set that may have
+                # moved — which for an invalidated run no longer exists at all.
+                population_family_sizes=_join_family_sizes(families),
+                sample_size=len(drawn),
                 is_census=is_census(population=len(families), sample_size=len(drawn)),
                 status=STATUS_OPEN, started_by=actor, started_at=now))
             for index, unit in enumerate(drawn):
@@ -4638,6 +4740,11 @@ class SqlStore:
                 raise ValueError(
                     f"the run is not fully judged: {len(verdicts)}/{drawn} families")
             relevant_found = sum(1 for v in verdicts.values() if v.relevant)
+            # OQ-4 input 4: the estimator's population and sample are the FROZEN ones, read off the
+            # run's own row. Re-deriving the discarded set here would compute a bound over whatever
+            # the matter looks like NOW and quote it with the authority of a draw made over what it
+            # looked like THEN — and for an invalidated run, over a population that no longer
+            # exists. The check `estimator-bound-from-the-freeze` holds this shape.
             bound = bound_for_run(
                 population=run.population_families, sample_size=run.sample_size,
                 relevant_found=relevant_found, confidence=run.confidence)
@@ -4647,6 +4754,9 @@ class SqlStore:
             run.relevant_found = relevant_found
             run.count_upper = bound.count_upper
             run.prevalence_upper = bound.prevalence_upper
+            # FR-23: the method travels with the number, so a later change of method produces a NEW
+            # bound instead of silently restating this one.
+            run.estimator_method = ESTIMATOR_METHOD
             self._append_audit(
                 session, tenant, matter, actor, "sampling-run-complete",
                 f"run={run_id} population={run.population_families} sample={run.sample_size} "
@@ -4704,6 +4814,64 @@ class SqlStore:
                 family_id=r.family_id, relevant=r.relevant, actor=r.actor, at=r.at, seq=r.seq)
         return current
 
+    def _census_relevant_pieces(self, session: Session, run: SamplingRun) -> int | None:
+        """How many *pièces* the relevant families hold — **exact**, and only at a census.
+
+        At a census the drawn families ARE the population, so this is a count of what was read, not
+        an estimate of what was not. At a sample it would be a fact about the sample masquerading
+        as a fact about the population, so it is ``None`` there and the surface falls back to the
+        bound register (Story 5.2, OQ-4 input 2)."""
+        if not is_census(population=run.population_families, sample_size=run.sample_size):
+            return None
+        verdicts = self._current_verdicts(session, run.id)
+        items = session.scalars(
+            select(SamplingRunItem).where(SamplingRunItem.run_id == run.id)).all()
+        return sum(
+            len(i.member_piece_ids.split("\n"))
+            for i in items
+            if (v := verdicts.get(i.family_id)) is not None and v.relevant)
+
+    @staticmethod
+    def _run_ordinal(session: Session, run: SamplingRun) -> int:
+        """How many runs over this run's **frozen population** came first, plus one (OQ-4 input 3).
+
+        Two runs share a population exactly when their populations have the same **membership** —
+        which is what ``FreshnessStamp.discard_population`` is: the digest of the derived discarded
+        set the run was drawn over, written at the draw by the same derivation that later judges the
+        run invalidated. The freeze coordinates are NOT that identity, and the difference is not
+        academic: **a pin followed by an un-pin advances the pin ledger twice and leaves the
+        discarded set byte-identical**, so keying on ``pin_ledger_seq`` would reset a third draw to
+        *"first draw"* — hiding multiplicity, which is the flattering direction.
+
+        FR-22 requires a second run to be *"presented alongside the first rather than replacing
+        it"* and any bound to state how many runs it rests on; the sentence travels alone, so the
+        ordinal travels inside it.
+
+        **Abandoned runs count.** Abandon-and-redraw is the cheapest route to a favourable number —
+        an hour of inconvenient verdicts thrown away, a fresh draw, a nicer sentence — so a count
+        that ignored them would be blind to precisely the behaviour it exists to make visible.
+
+        Derived on read, never stored: a stored counter must be incremented by every writer, and a
+        writer that forgets leaves a third draw reading as the first (AD-23, AD-39). A run with no
+        readable stamp is ordinal 1 and matches nothing: an unverifiable population is not evidence
+        of being the same population."""
+        stamps = {
+            r.artefact_id: FreshnessStamp.from_json(r.stamp_json).discard_population
+            for r in session.scalars(
+                select(ArtefactStamp).where(
+                    ArtefactStamp.tenant == run.tenant, ArtefactStamp.matter == run.matter,
+                    ArtefactStamp.kind == KIND_SAMPLING_RUN)).all()}
+        mine = stamps.get(run.id)
+        if mine is None:
+            return 1
+        earlier = session.execute(
+            select(SamplingRun.id).where(
+                SamplingRun.tenant == run.tenant, SamplingRun.matter == run.matter,
+                or_(SamplingRun.started_at < run.started_at,
+                    and_(SamplingRun.started_at == run.started_at,
+                         SamplingRun.id < run.id)))).all()
+        return 1 + sum(1 for (rid,) in earlier if stamps.get(rid) == mine)
+
     def _run_view(self, session: Session, run: SamplingRun) -> SamplingRunView:
         items = session.scalars(
             select(SamplingRunItem)
@@ -4716,7 +4884,7 @@ class SqlStore:
             last_retained_piece_id=run.last_retained_piece_id,
             pin_ledger_seq=run.pin_ledger_seq, scope=run.scope, confidence=run.confidence,
             population_families=run.population_families, population_pieces=run.population_pieces,
-            sample_size=run.sample_size, is_census=run.is_census, seed=run.seed,
+            sample_size=run.sample_size, seed=run.seed,
             status=run.status, started_by=run.started_by, started_at=run.started_at,
             completed_at=run.completed_at, relevant_found=run.relevant_found,
             count_upper=run.count_upper, prevalence_upper=run.prevalence_upper,
@@ -4726,7 +4894,10 @@ class SqlStore:
                         family_id=i.family_id, proxy_piece_id=i.proxy_piece_id,
                         member_piece_ids=tuple(i.member_piece_ids.split("\n"))),
                     draw_index=i.draw_index, verdict=verdicts.get(i.family_id))
-                for i in items))
+                for i in items),
+            population_family_sizes=_split_family_sizes(run.population_family_sizes),
+            run_ordinal=self._run_ordinal(session, run),
+            estimator_method=run.estimator_method)
 
     def read_sampling_run(
         self, *, tenant: str, matter: str, scopes: set[str], run_id: str | None = None,

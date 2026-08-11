@@ -140,6 +140,16 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     ("SamplingRunItem", "run_id"),      # a uuid4 hex FK — a row identity, like the global ``id``
     ("SamplingVerdict", "family_id"),
     ("SamplingVerdict", "run_id"),
+    # Story 5.2 — the estimator's frozen inputs and its recorded method. Both are structural
+    # metadata, kept plaintext by conscious decision. ``population_family_sizes`` is a
+    # comma-joined list of INTEGER family sizes (how many near-duplicate copies each family holds)
+    # — counts only: no identity, no filename, no custodian, no content, nothing that narrows to a
+    # person or a document. ``estimator_method`` is the statistic's name, which NFR-56 requires
+    # readable in the interface and in the content-free projection, exactly like
+    # ``ranking_version.identity_json``: a number a firm says to a court must be able to name the
+    # method that produced it without a key.
+    ("SamplingRun", "population_family_sizes"),
+    ("SamplingRun", "estimator_method"),
 }
 
 

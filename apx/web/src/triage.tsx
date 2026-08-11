@@ -522,8 +522,14 @@ function BoundPanel({ bound, matter }: { bound: Bound | null | undefined; matter
         </span>
       )}
       <p style={{ margin: ".4rem 0 .2rem" }}>{bound.copy_text}</p>
+      {/* The unit comes from the SERVER (`unit_fr`) — a sampling run counts near-duplicate
+          FAMILIES, and hard-coding "pièces écartées" here was the Story-5.1 defect repeated one
+          file over. A census is not an "échantillon": it read everything. */}
       <p className="apx-hint" style={{ margin: 0 }}>
-        Échantillon de {bound.sample_size} sur {bound.population} pièces écartées ·{" "}
+        {bound.kind === "census"
+          ? <>Recensement : {bound.population} {bound.unit_fr}, toutes examinées</>
+          : <>Échantillon de {bound.sample_size} sur {bound.population} {bound.unit_fr}</>}
+        {bound.piece_count !== null && <> ({bound.piece_count} pièces)</>} ·{" "}
         {bound.relevant_found} pertinente(s) trouvée(s)
       </p>
       <p style={{ margin: ".5rem 0 0" }}>

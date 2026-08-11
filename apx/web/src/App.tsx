@@ -929,6 +929,7 @@ function SamplingPanel({ matter }: { matter: string }) {
             Classement v{run.version_no} · {run.sample_size} famille(s) tirée(s) sur{" "}
             {run.population_families} ({run.population_pieces} pièces écartées)
             {run.is_census && <strong> · recensement</strong>}
+            {run.run_ordinal > 1 && <> · tirage n° {run.run_ordinal} sur cette population</>}
           </p>
           {invalidated && (
             <p className="apx-stale" role="alert">
@@ -971,17 +972,29 @@ function SamplingPanel({ matter }: { matter: string }) {
               </button>
             </div>
           )}
-          {/* A census states a FACT and never a percentage; a sample states a bound. */}
-          {run.census_fr ? (
+          {/* The two registers (Story 5.2, OQ-4 input 2). A census states a FACT and never a
+              percentage; a sample states a bound over FAMILIES with the pièce figure beside it as
+              an explicit worst case. They are told apart by `estimate_kind`, not by whether a
+              number happens to be zero — a 39-of-40 draw can bound at zero and is still a sample. */}
+          {run.estimate_kind === "census" && run.census_fr && (
             <p className="apx-seal apx-seal--ok" style={{ marginTop: ".5rem" }}>🛡 {run.census_fr}</p>
-          ) : run.status === "completed" ? (
+          )}
+          {run.estimate_kind === "bound" && (
             <p className="apx-seal apx-seal--ok" style={{ marginTop: ".5rem" }}>
               🛡 {run.sample_size}/{run.population_families} familles relues ·{" "}
               {run.relevant_found} pertinente(s) → au plus <strong>{run.count_upper}</strong>{" "}
-              ({((run.prevalence_upper ?? 0) * 100).toFixed(1)}%) à{" "}
-              {Math.round(run.confidence * 100)}%.
+              familles ({((run.prevalence_upper ?? 0) * 100).toFixed(1)}%) à{" "}
+              {Math.round(run.confidence * 100)}%
+              {run.count_upper_pieces !== null
+                ? <>, soit au plus <strong>{run.count_upper_pieces}</strong> pièces au pire.</>
+                : <>. Le pire cas en pièces n’est pas calculable pour ce tirage.</>}
             </p>
-          ) : null}
+          )}
+          {/* FR-22: a later draw over the same population is presented ALONGSIDE the earlier ones,
+              never merged with them — and the sentence travels alone, so the fact travels with it. */}
+          {run.repeated_draw_fr && (
+            <p className="apx-hint" style={{ marginTop: ".3rem" }}>{run.repeated_draw_fr}</p>
+          )}
           {run.status === "abandoned" && (
             <p className="apx-hint" style={{ marginTop: ".5rem" }}>{run.state_fr}</p>
           )}

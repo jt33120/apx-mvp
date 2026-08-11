@@ -35,7 +35,11 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from apx.core.domain.confidence import PrevalenceBound, prevalence_upper_bound
+from apx.core.domain.confidence import (
+    PrevalenceBound,
+    pieces_upper_bound,
+    prevalence_upper_bound,
+)
 
 # The run's **stored** status: what a person did to it. Append-only string values (a persisted
 # status must always decode).
@@ -51,6 +55,16 @@ STATUS_ABANDONED = "abandoned"  # explicitly given up — its verdicts stay read
 STATE_INVALIDATED = "invalidated"
 
 STATUSES: tuple[str, ...] = (STATUS_OPEN, STATUS_COMPLETED, STATUS_ABANDONED)
+
+# The two registers a completed run can speak in, and the third thing that is neither (Story 5.2,
+# OQ-4 input 2). They are DISJOINT: a census states an exact count and carries no bound, a sample
+# states a bound and carries no exact count. The crossover is ``n == N`` exactly and there is no
+# third register near it — an "almost a census" would be a sample heard as a census, which is the
+# one reading FR-22 forbids in as many words.
+KIND_CENSUS = "census"
+KIND_BOUND = "bound"
+KIND_NO_POPULATION = "no_population"
+ESTIMATE_KINDS: tuple[str, ...] = (KIND_CENSUS, KIND_BOUND, KIND_NO_POPULATION)
 
 
 @dataclass(frozen=True)
@@ -269,15 +283,150 @@ def is_census(*, population: int, sample_size: int) -> bool:
     return population > 0 and sample_size >= population
 
 
-def census_statement_fr(*, relevant_found: int, piece_count: int) -> str:
-    """What a census says, in French. Never a percentage: a census estimates nothing."""
-    if relevant_found == 0:
-        return (
-            f"recensement : les {piece_count} pièces écartées ont toutes été examinées ; "
-            "aucune n'était pertinente")
-    return (
-        f"recensement : les {piece_count} pièces écartées ont toutes été examinées ; "
-        f"{relevant_found} famille(s) se sont révélées pertinentes")
+def census_statement_fr(
+    *, relevant_units: int, relevant_pieces: int | None, unit_fr: str, piece_count: int
+) -> str:
+    """What a census says, in French — an exact count, **never a percentage** (Story 5.2, OQ-4
+    input 2).
+
+    A census is not a tighter bound; it is a categorically different statement. Nothing is
+    estimated, everything was read. *"au plus 0,0 % est pertinent"* over a fully reviewed population
+    is a false claim of residual risk said out loud to a judge — §0.2's failure with better
+    arithmetic.
+
+    Both counts are **exact**: at a census the drawn units ARE the population, so the *pièces* held
+    by the relevant ones are known by identity, not bounded. That is why this sentence takes
+    ``relevant_pieces`` and not a worst case — the two epistemic statuses are different and are
+    never spelled the same way.
+
+    ``unit_fr`` names what was counted, because not every bound counts families: a legacy
+    ``recall_review`` counted *pièces*, and rendering its census as *"3 familles"* would be the
+    Story-5.1 denominator defect with the units swapped. ``relevant_pieces`` is ``None`` when it is
+    not separately known — the unit already IS the *pièce*, or the run never froze its member
+    lists — and the sentence then states one count instead of inventing a second."""
+    head = f"recensement : les {piece_count} pièces écartées ont toutes été examinées ; "
+    if relevant_units == 0:
+        return head + "aucune n'était pertinente"
+    units = f"{relevant_units} {unit_fr}" if relevant_units > 1 else f"1 {_singular(unit_fr)}"
+    if relevant_pieces is None or unit_fr.startswith("pièces"):
+        return f"{head}{units} se sont révélées pertinentes"
+    pieces = "1 pièce" if relevant_pieces == 1 else f"{relevant_pieces} pièces"
+    return f"{head}{units} — {pieces} — se sont révélées pertinentes"
+
+
+def _singular(unit_fr: str) -> str:
+    """A crude French singular for the unit label, so *"1 familles"* never reaches a court. The
+    labels are a closed, product-owned set (``pièces écartées``, ``familles de quasi-doublons
+    écartées``); this is not a general pluraliser and does not pretend to be."""
+    return " ".join(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in unit_fr.split())
+
+
+@dataclass(frozen=True)
+class Estimate:
+    """What a completed *sampling run* supports, in one object (Story 5.2, FR-23/OQ-4).
+
+    The five hard inputs are answered *in this shape*, not only in prose:
+
+    - **the unit** is the near-duplicate family, so ``population_families`` / ``sample_families`` /
+      ``relevant_families`` are family counts throughout and the hypergeometric is applied to a
+      population whose members are actually exchangeable (input 1);
+    - **the two registers are disjoint fields.** ``kind == KIND_CENSUS`` carries ``relevant_pieces``
+      (exact) and leaves ``prevalence_upper`` / ``count_upper_families`` / ``count_upper_pieces``
+      ``None``; ``kind == KIND_BOUND`` carries the bound and leaves ``relevant_pieces`` ``None``. A
+      renderer cannot read one as the other by accident (input 2);
+    - **``count_upper_pieces`` is a WORST CASE**, the sum of the ``count_upper_families`` largest
+      frozen family sizes — never ``prevalence_upper × population_pieces`` (input 1). ``None`` means
+      *not computable* (a run frozen before the size list existed), never *zero* (AD-19);
+    - **``run_ordinal``** is how many runs over this same frozen population came first, counting the
+      abandoned ones. ``1`` is the first draw (input 3);
+    - **``method``** names the statistic, so a later change of method produces a new bound rather
+      than silently restating this one (input 4, FR-23).
+
+    ``kind == KIND_NO_POPULATION`` is the empty discarded set: no claim applies, and it is
+    emphatically not a flattering 0 %.
+    """
+
+    kind: str
+    method: str
+    confidence: float
+    population_families: int
+    population_pieces: int
+    sample_families: int
+    relevant_families: int
+    run_ordinal: int
+    # ── the bound register only ──────────────────────────────────────────────────────────────────
+    count_upper_families: int | None = None
+    prevalence_upper: float | None = None
+    count_upper_pieces: int | None = None     # a WORST CASE; None = not computable
+    # ── the census register only ─────────────────────────────────────────────────────────────────
+    relevant_pieces: int | None = None        # EXACT; every pièce was read
+
+    @property
+    def is_census(self) -> bool:
+        return self.kind == KIND_CENSUS
+
+    @property
+    def repeated(self) -> bool:
+        """True when this is not the first draw over its frozen population — the multiple-
+        comparisons fact FR-22 requires to travel with the number, because the sentence travels
+        alone."""
+        return self.run_ordinal > 1
+
+
+def estimate_for_run(
+    *, population_families: int, population_pieces: int, sample_families: int,
+    relevant_families: int, relevant_pieces_drawn: int, confidence: float,
+    family_sizes: Sequence[int] | None, recorded_count_upper: int | None,
+    recorded_prevalence_upper: float | None, recorded_method: str | None, run_ordinal: int = 1,
+) -> Estimate:
+    """The **one** function that turns a completed run into an :class:`Estimate` (AD-37).
+
+    One owning derivation is the structural answer to OQ-4's third input: a bound rests on exactly
+    one run, so there is exactly one place a bound can be born and no second path that could pool
+    two draws over one population. ``relevant_pieces_drawn`` is how many *pièces* the
+    found-relevant DRAWN families hold; it is the exact answer only at a census, where the drawn
+    families are the population, and it is ignored in the bound register for that reason.
+
+    **The numbers are READ, never recomputed.** ``recorded_count_upper`` /
+    ``recorded_prevalence_upper`` / ``recorded_method`` come off the run's own row: a completed
+    bound is a recorded artefact with a lifetime (FR-58), and recomputing it here with today's
+    statistic would mean the screen and the export could disagree the day the method changes —
+    which is exactly the mechanism FR-23 asks for and would silently defeat. A run that recorded no
+    method carries ``None``, never today's name (AD-19).
+    """
+    if not 0 < confidence < 1:
+        raise ValueError(f"confidence must be in (0, 1): {confidence}")
+    if population_families < 0 or population_pieces < 0:
+        raise ValueError("counts must be non-negative")
+    if not 0 <= relevant_families <= sample_families <= population_families:
+        raise ValueError(
+            f"impossible counts: {relevant_families} relevant of {sample_families} drawn "
+            f"from {population_families}")
+    if run_ordinal < 1:
+        raise ValueError(f"the first run over a population is ordinal 1: {run_ordinal}")
+
+    common = {
+        "method": recorded_method, "confidence": confidence,
+        "population_families": population_families, "population_pieces": population_pieces,
+        "sample_families": sample_families, "relevant_families": relevant_families,
+        "run_ordinal": run_ordinal,
+    }
+    if population_families == 0:
+        return Estimate(kind=KIND_NO_POPULATION, **common)
+    if is_census(population=population_families, sample_size=sample_families):
+        # Nothing is estimated. No bound, no percentage, no worst case — an exact count.
+        return Estimate(kind=KIND_CENSUS, relevant_pieces=relevant_pieces_drawn, **common)
+    if recorded_count_upper is None or recorded_prevalence_upper is None:
+        raise ValueError(
+            "a completed run in the bound register recorded no bound — there is nothing to state, "
+            "and inventing one here would be a number with no provenance (AD-19)")
+    return Estimate(
+        kind=KIND_BOUND,
+        count_upper_families=recorded_count_upper,
+        prevalence_upper=recorded_prevalence_upper,
+        count_upper_pieces=pieces_upper_bound(
+            count_upper_families=recorded_count_upper, family_sizes=family_sizes),
+        **common)
 
 
 @dataclass(frozen=True)
@@ -332,7 +481,6 @@ class SamplingRunView:
     population_families: int
     population_pieces: int
     sample_size: int
-    is_census: bool
     seed: int
     status: str
     started_by: str
@@ -342,6 +490,32 @@ class SamplingRunView:
     count_upper: int | None
     prevalence_upper: float | None
     drawn: tuple[DrawnFamily, ...]
+    # ── Story 5.2 ────────────────────────────────────────────────────────────────────────────────
+    # The size of EVERY family in the frozen population, sorted descending — including the ones
+    # nobody drew, as they were at draw time. It is what makes the *pièce* worst case computable
+    # without re-deriving a set that may since have moved (OQ-4 inputs 1 and 4). ``None`` is a run
+    # frozen before this list existed: the worst case is then *not computable* and is never guessed.
+    population_family_sizes: tuple[int, ...] | None = None
+    # How many runs over this same frozen population came first, counting the ABANDONED ones —
+    # abandon-and-redraw is the cheapest route to a favourable number, so a count that ignored it
+    # would flatter exactly the behaviour it exists to make visible (OQ-4 input 3). Derived, never
+    # stored: a stored counter has to be incremented by every writer, and one that forgets leaves a
+    # third draw reading as the first.
+    run_ordinal: int = 1
+    # The method that produced ``count_upper`` / ``prevalence_upper``, by name — ``None`` on a run
+    # that has not completed, or one closed before the method was recorded (FR-23).
+    estimator_method: str | None = None
+
+    @property
+    def is_census(self) -> bool:
+        """Whether the draw covered the whole discarded set — **derived here**, from the same two
+        numbers :func:`estimate_for_run` uses (Story 5.2).
+
+        ``sampling_run.is_census`` is still written at the draw as the record of what was decided,
+        but nothing READS it: a stored boolean and a derived one are two referents for one fact, and
+        the surface would eventually render one while the sentence spoke the other. That is the
+        defect this epic exists to prevent, in miniature."""
+        return is_census(population=self.population_families, sample_size=self.sample_size)
 
     @property
     def verdicts_recorded(self) -> int:
@@ -361,6 +535,39 @@ class SamplingRunView:
         """Every *pièce* identity the run froze, across all drawn families, in draw order — FR-22's
         *"explicit identifier list"*, readable without consulting the current discarded set."""
         return tuple(pid for d in self.drawn for pid in d.unit.member_piece_ids)
+
+    @property
+    def relevant_pieces_drawn(self) -> int:
+        """How many *pièces* the families judged relevant hold — **exact**, by frozen identity.
+
+        It is the population's answer only at a census, where the drawn families ARE the
+        population. At a sample it is a fact about the sample and nothing more, which is why
+        :func:`estimate_for_run` uses it in one register only."""
+        return sum(
+            len(d.unit.member_piece_ids)
+            for d in self.drawn if d.verdict is not None and d.verdict.relevant)
+
+    @property
+    def estimate(self) -> Estimate | None:
+        """What this run supports, or ``None`` while it supports nothing (Story 5.2).
+
+        Only a **completed** run has an estimate. An open run's running tally is provisional and
+        FR-22 is explicit that the surface must never imply that stopping now preserves a better
+        number; an abandoned run produces no bound at all, by its own definition."""
+        if self.status != STATUS_COMPLETED:
+            return None
+        return estimate_for_run(
+            population_families=self.population_families,
+            population_pieces=self.population_pieces,
+            sample_families=self.sample_size,
+            relevant_families=self.relevant_found or 0,
+            relevant_pieces_drawn=self.relevant_pieces_drawn,
+            confidence=self.confidence,
+            family_sizes=self.population_family_sizes,
+            recorded_count_upper=self.count_upper,
+            recorded_prevalence_upper=self.prevalence_upper,
+            recorded_method=self.estimator_method,
+            run_ordinal=self.run_ordinal)
 
 
 def derive_run_state(*, status: str, stamped: bool, changed: Sequence[str]) -> str:

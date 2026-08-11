@@ -93,6 +93,7 @@ from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.freshness import Freshness
 from apx.core.domain.head_journal import open_journal
 from apx.core.domain.inventory import Inventory
+from apx.core.domain.sampling import KIND_CENSUS
 from apx.core.domain.taxonomy_label import OutOfTaxonomyLabel
 from apx.core.domain.triage_table import ChangeLogEntry
 from apx.core.ports.embedding import Embedder
@@ -2111,13 +2112,24 @@ class BoundOut(BaseModel):
     sample_size: int
     relevant_found: int
     confidence: float
-    count_upper: int
-    prevalence_upper: float
+    # NULL at a census: nothing is bounded when everything was read, and a payload that carried a
+    # prevalence there would let any client render the residual-risk figure FR-22 forbids over a
+    # fully reviewed population (Story 5.2, OQ-4 input 2). `kind` says which register applies.
+    kind: str                        # census | bound
+    count_upper: int | None
+    prevalence_upper: float | None
     reviewed_at: datetime
     freshness: FreshnessOut | None   # None == the bound recorded no stamp; NOT a claim of freshness
     exportable_as_current: bool
     status_fr: str
     copy_text: str                   # carries its staleness — the surface copies THIS (FR-58)
+    # ── Story 5.2 ───────────────────────────────────────────────────────────────────────────────
+    unit_fr: str                     # WHAT was counted — a family count is never called "pièces"
+    piece_count: int | None          # how many pièces those units hold — never the denominator
+    method: str | None               # the statistic by name; None = a bound that recorded none
+    count_upper_pieces: int | None   # the WORST CASE in pièces; None = not computable, never 0
+    relevant_pieces: int | None      # EXACT, census only
+    run_ordinal: int                 # 1 = first draw over this population, abandoned ones counted
 
 
 def _freshness_out(assessment: Freshness) -> FreshnessOut:
@@ -2133,11 +2145,17 @@ def _bound_out(reading: BoundReading) -> BoundOut:
     return BoundOut(
         artefact_id=reading.bound.artefact_id, population=b.population,
         sample_size=b.sample_size, relevant_found=b.relevant_in_sample,
-        confidence=b.confidence, count_upper=b.count_upper,
-        prevalence_upper=b.prevalence_upper, reviewed_at=reading.bound.reviewed_at,
+        confidence=b.confidence, kind=reading.kind,
+        count_upper=None if reading.kind == KIND_CENSUS else b.count_upper,
+        prevalence_upper=None if reading.kind == KIND_CENSUS else b.prevalence_upper,
+        reviewed_at=reading.bound.reviewed_at,
         freshness=_freshness_out(reading.freshness) if reading.freshness is not None else None,
         exportable_as_current=reading.exportable_as_current,
-        status_fr=reading.status_fr, copy_text=reading.copy_text)
+        status_fr=reading.status_fr, copy_text=reading.copy_text,
+        unit_fr=reading.bound.unit_fr, piece_count=reading.bound.piece_count,
+        method=reading.bound.method, count_upper_pieces=reading.bound.count_upper_pieces,
+        relevant_pieces=reading.bound.relevant_pieces,
+        run_ordinal=reading.bound.run_ordinal)
 
 
 @app.get("/api/matters/{matter}/freshness", response_model=list[FreshnessOut])
@@ -2266,6 +2284,18 @@ class SamplingRunOut(BaseModel):
     relevant_found: int | None
     count_upper: int | None
     prevalence_upper: float | None
+    # ── Story 5.2: what the run supports, and what it explicitly does not ───────────────────────
+    # ``estimate_kind`` is census | bound | no_population, or None while the run supports nothing.
+    # The census fields and the bound fields are never both populated: a census states an exact
+    # count, a sample states a bound, and the crossover is n == N exactly (OQ-4 input 2).
+    estimate_kind: str | None
+    estimator_method: str | None      # the statistic, by name — FR-23
+    # a WORST CASE in pièces: the sum of the D largest FROZEN families, never prevalence × pièces
+    # (OQ-4 input 1). None means NOT COMPUTABLE — a run frozen before the sizes existed, never 0.
+    count_upper_pieces: int | None
+    relevant_pieces: int | None       # EXACT, census only — every pièce was read
+    run_ordinal: int                  # 1 = first draw over this frozen population, incl. abandoned
+    repeated_draw_fr: str | None      # the multiplicity fact, stated; None on a first draw
     drawn: list[DrawnFamilyOut]
 
 
@@ -2294,7 +2324,13 @@ class VerdictIn(BaseModel):
 
 def _run_out(reading: SamplingRunReading) -> SamplingRunOut:
     run = reading.run
+    estimate = reading.estimate
     return SamplingRunOut(
+        estimate_kind=estimate.kind if estimate else None,
+        estimator_method=run.estimator_method,
+        count_upper_pieces=estimate.count_upper_pieces if estimate else None,
+        relevant_pieces=estimate.relevant_pieces if estimate else None,
+        run_ordinal=run.run_ordinal, repeated_draw_fr=reading.repeated_draw_fr,
         run_id=run.run_id, version_id=run.version_id, version_no=run.version_no,
         last_retained_piece_id=run.last_retained_piece_id, pin_ledger_seq=run.pin_ledger_seq,
         scope=run.scope, confidence=run.confidence,

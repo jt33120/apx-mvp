@@ -24,6 +24,7 @@ from apx.core.domain.sampling import (
     STATE_INVALIDATED,
     STATUS_COMPLETED,
     STATUS_OPEN,
+    Estimate,
     SamplingRunView,
     census_statement_fr,
     derive_run_state,
@@ -87,10 +88,34 @@ class SamplingRunReading:
         """The categorically stronger statement a **census** makes, or ``None`` when the run was a
         sample (FR-22). A census estimates nothing, so it never carries a percentage — the surface
         must not render it beside a bound as though it were one."""
-        if not (self.run.is_census and self.run.status == STATUS_COMPLETED):
+        estimate = self.run.estimate
+        if estimate is None or not estimate.is_census:
             return None
         return census_statement_fr(
-            relevant_found=self.run.relevant_found or 0, piece_count=self.run.population_pieces)
+            relevant_units=estimate.relevant_families,
+            relevant_pieces=estimate.relevant_pieces,
+            unit_fr="familles de quasi-doublons écartées",
+            piece_count=estimate.population_pieces)
+
+    @property
+    def estimate(self) -> Estimate | None:
+        """What the run supports, or ``None`` while it supports nothing — the object Story 5.4 will
+        render as a sentence. Read straight off the run: one owning derivation (AD-37)."""
+        return self.run.estimate
+
+    @property
+    def repeated_draw_fr(self) -> str | None:
+        """The multiple-comparisons fact, in French, or ``None`` for a first draw (OQ-4 input 3).
+
+        FR-22: a second run over the same population *"is presented alongside the first rather than
+        replacing it"*, and the sentence travels alone — so the ordinal travels with it. The count
+        includes abandoned runs, because abandon-and-redraw is the route this is defending."""
+        estimate = self.estimate
+        if estimate is None or not estimate.repeated:
+            return None
+        return (
+            f"tirage n° {estimate.run_ordinal} sur cette même population : les tirages ne sont "
+            "jamais fusionnés, et celui-ci ne remplace pas les précédents")
 
 
 def read_sampling_run(

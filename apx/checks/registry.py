@@ -20,6 +20,7 @@ from apx.checks import (
     configuration,
     credential_storage,
     encryption,
+    estimator,
     forward_looking,
     freshness_never_time_based,
     gold_gate,
@@ -182,6 +183,12 @@ CHECKS: list[Callable[[], CheckResult]] = [
     sampling_population.sampling_population_is_the_derived_view,
     sampling_freeze.a_sampling_run_freezes_its_identifiers,
     no_legacy_bound.no_new_legacy_bound_is_written,
+    # Story 5.2 — OQ-4's five answers, one check each (FR-22/FR-23/FR-38/FR-42).
+    estimator.piece_figure_is_a_worst_case,
+    estimator.a_census_states_no_bound,
+    estimator.one_run_one_bound_chosen_by_recency,
+    estimator.the_bound_is_computed_from_the_freeze,
+    estimator.the_bound_consumes_no_model_number,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

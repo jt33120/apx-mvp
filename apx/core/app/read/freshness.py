@@ -22,6 +22,12 @@ from dataclasses import dataclass
 
 from apx.core.domain.confidence import RecordedBound
 from apx.core.domain.freshness import Freshness, FreshnessStamp, assess_freshness
+from apx.core.domain.sampling import (
+    KIND_BOUND,
+    KIND_CENSUS,
+    census_statement_fr,
+    is_census,
+)
 from apx.core.domain.worklist import WorklistLine, worklist_lines
 from apx.core.ports.freshness import FreshnessReader
 
@@ -52,6 +58,19 @@ class BoundReading:
         return self.freshness.reason()
 
     @property
+    def kind(self) -> str:
+        """Which register this bound speaks in — ``census`` or ``bound`` (Story 5.2, OQ-4 input 2).
+
+        Decided **once**, here, and read by every consumer: the sentence, the HTTP payload and the
+        export. A payload that carried a prevalence while the sentence said *"all of them were
+        read"* would let any client render the residual-risk figure FR-22 forbids over a fully
+        reviewed population — the two registers would be disjoint only in the one string that
+        happened to branch."""
+        b = self.bound.bound
+        return KIND_CENSUS if is_census(
+            population=b.population, sample_size=b.sample_size) else KIND_BOUND
+
+    @property
     def copy_text(self) -> str:
         """The sentence the surface copies to the clipboard — **composed here, on the server**.
 
@@ -62,17 +81,41 @@ class BoundReading:
         the numeric fields could omit it — which is why the surface copies this and nothing else.
         """
         b = self.bound.bound
+        tail = f"revue du {self.bound.reviewed_at.date().isoformat()} — {self.status_fr}."
+        # FR-22: a bound resting on a later draw over the same population states how many runs came
+        # first. The sentence travels alone, so the multiplicity fact travels inside it or not at
+        # all — and abandon-and-redraw is what it is watching for.
+        if self.bound.run_ordinal > 1:
+            tail = f"tirage n° {self.bound.run_ordinal} sur cette population — {tail}"
+        pieces = self.bound.piece_count if self.bound.piece_count is not None else b.population
+        # A CENSUS is a categorically different statement and gets a categorically different
+        # sentence — an exact count, never a percentage (Story 5.2, OQ-4 input 2). "au plus 0,0 %
+        # est pertinent" over a population that was read in full is a false claim of residual risk,
+        # and it is the one this sentence would otherwise make. The two registers never mix.
+        if self.kind == KIND_CENSUS:
+            sentence = census_statement_fr(
+                relevant_units=b.relevant_in_sample,
+                relevant_pieces=self.bound.relevant_pieces,
+                unit_fr=self.bound.unit_fr, piece_count=pieces)
+            # NOT str.capitalize(): it lowercases everything after the first character, which would
+            # quietly mangle any proper noun or unit the sentence grows later.
+            return sentence[:1].upper() + sentence[1:] + f" — {tail}"
         # The denominator is labelled with the unit it was COMPUTED over (Story 5.1): a sampling
         # run draws near-duplicate families, and calling a family count "pièces" would make the
         # sentence false about its own denominator. The pièce count is stated beside it, never
         # substituted into it.
         held = (f" ({self.bound.piece_count} pièces)"
                 if self.bound.piece_count is not None else "")
+        # The worst case in *pièces*, stated so the reader does not do the rescale herself: 6 of
+        # 120 families is 5 %, and 5 % of 1 400 pièces is 70 — which is wrong, and wrong in the
+        # flattering direction, because the relevant families may be the largest ones. Absent when
+        # the run never froze its family sizes; never guessed (AD-19).
+        worst = (f", soit au plus {self.bound.count_upper_pieces} pièces au pire"
+                 if self.bound.count_upper_pieces is not None else "")
         return (
             f"Avec une confiance de {b.confidence:.0%}, au plus {b.count_upper} des "
             f"{b.population} {self.bound.unit_fr}{held} étaient pertinentes "
-            f"(prévalence ≤ {b.prevalence_upper:.1%}) — "
-            f"revue du {self.bound.reviewed_at.date().isoformat()} — {self.status_fr}."
+            f"(prévalence ≤ {b.prevalence_upper:.1%}){worst} — {tail}"
         )
 
 
