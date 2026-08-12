@@ -21,8 +21,6 @@ from apx.core.domain.sampling import (
     KIND_COUNTS_ONLY,
     KIND_NO_POPULATION,
     bound_for_run,
-    census_statement_fr,
-    counts_only_statement_fr,
     estimate_for_run,
 )
 
@@ -157,34 +155,15 @@ def test_a_sample_whose_bound_reaches_zero_is_still_a_sample_not_a_census() -> N
     assert estimate.sample_families < estimate.population_families
 
 
-def test_a_census_that_found_nothing_still_states_a_fact_not_a_zero_percent() -> None:
+def test_a_census_that_found_nothing_is_no_bound_at_all_not_a_zero_percent() -> None:
+    """The census SENTENCE moved to statement.py in Story 5.4; what stays here is the shape —
+    a census carries no prevalence at all, so no renderer can find one to show."""
     estimate = _estimate(
         population_families=40, sample_families=40, relevant_families=0, relevant_pieces_drawn=0,
         family_sizes=[10] * 40)
     assert estimate.kind == KIND_CENSUS
     assert estimate.prevalence_upper is None
-    sentence = census_statement_fr(
-        relevant_units=0, relevant_pieces=0, unit_fr=_FAMILIES_FR,
-        piece_count=estimate.population_pieces)
-    assert "%" not in sentence
-
-
-def test_the_census_sentence_singularises_one_family_and_one_piece() -> None:
-    sentence = census_statement_fr(
-        relevant_units=1, relevant_pieces=1, unit_fr=_FAMILIES_FR, piece_count=9)
-    assert "1 famille de quasi-doublon écartée — 1 pièce —" in sentence
-    assert "familles" not in sentence
-
-
-def test_the_census_sentence_states_a_legacy_bound_in_ITS_unit_not_in_families() -> None:
-    """CONFIRMED [MEDIUM]. A legacy ``recall_review`` counted *pièces*; rendering its census as
-    *"3 familles"* is the Story-5.1 denominator defect with the units swapped, in the one sentence
-    a firm reads out loud."""
-    sentence = census_statement_fr(
-        relevant_units=3, relevant_pieces=None, unit_fr="pièces écartées", piece_count=40)
-    assert "3 pièces écartées se sont révélées pertinentes" in sentence
-    assert "famille" not in sentence
-    assert "%" not in sentence
+    assert estimate.count_upper_families is None and estimate.count_upper_pieces is None
 
 
 def test_an_empty_discarded_set_is_no_population_never_a_flattering_zero() -> None:
@@ -309,18 +288,3 @@ def test_a_CENSUS_survives_an_unproven_estimator(monkeypatch) -> None:  # noqa: 
         family_sizes=[10] * 40)
     assert estimate.kind == KIND_CENSUS
     assert estimate.relevant_pieces == 47
-
-
-def test_the_counts_only_sentence_states_no_percentage_and_says_why() -> None:
-    sentence = counts_only_statement_fr(
-        sample_units=200, population_units=1400, relevant_units=3,
-        unit_fr="familles de quasi-doublons écartées", piece_count=2100)
-    assert "%" not in sentence
-    assert "Aucune borne" in sentence and "prouvé par simulation" in sentence
-    assert "200" in sentence and "1400" in sentence and "2100 pièces" in sentence
-
-
-def test_the_counts_only_sentence_does_not_pretend_something_was_found() -> None:
-    sentence = counts_only_statement_fr(
-        sample_units=200, population_units=1400, relevant_units=0, unit_fr="pièces écartées")
-    assert "aucune n'était pertinente" in sentence and "%" not in sentence

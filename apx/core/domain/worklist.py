@@ -32,6 +32,11 @@ from apx.core.domain.freshness import (
 OFFER_RERANK = "re-rank"        # produce a NEW ranking version over the current corpus
 OFFER_REPLACE_LINE = "re-line"  # place the line again over the current order
 OFFER_RESAMPLE = "re-sample"    # draw and review a new sample, producing a NEW bound
+# FR-23's own remedy, and deliberately NOT ``OFFER_RERANK``: a re-rank offered because the corpus
+# moved re-runs the same case theory over new material, which is exactly the act that cannot help
+# here. The finding is that the theory is not separating this matter, so the offer names the
+# revision (FR-37). Two offers, because they are two different acts with two different reasons.
+OFFER_RERANK_REVISED_THEORY = "re-rank-revised-theory"
 
 _OFFER_BY_KIND = {
     KIND_RANKING: OFFER_RERANK,
@@ -51,7 +56,13 @@ _OFFER_FR = {
                   "conservées.",
     OFFER_REPLACE_LINE: "Replacer la ligne produira une nouvelle position ; l'ordre ne bouge pas.",
     OFFER_RESAMPLE: "Ré-échantillonner produira une nouvelle borne ; l'ancienne reste consultable.",
+    OFFER_RERANK_REVISED_THEORY: (
+        "Reclasser avec une théorie du cas révisée produira une nouvelle version ; déplacer la "
+        "ligne ne corrigerait rien."),
 }
+
+# The *ranking version* itself is the work, not one of its stamped artefacts (FR-23, Story 5.4).
+KIND_RANKING_UNFIT = "ranking_unfit"
 
 
 @dataclass(frozen=True)
@@ -86,6 +97,28 @@ def worklist_line(assessment: Freshness) -> WorklistLine | None:
     return WorklistLine(
         kind=assessment.kind, artefact_id=assessment.artefact_id, changed=assessment.changed,
         changed_fr=assessment.changed_fr, offer=offer, offer_fr=_OFFER_FR[offer])
+
+
+def unfitness_line(*, version_id: str, said_fr: str) -> WorklistLine:
+    """FR-23's third clause, which had no code anywhere until the Story 5.4 review said so.
+
+    The requirement has **four** parts: declare the *ranking version* unfit, say so in words,
+    *"produce a worklist line offering a re-rank with a revised or newly written case theory
+    (FR-37)"*, and not offer a line move. Three were built and this one was not — a requirement
+    two-thirds implemented reads, from the outside, exactly like one that is finished.
+
+    Unlike every other line here it is **not** derived from a freshness assessment: nothing is
+    stale. The ranking is fresh, current, and not ranking anything — which is why the offer is the
+    revised theory rather than the plain re-rank a staleness line would give.
+
+    ``changed`` carries the finding itself in ``changed_fr``, so the surface can state *why* this
+    line exists without re-deriving the threshold: a line that said only "re-rank" would be an
+    instruction with no argument behind it.
+    """
+    return WorklistLine(
+        kind=KIND_RANKING_UNFIT, artefact_id=version_id, changed=(KIND_RANKING_UNFIT,),
+        changed_fr=(said_fr,), offer=OFFER_RERANK_REVISED_THEORY,
+        offer_fr=_OFFER_FR[OFFER_RERANK_REVISED_THEORY])
 
 
 def worklist_lines(assessments: Iterable[Freshness]) -> tuple[WorklistLine, ...]:

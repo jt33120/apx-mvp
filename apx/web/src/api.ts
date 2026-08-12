@@ -55,7 +55,13 @@ export type SamplingRun = {
   confidence: number; population_families: number; population_pieces: number;
   sample_size: number; is_census: boolean;
   status: string; state: string; invalidated_in_flight: boolean;
-  changed: string[]; changed_fr: string[]; state_fr: string; census_fr: string | null;
+  changed: string[]; changed_fr: string[]; state_fr: string;
+  // Story 5.4 — the run's own reading, composed by the SERVER in whichever of the four
+  // registers applies. It replaced `census_fr` (one arm for one register, the other three
+  // hand-assembled here). NOT copyable: only /bound holds the freshness verdict.
+  statement_fr: string | null;
+  run_qualification_fr: string;   // this run's MEASURED observables, never a freshness verdict
+  unfit_fr: string | null;        // FR-23: K approaching N — the ORDER carries no signal
   started_by: string; started_at: string; completed_at: string | null;
   verdicts_recorded: number;
   relevant_found: number | null; count_upper: number | null; prevalence_upper: number | null;
@@ -510,6 +516,17 @@ export type Bound = {
   count_upper_pieces: number | null; relevant_pieces: number | null;
   // 1 = the first draw over this population, abandoned runs counted (OQ-4 input 3).
   run_ordinal: number;
+  // Story 5.4 — FR-23's ACCOMPANYING RECORD: the four things the sentence may carry beside it
+  // rather than inside it. `scope` is in BOTH, because only the sentence travels out of the app.
+  scope: string | null;
+  ranking_version_no: number | null;
+  last_retained_piece_id: string | null;
+  case_theory_version_id: string | null;
+  // FR-23's seventh consequence. When present the surface must REMOVE any line-move affordance,
+  // not grey it: a greyed control still proposes the act.
+  unfit_fr: string | null;
+  unfit_relevant_share: number | null;
+  unfit_threshold: number | null;
 };
 
 export async function readFreshness(matter: string): Promise<Freshness[]> {

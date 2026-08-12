@@ -17,8 +17,10 @@ is indistinguishable from absent (FR-14).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
+from apx.core.domain.config import coerce
 from apx.core.domain.freshness import trigger
 from apx.core.domain.sampling import (
     STATE_INVALIDATED,
@@ -26,10 +28,22 @@ from apx.core.domain.sampling import (
     STATUS_OPEN,
     Estimate,
     SamplingRunView,
-    census_statement_fr,
     derive_run_state,
 )
+from apx.core.domain.statement import (
+    UNFIT_SHARE_KEY,
+    StatementInputs,
+    Unfitness,
+    statement_fr,
+    unfitness,
+    unfitness_statement_fr,
+)
 from apx.core.ports.sampling import SamplingRunStore
+
+# What a *sampling run* counts. A run draws near-duplicate FAMILIES (FR-38): forty copies of one
+# email are one draw, not forty. Naming the unit once, here, is why the sentence cannot end up
+# calling a family count "pièces" — the Story 5.1 denominator defect.
+_RUN_UNIT_FR = "familles de quasi-doublons écartées"
 
 
 @dataclass(frozen=True)
@@ -44,11 +58,16 @@ class SamplingRunReading:
     makes impossible (the stamp is written inside the starting transaction). It is still modelled,
     and still counts as invalidated, because an absence of evidence is not evidence of validity —
     the same rule 4.13 applies to an unstamped bound.
+
+    ``unfit_relevant_share`` is the *tenant*'s configured FR-23 threshold (Story 5.4), carried so
+    the finding is derived once and read identically by every surface. No default: a reading that
+    answered "fit" because nobody supplied a threshold would be a verdict nobody computed.
     """
 
     run: SamplingRunView
     stamped: bool
     changed: tuple[str, ...]
+    unfit_relevant_share: float
 
     @property
     def state(self) -> str:
@@ -84,24 +103,105 @@ class SamplingRunReading:
             f"{self.run.sample_size} familles")
 
     @property
-    def census_fr(self) -> str | None:
-        """The categorically stronger statement a **census** makes, or ``None`` when the run was a
-        sample (FR-22). A census estimates nothing, so it never carries a percentage — the surface
-        must not render it beside a bound as though it were one."""
+    def statement_fr(self) -> str | None:
+        """This run's own reading of what it found, in whichever of the four registers applies —
+        or ``None`` while the run supports nothing (Story 5.4, FR-23).
+
+        Composed by the **same** Domain function as the *matter*'s constat
+        (:func:`~apx.core.domain.statement.statement_fr`), so the two surfaces can never word one
+        draw two ways. It replaced a census-only string: one arm for one register left the other
+        three to be assembled by whichever renderer got there first, which is how the Story 5.2
+        review found three readers each with its own opinion.
+
+        **This sentence is not the copyable constat**, and the surface must not offer it as one.
+        The *matter*'s current bound is what a lawyer quotes, and only that reading holds FR-58's
+        freshness verdict; a run screen offering a second copyable string would put the same number
+        on a clipboard twice with two different sets of qualifications. What travels here instead
+        is :attr:`run_qualification_fr` — the run's own measured observables, never a freshness
+        claim it did not compute.
+        """
         estimate = self.run.estimate
-        if estimate is None or not estimate.is_census:
+        if estimate is None:
             return None
-        return census_statement_fr(
+        return statement_fr(StatementInputs(
+            kind=estimate.kind,
+            unit_fr=_RUN_UNIT_FR,
+            population_units=estimate.population_families,
+            sample_units=estimate.sample_families,
             relevant_units=estimate.relevant_families,
+            confidence=estimate.confidence,
+            piece_count=estimate.population_pieces,
+            count_upper_units=estimate.count_upper_families,
+            prevalence_upper=estimate.prevalence_upper,
+            count_upper_pieces=estimate.count_upper_pieces,
             relevant_pieces=estimate.relevant_pieces,
-            unit_fr="familles de quasi-doublons écartées",
-            piece_count=estimate.population_pieces)
+            scope=self.run.scope,
+            run_ordinal=estimate.run_ordinal,
+            freshness_fr=self.run_qualification_fr))
+
+    @property
+    def run_qualification_fr(self) -> str:
+        """What qualifies **this run's own** reading — a report of measured observables, never a
+        freshness verdict.
+
+        Story 4.13 owns the verdict (fresh / stale / superseded) and it is computed over the
+        *matter*'s artefacts, including ``superseded``, which a run reading cannot see. Restating
+        that verdict here would be a second staleness rule for one fact, and the two would
+        eventually disagree — the defect this epic exists to prevent. So this reports what the port
+        actually measured: whether the run carries a stamp at all, and which of its inputs moved.
+        """
+        if not self.stamped:
+            return "fraîcheur invérifiable : ce tirage n'a pas enregistré ses entrées"
+        if self.changed:
+            return ("les entrées de ce tirage ont changé depuis : " + ", ".join(self.changed_fr))
+        return "entrées inchangées depuis le tirage"
 
     @property
     def estimate(self) -> Estimate | None:
         """What the run supports, or ``None`` while it supports nothing — the object Story 5.4 will
         render as a sentence. Read straight off the run: one owning derivation (AD-37)."""
         return self.run.estimate
+
+    @property
+    def unfitness(self) -> Unfitness | None:
+        """FR-23's seventh consequence: where K approaches N the finding is that the *ranking
+        version* carries no signal on this *matter*, not that the line is misplaced.
+
+        **The denominator is the SAMPLE, and only a completed run has one.** CONFIRMED by five
+        independent lenses, and reproduced before the review: this divided by
+        ``verdicts_recorded`` — the tally so far — so a 200-family draw whose first verdict came
+        back relevant declared the whole *ranking version* unfit at 1/1, and the declaration then
+        said *"sur les 1 familles tirées au hasard"* about a draw of two hundred. Two defects in
+        one expression: a threshold applied to a number that is not the sample, and a sentence
+        stating a false fact about the draw it names.
+
+        Worse, it disagreed with the *matter*'s own constat, which divides by
+        ``bound.sample_size``: the same run read **unfit** on one surface and **fit** on the other,
+        mid-flight. One rule needs one denominator — this project's recurring defect, in the code
+        this story added to state a finding about it.
+
+        Register-INDEPENDENT still, and deliberately: a census reaches the finding (there K/N is
+        the exact share of the discarded set that is relevant) and so does a counts-only run (the
+        verdicts were observed whether or not a bound may be stated). Gating it on the bound
+        register would let an unproven estimator hide a ranking that is not ranking anything.
+        """
+        if self.run.status != STATUS_COMPLETED:
+            return None  # an in-flight tally is not the sample; FR-23 speaks about the sample
+        return unfitness(
+            relevant_units=self.run.relevant_found or 0, sample_units=self.run.sample_size,
+            threshold=self.unfit_relevant_share)
+
+    @property
+    def unfitness_fr(self) -> str | None:
+        """The declaration in words, or ``None`` when there is none to make. The run always knows
+        its own *ranking version* (the freeze records it, NOT NULL), so unlike the matter-level
+        constat there is no version-less case here."""
+        finding = self.unfitness
+        estimate = self.estimate
+        if finding is None or estimate is None:
+            return None
+        return unfitness_statement_fr(
+            finding, version_no=self.run.version_no, unit_fr=_RUN_UNIT_FR, kind=estimate.kind)
 
     @property
     def repeated_draw_fr(self) -> str | None:
@@ -120,13 +220,16 @@ class SamplingRunReading:
 
 def read_sampling_run(
     *, tenant: str, matter: str, scopes: set[str], store: SamplingRunStore,
-    run_id: str | None = None,
+    config_get: Callable[[str], object], run_id: str | None = None,
 ) -> SamplingRunReading | None:
     """The *matter*'s current run (or a named one) with the verdict on its frozen population.
 
     ``None`` when out of scope, absent, or when no run exists — the surface renders "no draw yet" as
     its own state, never as an empty run pretending to be a result (the Story 4.10 lesson: a failed
-    read is not a verified absence)."""
+    read is not a verified absence).
+
+    ``config_get`` resolves FR-23's unfitness threshold as *configuration-as-data* (AD-24), the same
+    shape the semantic read seam uses for its similarity floor."""
     if not scopes:
         return None  # fail closed — no scope reads nothing (AD-12)
     run = store.read_sampling_run(tenant=tenant, matter=matter, scopes=scopes, run_id=run_id)
@@ -137,11 +240,20 @@ def read_sampling_run(
     if freshness is None:
         return None  # unreadable mid-read — never assess a run against nothing
     stamped, changed = freshness
-    return SamplingRunReading(run=run, stamped=stamped, changed=changed)
+    return SamplingRunReading(
+        run=run, stamped=stamped, changed=changed,
+        unfit_relevant_share=_unfit_share(config_get))
+
+
+def _unfit_share(config_get: Callable[[str], object]) -> float:
+    """The *tenant*'s FR-23 threshold, ``coerce``d — so a stray type or an out-of-range share fails
+    loudly rather than silently disabling the declaration."""
+    return float(coerce(UNFIT_SHARE_KEY, config_get(UNFIT_SHARE_KEY)))
 
 
 def read_sampling_runs(
     *, tenant: str, matter: str, scopes: set[str], store: SamplingRunStore,
+    config_get: Callable[[str], object],
 ) -> tuple[SamplingRunReading, ...] | None:
     """The *matter*'s runs, newest first — the history a *bâtonnier* reads, each with the verdict on
     the population it froze. ``()`` means readable with no run yet; ``None`` means not read.
@@ -156,6 +268,7 @@ def read_sampling_runs(
     runs = store.list_sampling_runs(tenant=tenant, matter=matter, scopes=scopes)
     if runs is None:
         return None
+    share = _unfit_share(config_get)
     readings: list[SamplingRunReading] = []
     for run in runs:
         freshness = store.read_run_freshness(
@@ -163,5 +276,6 @@ def read_sampling_runs(
         if freshness is None:
             return None  # unreadable mid-read — never assess a run against nothing
         stamped, changed = freshness
-        readings.append(SamplingRunReading(run=run, stamped=stamped, changed=changed))
+        readings.append(SamplingRunReading(
+            run=run, stamped=stamped, changed=changed, unfit_relevant_share=share))
     return tuple(readings)

@@ -1,0 +1,283 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>APX — La phrase (Epic 5, Story 5.4)</title>
+<style>
+  :root{
+    --ink:#0b1f3a; --ink-2:#33425a; --ink-3:#5b6678;
+    --paper:#f7f4ee; --surface:#fff; --surface-2:#fbf9f5;
+    --line:#e6e0d5; --line-2:#efeae0;
+    --gold:#9a7a34; --gold-2:#b8944a; --muted:#6b7280;
+    --kept:#2f6f4f; --kept-bg:#e8f1eb;
+    --review:#9a5a12; --review-bg:#f6ecdd;
+    --discard:#6f6858; --discard-bg:#eeece5;
+    --danger:#a3161c; --danger-bg:#fbeceb;
+    --serif:"Iowan Old Style","Palatino Linotype",Palatino,"Book Antiqua",Georgia,serif;
+    --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --mono:ui-monospace,"SF Mono",SFMono-Regular,Menlo,Consolas,monospace;
+    --shadow:0 1px 2px rgba(11,31,58,.05),0 12px 30px rgba(11,31,58,.08);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font:1rem/1.55 var(--sans)}
+  .shell{max-width:60rem;margin:0 auto;padding:2rem 1.25rem 4rem}
+  h1{font:600 1.5rem/1.2 var(--serif);letter-spacing:.01em;margin:0 0 .3rem}
+  h2{font:600 1.2rem/1.3 var(--serif);margin:2.5rem 0 .5rem}
+  .lede{color:var(--ink-3);margin:0 0 1.5rem;max-width:46rem}
+  .eyebrow{font:600 .72rem/1.2 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+  .hint{font-size:.88rem;color:var(--muted)}
+  .card{background:var(--surface);border:1px solid var(--line);border-radius:12px;box-shadow:var(--shadow);padding:1.1rem 1.25rem;margin:0 0 1.1rem}
+  .chip{display:inline-block;border-radius:9999px;padding:.07rem .55rem;font-size:.76rem;font-weight:600}
+  .chip-kept{color:var(--kept);background:var(--kept-bg)}
+  .chip-review{color:var(--review);background:var(--review-bg)}
+  .chip-scope{color:var(--ink-2);background:var(--line-2)}
+  .chip-discard{color:var(--discard);background:var(--discard-bg)}
+
+  /* {components.bound-constat} — the constat container. Gold hairline ABOVE, ink left rule.
+     This shape exists ONLY for a measured claim; a projection may never borrow it. */
+  .constat{background:var(--surface-2);border:1px solid var(--line);border-top:2px solid var(--gold);
+           border-left:3px solid var(--ink);border-radius:0 12px 12px 0;padding:1rem 1.15rem}
+  .constat.is-census{border-left-color:var(--kept)}
+  .constat.is-counts{border-left-color:var(--review)}
+  .constat.is-stale{border-left-color:var(--review);background:#fdfaf4}
+  .constat.is-empty{border-top-color:var(--line);border-left-color:var(--line-2)}
+  /* THE sentence. One text node. What is selected here is exactly what the copy button copies. */
+  .sentence{margin:.45rem 0 .1rem;font-size:1.02rem;font-variant-numeric:tabular-nums}
+  .sentence.is-empty{color:var(--muted)}
+  .record{margin:.7rem 0 0;padding-top:.6rem;border-top:1px dashed var(--line);
+          font-size:.82rem;color:var(--muted);display:flex;flex-wrap:wrap;gap:.15rem .9rem}
+  .record b{font-weight:600;color:var(--ink-3)}
+  .record code{font-family:var(--mono);font-size:.78rem}
+  .actions{margin:.8rem 0 0;display:flex;align-items:center;gap:.7rem;flex-wrap:wrap}
+  button{font:inherit;font-size:.92rem;border-radius:8px;padding:.5rem .95rem;cursor:pointer;
+         background:var(--ink);color:#fff;border:1px solid var(--ink)}
+  button:hover{background:#12294a}
+  button:focus-visible{outline:none;box-shadow:0 0 0 3px rgba(154,122,52,.28)}
+  button.ghost{background:transparent;color:var(--ink);border:1px solid var(--line)}
+  button.ghost:hover{background:#efeadf}
+  a{color:var(--ink)}
+
+  /* the unfitness declaration — raised ABOVE the sentence, it qualifies rather than replaces */
+  .unfit{border-left:3px solid var(--review);background:var(--review-bg);border-radius:8px;
+         padding:.75rem .95rem;margin:0 0 .85rem}
+  .unfit p{margin:.25rem 0 0}
+  .unfit .share{font-family:var(--serif);font-variant-numeric:tabular-nums;font-weight:600}
+
+  /* the projection — deliberately a DIFFERENT shape. No gold rule, no serif numeral, no copy. */
+  .projection{border:1px solid var(--line);border-left:3px solid var(--review);border-radius:8px;
+              background:var(--surface);padding:.85rem 1rem}
+  .projection p{margin:.3rem 0 0}
+  .split{display:grid;gap:1rem;grid-template-columns:1fr}
+  @media(min-width:52rem){.split{grid-template-columns:1fr 1fr}}
+  .note{border-left:3px solid var(--gold);background:#fffdf7;padding:.6rem .9rem;border-radius:0 8px 8px 0;
+        font-size:.9rem;color:var(--ink-2);margin:.6rem 0 0}
+  .bad{color:var(--danger)}
+  table{border-collapse:collapse;width:100%;font-size:.9rem}
+  th,td{text-align:left;padding:.45rem .6rem;border-bottom:1px solid var(--line-2);vertical-align:top}
+  th{font:600 .72rem/1.2 var(--sans);letter-spacing:.08em;text-transform:uppercase;color:var(--ink-3)}
+</style>
+</head>
+<body>
+<div class="shell">
+
+  <h1>La phrase</h1>
+  <p class="lede">
+    Story 5.4 — la borne de confiance en une phrase, ou des comptes seuls. Le seul texte que
+    l'avocate répète <em>hors</em> du produit. Quatre registres disjoints, un geste de copie qui ne
+    peut pas perdre le périmètre ni la péremption, et une déclaration d'inaptitude qui refuse de
+    proposer le mauvais remède.
+  </p>
+
+  <h2>1. <code>bound</code> — la phrase</h2>
+  <div class="card">
+    <div class="constat">
+      <span class="eyebrow">Constat — tirage aléatoire</span>
+      <p class="sentence">200 familles de quasi-doublons écartées sur 1&nbsp;400 (1&nbsp;400 pièces)
+      ont été tirées au hasard ; aucune n'était pertinente. Avec une confiance de 95&nbsp;%, au plus
+      21 des 1&nbsp;400 familles de quasi-doublons écartées étaient pertinentes (prévalence ≤
+      1,5&nbsp;%), soit au plus 34 pièces au pire — périmètre « contentieux-A » — revue du
+      2026-08-11 — à jour.</p>
+      <p class="record">
+        <span><b>Dossier</b> Vinci / Sogea</span>
+        <span><b>Classement</b> v3</span>
+        <span><b>Théorie du cas</b> v2</span>
+        <span><b>Ligne</b> après <code>p-0a91…</code></span>
+        <span><b>Méthode</b> <code>hypergeometric-upper-bound.v1</code></span>
+        <span><b>Tirage</b> n° 1</span>
+      </p>
+      <p class="actions">
+        <button type="button">Copier la phrase</button>
+        <button class="ghost" type="button">Exporter</button>
+        <span class="hint" aria-live="polite">· copiée</span>
+      </p>
+    </div>
+    <p class="note">
+      Le paragraphe affiché <strong>est</strong> <code>copy_text</code>, composé par le serveur.
+      Une sélection à la souris produit exactement la même chaîne : rien de décoratif à l'intérieur,
+      rien de qualifiant à l'extérieur. Le périmètre et la fraîcheur sont <em>dans</em> la phrase.
+    </p>
+  </div>
+
+  <h2>2. <code>census</code> — un compte exact, jamais un pourcentage</h2>
+  <div class="card">
+    <div class="constat is-census">
+      <span class="eyebrow">Constat — recensement</span>
+      <span class="chip chip-kept" style="margin-left:.5rem">tout a été lu</span>
+      <p class="sentence">Recensement : les 1&nbsp;400 pièces écartées ont toutes été examinées ;
+      aucune n'était pertinente. — périmètre « contentieux-A » — revue du 2026-08-11 — à jour.</p>
+      <p class="record">
+        <span><b>Dossier</b> Vinci / Sogea</span>
+        <span><b>Classement</b> v3</span>
+        <span><b>Théorie du cas</b> v2</span>
+        <span><b>Ligne</b> après <code>p-0a91…</code></span>
+      </p>
+      <p class="actions"><button type="button">Copier la phrase</button>
+        <button class="ghost" type="button">Exporter</button></p>
+    </div>
+    <p class="note">
+      Aucun pourcentage n'apparaît dans ce registre — ni dans la phrase, ni dans le relevé, ni dans
+      une infobulle. <span class="bad">« au plus 0,0&nbsp;% est pertinent »</span> sur une population
+      lue en entier est une fausse affirmation de risque résiduel : c'est l'échec du §0.2 avec une
+      meilleure arithmétique.
+    </p>
+  </div>
+
+  <h2>3. <code>counts_only</code> — les comptes, et le refus dit à voix haute</h2>
+  <div class="card">
+    <div class="constat is-counts">
+      <span class="eyebrow">Constat — comptes seuls</span>
+      <span class="chip chip-review" style="margin-left:.5rem">aucune borne énoncée</span>
+      <p class="sentence">200 familles de quasi-doublons écartées sur 1&nbsp;400 (1&nbsp;400 pièces)
+      ont été tirées au hasard ; aucune n'était pertinente. Aucune borne n'est énoncée :
+      l'estimateur n'a pas encore été prouvé par simulation, et le produit ne publie pas un chiffre
+      qu'il ne peut pas défendre. — périmètre « contentieux-A » — revue du 2026-08-11 — à jour.</p>
+      <p class="actions"><button type="button">Copier la phrase</button></p>
+    </div>
+    <p class="note">
+      Le refus est <em>énoncé</em>, jamais suggéré par une absence : un chiffre retiré sans raison se
+      lit comme un chiffre oublié, pas comme un chiffre refusé. Le bouton de copie reste — une
+      réponse honnête mérite d'être citée.
+    </p>
+  </div>
+
+  <h2>4. <code>no_population</code> — aucune borne ne s'applique</h2>
+  <div class="card">
+    <div class="constat is-empty">
+      <span class="eyebrow">Constat</span>
+      <p class="sentence is-empty">Le jeu écarté est vide : aucune borne ne s'applique.</p>
+    </div>
+    <p class="note">
+      Jamais rendu comme 0&nbsp;%. Et deux faits vides différents reçoivent deux phrases
+      différentes : « le jeu écarté est vide » dit à une avocate dont le dossier n'a jamais été
+      classé serait une fausse affirmation sur son dossier — l'outil dirait avoir regardé sans avoir
+      regardé.
+    </p>
+  </div>
+
+  <h2>5. Périmée — la péremption dans la phrase, pas seulement sur l'écran</h2>
+  <div class="card">
+    <div class="constat is-stale">
+      <span class="eyebrow">Constat — tirage aléatoire</span>
+      <span class="chip chip-review" style="margin-left:.5rem">périmée — le corpus a changé</span>
+      <p class="sentence">200 familles de quasi-doublons écartées sur 1&nbsp;400 (1&nbsp;400 pièces)
+      ont été tirées au hasard ; aucune n'était pertinente. Avec une confiance de 95&nbsp;%, au plus
+      21 des 1&nbsp;400 familles de quasi-doublons écartées étaient pertinentes (prévalence ≤
+      1,5&nbsp;%), soit au plus 34 pièces au pire — périmètre « contentieux-A » — revue du
+      2026-07-19 — <strong>périmée : le corpus du dossier a changé depuis le tirage</strong>.</p>
+      <p class="actions">
+        <button type="button">Copier la phrase</button>
+        <span class="hint">Export impossible tant que la borne est périmée — retirez un nouvel
+        échantillon pour en produire une nouvelle.</span>
+      </p>
+    </div>
+    <p class="note">
+      La pastille est redondante <em>exprès</em> : la pastille est pour le lecteur à l'écran, la
+      clause dans la phrase est pour le lecteur du copier-coller.
+    </p>
+  </div>
+
+  <h2>6. L'inaptitude du classement (FR-23) — K s'approche de N</h2>
+  <div class="card">
+    <div class="unfit">
+      <span class="eyebrow">⚠ Le classement ne porte pas de signal</span>
+      <p>Sur les 20 familles tirées au hasard, <span class="share">14</span> étaient pertinentes —
+      soit <span class="share">70&nbsp;%</span>, au-dessus du seuil de 50&nbsp;% configuré. Le
+      classement v3 ne trie pas ce dossier : <strong>déplacer la ligne ne corrigerait rien</strong>.</p>
+      <p class="actions"><button type="button">Reclasser avec une théorie du cas révisée</button></p>
+    </div>
+    <div class="constat is-stale">
+      <span class="eyebrow">Constat — tirage aléatoire</span>
+      <p class="sentence">20 familles de quasi-doublons écartées sur 120 (340 pièces) ont été tirées
+      au hasard ; 14 étaient pertinentes. Avec une confiance de 95&nbsp;%, au plus 104 des 120
+      familles de quasi-doublons écartées étaient pertinentes (prévalence ≤ 86,7&nbsp;%), soit au
+      plus 312 pièces au pire — périmètre « contentieux-A » — revue du 2026-08-11 — à jour.</p>
+      <p class="actions"><button type="button">Copier la phrase</button></p>
+    </div>
+    <p class="note">
+      L'affordance « déplacer la ligne » est <strong>retirée</strong>, pas grisée : un contrôle grisé
+      propose encore l'acte. L'épingle reste — elle porte sur une pièce, pas sur l'ordre. Et la borne
+      reste énoncée, large et peu flatteuse : le produit ne supprime ni ne reformule jamais un
+      résultat défavorable.
+    </p>
+  </div>
+
+  <h2>7. Les deux chiffres qui ne doivent jamais partager un registre</h2>
+  <div class="split">
+    <div class="card" style="margin:0">
+      <div class="projection">
+        <span class="eyebrow">Projection du classement</span>
+        <p>Déplacer la ligne de 180 à 580 : <strong>400 pièces de plus à lire</strong> ; la part
+        estimée du jeu écarté qui est pertinente passerait d'environ 3&nbsp;% à environ
+        0,4&nbsp;%.</p>
+        <p class="hint" style="margin-top:.5rem">Estimation du modèle à une position où
+        <em>rien n'a été échantillonné</em> — ce n'est pas une borne de tirage.</p>
+      </div>
+      <p class="note">FR-19 · Story 4.9 — hypothétique, révisable, <strong>non copiable</strong>.</p>
+    </div>
+    <div class="card" style="margin:0">
+      <div class="constat">
+        <span class="eyebrow">Constat — tirage aléatoire</span>
+        <p class="sentence">200 familles sur 1&nbsp;400 ont été tirées au hasard ; aucune n'était
+        pertinente. Avec une confiance de 95&nbsp;%, au plus 1,5&nbsp;% du jeu écarté est
+        pertinent…</p>
+        <p class="actions"><button type="button">Copier la phrase</button></p>
+      </div>
+      <p class="note">FR-23 · Story 5.4 — mesuré, daté, exportable, <strong>copiable</strong>.</p>
+    </div>
+  </div>
+  <div class="card">
+    <table>
+      <tr><th></th><th>Projection (FR-19)</th><th>Borne (FR-23)</th></tr>
+      <tr><td><b>Ce que c'est</b></td><td>une estimation du modèle là où <em>rien n'a été
+        échantillonné</em></td><td>une mesure d'un échantillon aléatoire <em>réellement lu</em></td></tr>
+      <tr><td><b>Conteneur</b></td><td>carte, filet gauche « review », pas de filet doré</td>
+        <td>filet doré au-dessus, filet encre à gauche</td></tr>
+      <tr><td><b>Verbe</b></td><td>conditionnel — « passerait de… à… »</td>
+        <td>indicatif passé — « ont été tirées », « étaient pertinentes »</td></tr>
+      <tr><td><b>Copie</b></td><td class="bad">aucune — un hypothétique ne se cite pas</td>
+        <td>« Copier la phrase »</td></tr>
+    </table>
+  </div>
+
+  <h2>8. Formulations interdites (FR-23 / §0.2)</h2>
+  <div class="card">
+    <p style="margin-top:0">Vérifiées <strong>structurellement</strong> sur tous les jeux de chaînes,
+    dans toutes les langues — pas par le soin éditorial : la fausse phrase a survécu à un brief, un
+    glossaire, trois FR et une métrique nord.</p>
+    <p class="bad" style="margin:.4rem 0"><s>risque d'avoir manqué une pièce pertinente</s> ·
+    <s>probabilité que rien n'ait été manqué</s> · <s>aucune chance qu'il reste quelque chose</s> ·
+    <s>risk of having missed a relevant document</s></p>
+    <p style="margin:.4rem 0 0">Ce que la phrase dit à la place : une <strong>prévalence</strong> —
+    la part du jeu écarté qui est pertinente — avec son niveau de confiance nommé. C'est la quantité
+    qu'un échantillon borne. La probabilité que rien n'ait été manqué est une autre quantité, à des
+    ordres de grandeur de là, qu'aucun estimateur ici ne produit.</p>
+  </div>
+
+  <p class="hint" style="margin-top:2rem">
+    APX — maquette d'écran-clé, contrat <a href="../EXPERIENCE-EPIC5.md">EXPERIENCE-EPIC5.md</a>.
+    Les épines l'emportent en cas de conflit avec cette maquette.
+  </p>
+</div>
+</body>
+</html>

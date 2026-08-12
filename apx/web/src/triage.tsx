@@ -493,6 +493,7 @@ const STALE_SUBJECT: Record<string, string> = {
  *  cannot travel without its staleness. */
 function BoundPanel({ bound, matter }: { bound: Bound | null | undefined; matter: string }) {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   if (bound === undefined) return null;   // not read — the banner above already says what it can
   if (bound === null) {
     return (
@@ -505,39 +506,69 @@ function BoundPanel({ bound, matter }: { bound: Bound | null | undefined; matter
     );
   }
   const stale = !bound.exportable_as_current;
+  // The kicker names the REGISTER, in words, so the reader can tell a measured bound from an exact
+  // census from a refusal without reading a colour (EXPERIENCE-EPIC5.md: tone is never the only
+  // carrier). An unknown register falls to the honest label, never to the nearest-looking one.
+  const KICKER: Record<string, string> = {
+    bound: "Constat — tirage aléatoire",
+    census: "Constat — recensement",
+    counts_only: "Constat — comptes seuls",
+  };
   const copy = () => {
-    // the SERVER's sentence, never one composed here: every path through it carries the staleness
-    void navigator.clipboard?.writeText(bound.copy_text).then(
-      () => setCopied(true), () => setCopied(false));
+    // the SERVER's sentence, never one composed here: every path through it carries the wall and
+    // the staleness. A clipboard that is unavailable (no permission, no secure context) SAYS so —
+    // a silent no-op would leave a lawyer pasting whatever was on the clipboard before.
+    const clipboard = navigator.clipboard;
+    if (!clipboard) { setCopied(false); setCopyFailed(true); return; }
+    void clipboard.writeText(bound.copy_text).then(
+      () => { setCopied(true); setCopyFailed(false); },
+      () => { setCopied(false); setCopyFailed(true); });
   };
   return (
     <section
       className={`apx-card apx-bound${stale ? " apx-bound-stale" : ""}`}
       aria-label="Borne de confiance"
     >
-      <strong>Borne de confiance</strong>
+      <span className="apx-eyebrow">{KICKER[bound.kind] ?? "Constat"}</span>
       {stale && (
         <span className="apx-chip apx-chip-review" style={{ marginLeft: ".5rem" }}>
           {bound.status_fr}
         </span>
       )}
-      <p style={{ margin: ".4rem 0 .2rem" }}>{bound.copy_text}</p>
-      {/* The unit comes from the SERVER (`unit_fr`) — a sampling run counts near-duplicate
-          FAMILIES, and hard-coding "pièces écartées" here was the Story-5.1 defect repeated one
-          file over. A census is not an "échantillon": it read everything. */}
-      <p className="apx-hint" style={{ margin: 0 }}>
-        {bound.kind === "census"
-          ? <>Recensement : {bound.population} {bound.unit_fr}, toutes examinées</>
-          : <>Échantillon de {bound.sample_size} sur {bound.population} {bound.unit_fr}</>}
-        {bound.piece_count !== null && <> ({bound.piece_count} pièces)</>} ·{" "}
-        {bound.relevant_found} pertinente(s) trouvée(s)
-      </p>
       {/* Story 5.3 — an estimator that has not passed its simulation gate states counts and
-          nothing derived from them. Said plainly rather than by an absence: a missing figure reads
-          as one the product forgot, not as one it refused (FR-23). */}
+          nothing derived from them. The chip is redundant with the sentence ON PURPOSE: the chip is
+          for the reader on screen, the clause inside the sentence is for the reader of the paste. */}
       {bound.kind === "counts_only" && (
-        <p className="apx-chip apx-chip-review" style={{ margin: ".4rem 0 0" }}>
-          Aucune borne — l'estimateur n'a pas été prouvé par simulation
+        <span className="apx-chip apx-chip-review" style={{ marginLeft: ".5rem" }}>
+          aucune borne énoncée
+        </span>
+      )}
+      {/* THE sentence. One text node, verbatim from the server, with nothing decorative inside it:
+          a user who selects this paragraph with the mouse gets exactly what the button copies. */}
+      <p className="apx-statement" style={{ margin: ".4rem 0 .2rem" }}>{bound.copy_text}</p>
+      {/* FR-23's ACCOMPANYING RECORD — the four things the requirement lets the sentence carry
+          beside it rather than inside it. Beside it means beside it: on screen, always, not one
+          click away. The wall is in BOTH, because only the sentence travels. */}
+      <p className="apx-hint" style={{ margin: 0 }}>
+        {bound.ranking_version_no !== null && <>Classement v{bound.ranking_version_no} · </>}
+        {bound.case_theory_version_id !== null && (
+          <>théorie du cas <code>{bound.case_theory_version_id.slice(0, 8)}</code> · </>
+        )}
+        {bound.last_retained_piece_id !== null && (
+          <>ligne après <code>{bound.last_retained_piece_id.slice(0, 12)}</code> · </>
+        )}
+        {bound.method !== null ? <>méthode <code>{bound.method}</code></> : <>méthode non enregistrée</>}
+      </p>
+      {/* FR-23: K approaching N is a finding about the ORDER. The one remedy on offer is a re-rank
+          with a revised case theory; no line move is proposed here, and none may be. */}
+      {/* CONFIRMED by the review: this was an `apx-chip`, which sets `white-space: nowrap` for
+          short labels. The declaration is a ~200-character sentence inside a flex column, so it
+          rendered on one unwrappable line — overflowing the card, or clipping the refusal clause,
+          which is the load-bearing half of FR-23. The seal register wraps, and App.tsx already
+          used it for the same block. */}
+      {bound.unfit_fr && (
+        <p className="apx-seal apx-seal--review" style={{ margin: ".5rem 0 0" }}>
+          ⚠ {bound.unfit_fr}
         </p>
       )}
       <p style={{ margin: ".5rem 0 0" }}>
@@ -550,7 +581,10 @@ function BoundPanel({ bound, matter }: { bound: Bound | null | undefined; matter
         ) : (
           <a href={`/api/matters/${encodeURIComponent(matter)}/bound/export`}>Exporter</a>
         )}
-        {copied && <span className="apx-hint"> · copiée</span>}
+        <span className="apx-hint" aria-live="polite">
+          {copied && " · copiée"}
+          {copyFailed && " · copie impossible — sélectionnez la phrase"}
+        </span>
       </p>
     </section>
   );

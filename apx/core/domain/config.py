@@ -329,6 +329,21 @@ CONFIG_SCHEMA: dict[str, ConfigKey] = _keys(
         preserves_guarantee=lambda v: v > 0,
         affects_retrieval=True,
     ),
+    # ── FR-23's unfitness threshold (Story 5.4): when the sample comes back mostly relevant, the
+    # finding is about the ORDER, not about where it was cut. ──
+    ConfigKey(
+        "unfit_relevant_share", "float", 0.5,
+        governs="the share of a sampling run's judged units that, once relevant, declares the "
+                "ranking version UNFIT for this matter — the product then says so in words, offers "
+                "a re-rank with a revised case theory, and does NOT offer a line move (FR-23)",
+        # WRITE domain: a share of a sample. Zero would declare every run unfit including one that
+        # found nothing; above 1 is unreachable and would silently switch the declaration off.
+        valid=lambda v: 0.0 < v <= 1.0,
+        # DEFAULT keeps the declaration reachable: at 1.0 only a sample that came back relevant to
+        # the last unit would ever trigger it, which is the "switched off in all but one case"
+        # shape. Half is the stated rule — at or above half, the order is not ordering.
+        preserves_guarantee=lambda v: v < 1.0,
+    ),
 )
 
 # Keys provisioning may seed as part of establishing a tenant (AD-25 names the taxonomy).

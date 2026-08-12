@@ -2131,6 +2131,19 @@ class BoundOut(BaseModel):
     count_upper_pieces: int | None   # the WORST CASE in pièces; None = not computable, never 0
     relevant_pieces: int | None      # EXACT, census only
     run_ordinal: int                 # 1 = first draw over this population, abandoned ones counted
+    # ── Story 5.4: FR-23's accompanying record, and the unfitness declaration ───────────────────
+    # FR-23 requires the sentence to name the matter, the ranking version, the case-theory version,
+    # the position of the line and the RBAC scope "or carry them in the accompanying record". This
+    # IS that record. `scope` is ALSO inside `copy_text` — a paste carries no payload with it.
+    scope: str | None                # the wall the number was COMPUTED UNDER, not the wall now
+    ranking_version_no: int | None   # None on a legacy recall_review, which recorded none
+    last_retained_piece_id: str | None   # the position of the line, by identity (FR-17)
+    case_theory_version_id: str | None   # None on the intrinsic ranking path
+    # FR-23's seventh consequence: K approaching N is a finding about the ORDER, not about where it
+    # was cut. When present the surface must REMOVE the line-move affordance, not grey it.
+    unfit_fr: str | None
+    unfit_relevant_share: float | None   # the share observed; None when there is no finding
+    unfit_threshold: float | None        # the configured rule that fired
 
 
 def _freshness_out(assessment: Freshness) -> FreshnessOut:
@@ -2167,7 +2180,16 @@ def _bound_out(reading: BoundReading) -> BoundOut:
         status_fr=reading.status_fr, copy_text=reading.copy_text,
         unit_fr=reading.bound.unit_fr, piece_count=reading.bound.piece_count,
         method=reading.bound.method,
-        run_ordinal=reading.bound.run_ordinal)
+        run_ordinal=reading.bound.run_ordinal,
+        scope=reading.bound.scope,
+        ranking_version_no=reading.bound.ranking_version_no,
+        last_retained_piece_id=reading.bound.last_retained_piece_id,
+        case_theory_version_id=reading.bound.case_theory_version_id,
+        unfit_fr=reading.unfitness_fr,
+        unfit_relevant_share=(
+            reading.unfitness.share if reading.unfitness_fr is not None else None),
+        unfit_threshold=(
+            reading.unfitness.threshold if reading.unfitness_fr is not None else None))
 
 
 @app.get("/api/matters/{matter}/freshness", response_model=list[FreshnessOut])
@@ -2198,7 +2220,9 @@ def get_worklist(
     Reading it writes nothing and queues nothing: staleness is resolved only by an explicit
     user-initiated act that produces a NEW artefact."""
     store = _require_store()
-    lines = read_worklist(tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store)
+    lines = read_worklist(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store,
+        config_get=lambda key: store.get_config(ident.tenant, key))
     if lines is None:
         raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
     return [
@@ -2215,7 +2239,9 @@ def get_bound(matter: str, ident: Identity = Depends(current_identity)) -> Bound
     404 when out of scope, absent, or when no bound has been recorded — the surface renders "no
     bound yet" as its own state, never as a bound of zero."""
     store = _require_store()
-    reading = read_bound(tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store)
+    reading = read_bound(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store,
+        config_get=lambda key: store.get_config(ident.tenant, key))
     if reading is None:
         raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
     return _bound_out(reading)
@@ -2230,7 +2256,9 @@ def export_bound(matter: str, ident: Identity = Depends(current_identity)) -> Bo
     false number is still a false number in a bundle. The refusal names the inputs that moved and
     writes nothing; a successful export is an audited egress act (FR-53)."""
     store = _require_store()
-    reading = read_bound(tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store)
+    reading = read_bound(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, reader=store,
+        config_get=lambda key: store.get_config(ident.tenant, key))
     if reading is None:
         raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
     if not reading.exportable_as_current:
@@ -2288,7 +2316,15 @@ class SamplingRunOut(BaseModel):
     changed: list[str]
     changed_fr: list[str]
     state_fr: str
-    census_fr: str | None        # a census estimates nothing, so it never carries a percentage
+    # Story 5.4 — the run's own reading, in whichever of the four registers applies, composed by the
+    # ONE Domain composer. It REPLACED a census-only string: one arm for one register left the other
+    # three to whichever renderer got there first. `None` while the run supports nothing.
+    #
+    # NOT the copyable constat: only /bound holds FR-58's freshness verdict, and a second copyable
+    # string would put one number on a clipboard twice with two different sets of qualifications.
+    statement_fr: str | None
+    run_qualification_fr: str     # this run's own MEASURED observables, never a freshness verdict
+    unfit_fr: str | None          # FR-23: K approaching N — the ORDER carries no signal
     started_by: str
     started_at: datetime
     completed_at: datetime | None
@@ -2356,7 +2392,8 @@ def _run_out(reading: SamplingRunReading) -> SamplingRunOut:
         sample_size=run.sample_size, is_census=run.is_census, status=run.status,
         state=reading.state, invalidated_in_flight=reading.invalidated_in_flight,
         changed=list(reading.changed), changed_fr=list(reading.changed_fr),
-        state_fr=reading.state_fr, census_fr=reading.census_fr,
+        state_fr=reading.state_fr, statement_fr=reading.statement_fr,
+        run_qualification_fr=reading.run_qualification_fr, unfit_fr=reading.unfitness_fr,
         started_by=run.started_by, started_at=run.started_at, completed_at=run.completed_at,
         verdicts_recorded=run.verdicts_recorded, relevant_found=run.relevant_found,
         # CONFIRMED [HIGH] by two independent lenses: these came straight off the run ROW, so
@@ -2382,9 +2419,10 @@ def _run_out(reading: SamplingRunReading) -> SamplingRunOut:
 def _reread_run(matter: str, ident: Identity, run_id: str) -> SamplingRunOut:
     """Re-read a run through the ONE read seam after an act, so the response carries the same
     derived state a GET would (AD-14) — never a second, hand-assembled truth."""
+    store = _require_store()
     reading = read_sampling_run(
-        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=_require_store(),
-        run_id=run_id)
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=store,
+        config_get=lambda key: store.get_config(ident.tenant, key), run_id=run_id)
     if reading is None:  # pragma: no cover - the act just succeeded inside the same scope
         raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
     return _run_out(reading)
@@ -2457,9 +2495,10 @@ def get_current_run(
     `invalidated_in_flight` is FR-22's failure path and is DERIVED — the comparison of the run's
     freshness stamp against the current observables (Story 4.13), never a stored flag a writer could
     forget to set. 404 when out of scope, absent, or no run exists."""
+    store = _require_store()
     reading = read_sampling_run(
-        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=_require_store(),
-        run_id=run_id)
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=store,
+        config_get=lambda key: store.get_config(ident.tenant, key), run_id=run_id)
     if reading is None:
         raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
     return _run_out(reading)
@@ -2472,8 +2511,10 @@ def list_runs(
     """Every sampling run of the matter, newest first — including abandoned and invalidated ones
     with their verdicts (AD-7: an hour of verdicts is never destroyed). `[]` means the matter was
     read and has no run yet; 404 means it was not read."""
+    store = _require_store()
     runs = read_sampling_runs(
-        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=_require_store())
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=store,
+        config_get=lambda key: store.get_config(ident.tenant, key))
     if runs is None:
         raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
     return [_run_out(reading) for reading in runs]

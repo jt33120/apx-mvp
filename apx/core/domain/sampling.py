@@ -290,69 +290,16 @@ def is_census(*, population: int, sample_size: int) -> bool:
     return population > 0 and sample_size >= population
 
 
-def census_statement_fr(
-    *, relevant_units: int, relevant_pieces: int | None, unit_fr: str, piece_count: int
-) -> str:
-    """What a census says, in French — an exact count, **never a percentage** (Story 5.2, OQ-4
-    input 2).
-
-    A census is not a tighter bound; it is a categorically different statement. Nothing is
-    estimated, everything was read. *"au plus 0,0 % est pertinent"* over a fully reviewed population
-    is a false claim of residual risk said out loud to a judge — §0.2's failure with better
-    arithmetic.
-
-    Both counts are **exact**: at a census the drawn units ARE the population, so the *pièces* held
-    by the relevant ones are known by identity, not bounded. That is why this sentence takes
-    ``relevant_pieces`` and not a worst case — the two epistemic statuses are different and are
-    never spelled the same way.
-
-    ``unit_fr`` names what was counted, because not every bound counts families: a legacy
-    ``recall_review`` counted *pièces*, and rendering its census as *"3 familles"* would be the
-    Story-5.1 denominator defect with the units swapped. ``relevant_pieces`` is ``None`` when it is
-    not separately known — the unit already IS the *pièce*, or the run never froze its member
-    lists — and the sentence then states one count instead of inventing a second."""
-    head = f"recensement : les {piece_count} pièces écartées ont toutes été examinées ; "
-    if relevant_units == 0:
-        return head + "aucune n'était pertinente"
-    units = f"{relevant_units} {unit_fr}" if relevant_units > 1 else f"1 {_singular(unit_fr)}"
-    if relevant_pieces is None or unit_fr.startswith("pièces"):
-        return f"{head}{units} se sont révélées pertinentes"
-    pieces = "1 pièce" if relevant_pieces == 1 else f"{relevant_pieces} pièces"
-    return f"{head}{units} — {pieces} — se sont révélées pertinentes"
-
-
-def counts_only_statement_fr(
-    *, sample_units: int, population_units: int, relevant_units: int, unit_fr: str,
-    piece_count: int | None = None,
-) -> str:
-    """What the product says when the estimator has **not** been proven sound (Story 5.3, FR-23).
-
-    Counts, and nothing derived from them: no percentage, no projection, no worst case — and it says
-    why, because a number withheld without a reason reads as a number the product forgot rather than
-    one it refused. FR-23: *"a failing estimator emits the counts-only sentence instead — it never
-    emits a bound it cannot defend."*"""
-    held = f" ({piece_count} pièces)" if piece_count is not None else ""
-    # CONFIRMED by the review: this read "1 se sont révélées pertinentes" — a plural verb on a
-    # singular count, and no unit noun at all, in the one string a firm reads out loud. The census
-    # sentence attaches its unit; this one did not, so a family count arrived unlabelled beside a
-    # pièce count that was labelled. Same defect as Story 5.1's denominator, in the grammar.
-    if relevant_units == 0:
-        found = "aucune n'était pertinente"
-    elif relevant_units == 1:
-        found = f"1 {_singular(unit_fr)} s'est révélée pertinente"
-    else:
-        found = f"{relevant_units} {unit_fr} se sont révélées pertinentes"
-    return (
-        f"{sample_units} {unit_fr} sur {population_units}{held} ont été tirées au hasard ; "
-        f"{found}. Aucune borne n'est énoncée : l'estimateur n'a pas encore été prouvé par "
-        "simulation, et le produit ne publie pas un chiffre qu'il ne peut pas défendre")
-
-
-def _singular(unit_fr: str) -> str:
-    """A crude French singular for the unit label, so *"1 familles"* never reaches a court. The
-    labels are a closed, product-owned set (``pièces écartées``, ``familles de quasi-doublons
-    écartées``); this is not a general pluraliser and does not pretend to be."""
-    return " ".join(w[:-1] if len(w) > 3 and w.endswith("s") else w for w in unit_fr.split())
+# ── the WORDS live one module over (Story 5.4) ───────────────────────────────────────────────────
+#
+# ``census_statement_fr`` and ``counts_only_statement_fr`` used to live here, while the bound
+# sentence was composed inline in the app-layer read seam and ``no_population`` had no sentence at
+# all. Three homes for four registers, across two layers.
+#
+# FR-23 makes the banned-phrasing list a STRUCTURAL property (FR-56), and a check over the words is
+# only as good as its knowledge of where the words are. They are now all in
+# ``apx.core.domain.statement``, which imports from this module and never the other way round: the
+# register constants and the arithmetic are here, the sentences are there.
 
 
 @dataclass(frozen=True)

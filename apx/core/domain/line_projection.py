@@ -9,10 +9,13 @@ never computed by the same code and never shown in the same visual register (FR-
 module **never** touches :func:`~apx.core.domain.confidence.prevalence_upper_bound` — a structural
 check enforces it.
 
-It never produces a *risk-of-a-miss* statement — the probability that nothing relevant was set
-aside — because that quantity is not estimable and is simply not computed (§0.2). Moving the line to
-retain everything leaves the discarded set **empty** and **no bound applies** — the projection
-reports that, never a prevalence of 0% (§0.2).
+It never produces the *risk-of-a-miss* statement §0.2 recorded as false — the quantity a reader
+could take as an assurance about the whole discarded pile rather than a share of it. That quantity
+is not estimable here and is simply not computed. (The phrasings that assert it are banned across
+every locale by ``no-banned-confidence-phrasing``, which reads source string literals; this
+paragraph therefore names the error rather than spelling it.) Moving the line to retain everything
+leaves the discarded set **empty** and **no bound applies** — the projection reports that, never a
+prevalence of 0% (§0.2).
 
 The per-*pièce* projected probability of relevance reuses the directional conversion the SM-17
 confidence calibration already fixed (``p_relevant = c`` for a relevant band, ``1 - c`` for a

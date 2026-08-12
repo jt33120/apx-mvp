@@ -34,6 +34,7 @@ _APX_ROOT = Path(__file__).resolve().parent.parent
 _DOMAIN = _APX_ROOT / "core" / "domain"
 _ESTIMATOR = _DOMAIN / "confidence.py"       # where prevalence_upper_bound is DEFINED
 _SAMPLING = _DOMAIN / "sampling.py"          # the one module allowed to call it
+_STATEMENT = _DOMAIN / "statement.py"        # Story 5.4 — where the WORDS moved
 _STORE = _APX_ROOT / "adapters" / "store_postgres" / "store.py"
 # not product runtime: the harness scans itself, the fitness suite is build tooling.
 _EXCLUDE_DIRS = frozenset({"checks", "fitness", "__pycache__"})
@@ -214,10 +215,13 @@ def piece_figure_is_a_worst_case(targets: Iterable[Path] | None = None) -> Check
 
 # ── input 2: a census states an exact count, and no bound at all ─────────────────────────────────
 
-_CENSUS_FN = "census_statement_fr"
+# Story 5.4 — the sentence functions MOVED to core/domain/statement.py, and this check followed
+# them rather than being relaxed. It failed closed the moment they left sampling.py — which is what
+# a fail-closed check is for: the alternative is a green build over a rule nobody is applying.
+_CENSUS_FN = "_census_claim_fr"
 # Story 5.3 — the counts-only sentence is under the same ban: an unproven estimator that stated a
 # percentage would be the §0.2 failure with an apology attached.
-_COUNTS_ONLY_FN = "counts_only_statement_fr"
+_COUNTS_ONLY_FN = "_counts_only_claim_fr"
 _ESTIMATE_FN = "estimate_for_run"
 _BOUND_FIELDS = ("prevalence_upper", "count_upper_families", "count_upper_pieces")
 _CENSUS_FIELDS = ("relevant_pieces",)
@@ -290,7 +294,9 @@ def _percent_in_statements(body: list[ast.stmt]) -> int | None:
     return None
 
 
-def a_census_states_no_bound(domain_path: Path | None = None) -> CheckResult:
+def a_census_states_no_bound(
+    domain_path: Path | None = None, statement_path: Path | None = None
+) -> CheckResult:
     """A census and a sample speak in disjoint registers (Story 5.2, OQ-4 input 2 / FR-22).
 
     A census is not a tighter bound; it is a categorically different statement — nothing is
@@ -298,27 +304,39 @@ def a_census_states_no_bound(domain_path: Path | None = None) -> CheckResult:
     from the 60 discarded; at most 4.8 % is relevant"* over a fully reviewed population is a false
     statement of residual risk, said out loud, to a judge.
 
-    Two legs, both on ``core/domain/sampling.py``: ``census_statement_fr`` builds no percentage at
-    all, and ``estimate_for_run``'s census branch constructs an ``Estimate`` carrying **none** of
-    the bound fields while its bound branch carries none of the census fields. The crossover is
-    ``n == N`` exactly and no third register exists near it."""
+    Two legs. The **words** (``core/domain/statement.py`` since Story 5.4): the census and
+    counts-only claims build no percentage at all. The **shape** (``core/domain/sampling.py``):
+    ``estimate_for_run``'s census branch constructs an ``Estimate`` carrying **none** of the bound
+    fields while its bound branch carries none of the census fields. The crossover is ``n == N``
+    exactly and no third register exists near it.
+
+    ``statement_path`` defaults to ``domain_path`` when only that is given, so a single-module
+    fixture still exercises both legs against one synthetic file."""
     name, ad = "a census states no bound", "AD-19"
     path = domain_path if domain_path is not None else _SAMPLING
+    words_path = statement_path if statement_path is not None else (
+        domain_path if domain_path is not None else _STATEMENT)
     tree = _parse(path)
+    words = tree if words_path == path else _parse(words_path)
     if tree is None:
         return _fail_closed(name, ad, f"cannot parse {path.name}")
-    census = _function(tree, _CENSUS_FN)
+    if words is None:
+        return _fail_closed(name, ad, f"cannot parse {words_path.name}")
+    census = _function(words, _CENSUS_FN)
     estimate = _function(tree, _ESTIMATE_FN)
-    if census is None or estimate is None:
+    if census is None:
         return _fail_closed(
-            name, ad, f"{_CENSUS_FN} or {_ESTIMATE_FN} is not in {path.name} — renamed?")
+            name, ad, f"{_CENSUS_FN} is not in {words_path.name} — renamed?")
+    if estimate is None:
+        return _fail_closed(
+            name, ad, f"{_ESTIMATE_FN} is not in {path.name} — renamed?")
 
     problems: list[str] = []
-    for sentence_fn in (census, _function(tree, _COUNTS_ONLY_FN)):
+    for sentence_fn in (census, _function(words, _COUNTS_ONLY_FN)):
         if sentence_fn is None:
             return _fail_closed(
-                name, ad, f"{_COUNTS_ONLY_FN} is not in {path.name} — renamed?")
-        percent = _percent_reachable(tree, sentence_fn)
+                name, ad, f"{_COUNTS_ONLY_FN} is not in {words_path.name} — renamed?")
+        percent = _percent_reachable(words, sentence_fn)
         if percent is not None:
             line, where = percent
             problems.append(

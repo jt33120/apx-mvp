@@ -11,7 +11,6 @@ from apx.core.domain.sampling import (
     STATUS_OPEN,
     SamplingUnit,
     bound_for_run,
-    census_statement_fr,
     derive_run_state,
     draw_families,
     group_discarded_families,
@@ -171,30 +170,16 @@ def test_a_target_outside_zero_to_one_is_refused(target: float) -> None:
         size_for_target(population=10, target_prevalence=target)
 
 
-_FAMILIES_FR = "familles de quasi-doublons écartées"
-
-
-# ── the census statement is a fact, never a percentage ──────────────────────────────────────────
+# ── the census crossover is arithmetic; its SENTENCE moved to statement.py in Story 5.4 ─────────
 
 def test_a_census_says_everything_was_read_and_estimates_nothing() -> None:
+    """The crossover is ``n == N`` exactly, and there is no third register near it. The census
+    *sentence* now lives in ``core/domain/statement.py`` and is exercised in
+    ``tests/domain/test_statement.py`` — this module keeps the arithmetic, that one the words."""
     assert is_census(population=40, sample_size=40)
     assert is_census(population=40, sample_size=41)
     assert not is_census(population=40, sample_size=39)
     assert not is_census(population=0, sample_size=0)
-    sentence = census_statement_fr(
-        relevant_units=0, relevant_pieces=0, unit_fr=_FAMILIES_FR, piece_count=1400)
-    assert "recensement" in sentence and "aucune n'était pertinente" in sentence
-    assert "%" not in sentence
-
-
-def test_a_census_that_found_something_does_not_claim_none_was_relevant() -> None:
-    """Story 5.2 — both counts EXACT. At a census the drawn families ARE the population, so the
-    pièces the relevant ones hold are known by identity and are not bounded."""
-    sentence = census_statement_fr(
-        relevant_units=3, relevant_pieces=47, unit_fr=_FAMILIES_FR, piece_count=1400)
-    assert "aucune" not in sentence
-    assert "3 familles de quasi-doublons écartées" in sentence and "47 pièces" in sentence
-    assert "%" not in sentence
 
 
 # ── the run's state is derived, never stored ────────────────────────────────────────────────────

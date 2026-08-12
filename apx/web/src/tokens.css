@@ -438,6 +438,18 @@ button:focus-visible { box-shadow: var(--apx-ring); }
 /* a stale bound is visually distinct WHEREVER it appears (FR-58) — the rule, not a decoration */
 .apx-bound-stale { border-color: #ecdcc0; background: var(--apx-review-bg); }
 .apx-bound-stale p { color: #6a4211; }
+/* Story 5.4 — the CONSTAT register. A gold hairline above and an ink rule at the left: a shape
+   reserved for a MEASURED claim, which the FR-19 priced projection may never borrow (the two are
+   never shown in the same visual register — EXPERIENCE-EPIC5.md). */
+.apx-bound { border-top: 2px solid var(--apx-gold); border-left: 3px solid var(--apx-ink); }
+.apx-bound-stale { border-left-color: var(--apx-review); }
+/* the register kicker — worded, so the register is legible in greyscale and in a screen reader */
+.apx-eyebrow {
+  font-size: 0.72rem; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--apx-ink-3, var(--apx-muted));
+}
+/* THE sentence. Tabular numerals so figures align and cannot be misread across a wrapped line. */
+.apx-statement { font-variant-numeric: tabular-nums; }
 .apx-chip-review { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.72rem; letter-spacing: 0.02em; color: var(--apx-review); background: var(--apx-surface); border: 1px solid #ecdcc0; }
 /* the unranked row of the equation carries the review tone too: it is the count that says the
    dossier has moved past its own classement */

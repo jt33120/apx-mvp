@@ -4401,6 +4401,19 @@ class SqlStore:
                 return RecordedBound(
                     relevant_pieces=self._census_relevant_pieces(session, run),
                     run_ordinal=self._run_ordinal(session, run),
+                    # Story 5.4 — the wall the number was COMPUTED UNDER (FR-23), read off the run's
+                    # own frozen column, never off the matter's current wall: an admin re-scope
+                    # (Story 1.6) moves the second and not the first, and the difference is exactly
+                    # what makes a number a fact about one set of walls rather than about a matter.
+                    scope=run.scope,
+                    # FR-23's accompanying record — the four things the sentence names OR carries
+                    # beside it. The case theory is one join away, on the ranking version the run
+                    # froze; a run over the intrinsic path has none, and it stays None (AD-19).
+                    ranking_version_no=run.ranking_version_no,
+                    last_retained_piece_id=run.last_retained_piece_id,
+                    case_theory_version_id=session.scalar(
+                        select(RankingVersionRow.case_theory_version_id)
+                        .where(RankingVersionRow.id == run.ranking_version_id)),
                     artefact_id=run.id,
                     bound=PrevalenceBound(
                         population=run.population_families, sample_size=run.sample_size,

@@ -18,19 +18,32 @@ store adapter (AD-4).
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 
 from apx.core.domain.confidence import RecordedBound, estimator_is_proven
+from apx.core.domain.config import coerce
 from apx.core.domain.freshness import Freshness, FreshnessStamp, assess_freshness
 from apx.core.domain.sampling import (
     KIND_BOUND,
     KIND_CENSUS,
     KIND_COUNTS_ONLY,
-    census_statement_fr,
-    counts_only_statement_fr,
     is_census,
 )
-from apx.core.domain.worklist import WorklistLine, worklist_lines
+from apx.core.domain.statement import (
+    UNFIT_SHARE_KEY,
+    StatementInputs,
+    Unfitness,
+    statement_fr,
+    unfitness,
+    unfitness_statement_fr,
+)
+from apx.core.domain.worklist import (
+    OFFER_REPLACE_LINE,
+    WorklistLine,
+    unfitness_line,
+    worklist_lines,
+)
 from apx.core.ports.freshness import FreshnessReader
 
 
@@ -42,10 +55,16 @@ class BoundReading:
     this story existed. That is **not** freshness: the surface must say the bound's inputs cannot be
     verified, never that they are unchanged, and the export refuses it for the same reason it
     refuses a stale one. An absence of evidence is not evidence of freshness.
+
+    ``unfit_relevant_share`` is the *tenant*'s configured FR-23 threshold, resolved by
+    :func:`read_bound` and carried here so the finding is derived **once**, in the core, and every
+    surface reads the same field. It has no default: a reading that answered "fit" because nobody
+    supplied a threshold would be a verdict nobody computed.
     """
 
     bound: RecordedBound
     freshness: Freshness | None
+    unfit_relevant_share: float
 
     @property
     def exportable_as_current(self) -> bool:
@@ -85,60 +104,81 @@ class BoundReading:
         return KIND_BOUND if estimator_is_proven() else KIND_COUNTS_ONLY
 
     @property
-    def copy_text(self) -> str:
-        """The sentence the surface copies to the clipboard — **composed here, on the server**.
+    def statement_inputs(self) -> StatementInputs:
+        """Everything the sentence needs, and nothing else (Story 5.4, FR-23).
 
-        FR-58: a stale bound *"cannot be copied as text without its staleness in the copied
-        string"*. That is only structurally true if the client copies a string it did not compose:
-        every path through this property appends :attr:`status_fr`, so there is no branch that
-        produces the number without its freshness. A client that assembled its own sentence from
-        the numeric fields could omit it — which is why the surface copies this and nothing else.
+        Assembled **here**, from the recorded artefact, and handed to the one Domain composer. The
+        register-dependent fields are gated by an ALLOW-list on :attr:`kind`, exactly as the HTTP
+        payload gates them: gating some of a register's fields is not gating the register, and the
+        Story 5.3 review found that half-gating shipping a *pièce* projection beside a payload
+        announcing it had no bound to state.
         """
         b = self.bound.bound
-        tail = f"revue du {self.bound.reviewed_at.date().isoformat()} — {self.status_fr}."
-        # FR-22: a bound resting on a later draw over the same population states how many runs came
-        # first. The sentence travels alone, so the multiplicity fact travels inside it or not at
-        # all — and abandon-and-redraw is what it is watching for.
-        if self.bound.run_ordinal > 1:
-            tail = f"tirage n° {self.bound.run_ordinal} sur cette population — {tail}"
-        pieces = self.bound.piece_count if self.bound.piece_count is not None else b.population
-        # A CENSUS is a categorically different statement and gets a categorically different
-        # sentence — an exact count, never a percentage (Story 5.2, OQ-4 input 2). "au plus 0,0 %
-        # est pertinent" over a population that was read in full is a false claim of residual risk,
-        # and it is the one this sentence would otherwise make. The two registers never mix.
-        if self.kind == KIND_CENSUS:
-            sentence = census_statement_fr(
-                relevant_units=b.relevant_in_sample,
-                relevant_pieces=self.bound.relevant_pieces,
-                unit_fr=self.bound.unit_fr, piece_count=pieces)
-            # NOT str.capitalize(): it lowercases everything after the first character, which would
-            # quietly mangle any proper noun or unit the sentence grows later.
-            return sentence[:1].upper() + sentence[1:] + f" — {tail}"
-        if self.kind == KIND_COUNTS_ONLY:
-            # FR-23's failure path: counts, and nothing derived from them. The reason travels with
-            # them, because a number withheld without a reason reads as one the product forgot.
-            sentence = counts_only_statement_fr(
-                sample_units=b.sample_size, population_units=b.population,
-                relevant_units=b.relevant_in_sample, unit_fr=self.bound.unit_fr,
-                piece_count=self.bound.piece_count)
-            return sentence[:1].upper() + sentence[1:] + f" — {tail}"
-        # The denominator is labelled with the unit it was COMPUTED over (Story 5.1): a sampling
-        # run draws near-duplicate families, and calling a family count "pièces" would make the
-        # sentence false about its own denominator. The pièce count is stated beside it, never
-        # substituted into it.
-        held = (f" ({self.bound.piece_count} pièces)"
-                if self.bound.piece_count is not None else "")
-        # The worst case in *pièces*, stated so the reader does not do the rescale herself: 6 of
-        # 120 families is 5 %, and 5 % of 1 400 pièces is 70 — which is wrong, and wrong in the
-        # flattering direction, because the relevant families may be the largest ones. Absent when
-        # the run never froze its family sizes; never guessed (AD-19).
-        worst = (f", soit au plus {self.bound.count_upper_pieces} pièces au pire"
-                 if self.bound.count_upper_pieces is not None else "")
-        return (
-            f"Avec une confiance de {b.confidence:.0%}, au plus {b.count_upper} des "
-            f"{b.population} {self.bound.unit_fr}{held} étaient pertinentes "
-            f"(prévalence ≤ {b.prevalence_upper:.1%}){worst} — {tail}"
-        )
+        bound_register = self.kind == KIND_BOUND
+        return StatementInputs(
+            kind=self.kind,
+            unit_fr=self.bound.unit_fr,
+            population_units=b.population,
+            sample_units=b.sample_size,
+            relevant_units=b.relevant_in_sample,
+            confidence=b.confidence,
+            piece_count=self.bound.piece_count,
+            count_upper_units=b.count_upper if bound_register else None,
+            prevalence_upper=b.prevalence_upper if bound_register else None,
+            count_upper_pieces=(
+                self.bound.count_upper_pieces if bound_register else None),
+            relevant_pieces=(
+                self.bound.relevant_pieces if self.kind == KIND_CENSUS else None),
+            scope=self.bound.scope,
+            run_ordinal=self.bound.run_ordinal,
+            reviewed_on=self.bound.reviewed_at.date(),
+            freshness_fr=self.status_fr)
+
+    @property
+    def copy_text(self) -> str:
+        """The sentence the surface copies to the clipboard — **composed on the server**.
+
+        FR-58: a stale bound *"cannot be copied as text without its staleness in the copied
+        string"*. FR-23: the sentence carries the *RBAC scope* it was computed under. Both are only
+        structurally true if the client copies a string it did not compose — and this property
+        delegates to the ONE Domain composer, which has no branch that omits either. A client
+        assembling its own sentence from the numeric fields could drop them, which is why the
+        surface copies this and nothing else.
+        """
+        return statement_fr(self.statement_inputs)
+
+    @property
+    def unfitness(self) -> Unfitness | None:
+        """FR-23's seventh consequence: where K approaches N the finding is that **this ranking
+        version carries no signal on this matter**, not that the line is misplaced.
+
+        Derived here, once, from the same counts the sentence states — so the panel, the payload
+        and the export cannot disagree about whether the remedy on offer is a line move. The
+        threshold is the *tenant*'s configured share, resolved by :func:`read_bound`; a default
+        baked in here would be a threshold every caller could inherit while believing it had
+        consulted the tenant's.
+        """
+        b = self.bound.bound
+        return unfitness(
+            relevant_units=b.relevant_in_sample, sample_units=b.sample_size,
+            threshold=self.unfit_relevant_share)
+
+    @property
+    def unfitness_fr(self) -> str | None:
+        """The declaration in words, or ``None`` when there is none to make.
+
+        Also ``None`` on a **legacy** bound, which recorded no *ranking version*: FR-23's finding is
+        that *this ranking version* is unfit, and AD-23 forbids an unqualified reference to one. A
+        declaration naming no version would be an accusation with no defendant — and the legacy
+        ``recall_review`` was computed over a different population entirely (planning decision A1),
+        so a finding about the current order could not be drawn from it anyway.
+        """
+        finding = self.unfitness
+        if finding is None or self.bound.ranking_version_no is None:
+            return None
+        return unfitness_statement_fr(
+            finding, version_no=self.bound.ranking_version_no, unit_fr=self.bound.unit_fr,
+            kind=self.kind)
 
 
 def read_freshness(
@@ -184,23 +224,56 @@ def read_freshness(
 
 def read_worklist(
     *, tenant: str, matter: str, scopes: set[str], reader: FreshnessReader,
+    config_get: Callable[[str], object],
 ) -> tuple[WorklistLine, ...] | None:
     """The *matter*'s worklist — one line per stale artefact, naming the inputs that moved and
-    **offering** the recomputation (FR-58). Derived from the assessments, stored nowhere.
+    **offering** the recomputation (FR-58) — plus FR-23's unfitness line where the *ranking
+    version* has been found not to rank.
 
-    Reading it writes nothing and starts nothing. ``()`` = read, nothing stale; ``None`` = not
+    The unfitness line is **not** a staleness line and is deliberately built here rather than in
+    :func:`~apx.core.domain.worklist.worklist_lines`: nothing is stale, the ranking is current, and
+    the offer is a re-rank with a **revised case theory** rather than the plain re-rank a moved
+    corpus would ask for. CONFIRMED by the review — FR-23 has four clauses and this one, *"produces
+    a worklist line offering a re-rank with a revised or newly written case theory (FR-37)"*, had
+    no code anywhere.
+
+    Reading it writes nothing and starts nothing. ``()`` = read, nothing to do; ``None`` = not
     read."""
     assessments = read_freshness(tenant=tenant, matter=matter, scopes=scopes, reader=reader)
     if assessments is None:
         return None
-    return worklist_lines(assessments)
+    lines = list(worklist_lines(assessments))
+    bound = read_bound(
+        tenant=tenant, matter=matter, scopes=scopes, reader=reader, config_get=config_get)
+    if bound is not None and bound.unfitness_fr is not None:
+        # FR-23: the system *"does not offer a line move as the remedy"*. Raised by the review, and
+        # correctly: the offer lives in ``worklist.OFFER_REPLACE_LINE``, which the structural check
+        # was not looking at. No surface acts on it today — Story 4.9's control does not exist — but
+        # a stale LINE already produces the offer, so a *matter* whose ranking carries no signal AND
+        # whose line has moved would hand the lawyer both "re-rank with a revised theory" and
+        # "replace the line". Removing it is the requirement; greying it would not be, and neither
+        # is waiting for the surface that will read it.
+        lines = [line for line in lines if line.offer != OFFER_REPLACE_LINE]
+        # The line names the RANKING VERSION it accuses, by identity — AD-23 forbids an unqualified
+        # reference to one, and an offer with no named subject is an instruction with no argument.
+        lines.append(unfitness_line(
+            version_id=f"ranking-v{bound.bound.ranking_version_no}",
+            said_fr=bound.unfitness_fr))
+    return tuple(lines)
 
 
 def read_bound(
     *, tenant: str, matter: str, scopes: set[str], reader: FreshnessReader,
+    config_get: Callable[[str], object],
 ) -> BoundReading | None:
     """The current *confidence bound* and the verdict on it. ``None`` when out of scope, absent, or
-    when no bound has been recorded — the surface renders "no bound yet" as its own state."""
+    when no bound has been recorded — the surface renders "no bound yet" as its own state.
+
+    ``config_get`` resolves the FR-23 unfitness threshold as *configuration-as-data* (AD-24), the
+    same shape the semantic read seam uses for its similarity floor: the value that runs is the
+    *tenant*'s, never a caller-supplied override. It is ``coerce``d rather than read bare, so a
+    stray type or an out-of-range share fails loudly instead of silently disabling the declaration.
+    """
     if not scopes:
         return None
     bound = reader.read_current_bound(tenant=tenant, matter=matter, scopes=scopes)
@@ -211,4 +284,6 @@ def read_bound(
         return None
     verdict = next(
         (a for a in assessments if a.artefact_id == bound.artefact_id), None)
-    return BoundReading(bound=bound, freshness=verdict)
+    return BoundReading(
+        bound=bound, freshness=verdict,
+        unfit_relevant_share=float(coerce(UNFIT_SHARE_KEY, config_get(UNFIT_SHARE_KEY))))

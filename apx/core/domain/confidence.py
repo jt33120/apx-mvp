@@ -138,6 +138,36 @@ def prevalence_upper_bound(
     )
 
 
+def prevalence_fr(prevalence_upper: float) -> str:
+    """A prevalence rendered so it never reads as **zero when it is not** (Story 5.4, FR-23).
+
+    CONFIRMED [HIGH] by the review, reproduced by execution: ``f"{p:.1%}"`` prints ``0.0%`` for
+    every share below 0.05 %, and the product's own planner recommends exactly such draws —
+    ``size_for_target(population=8000, target_prevalence=0.0004)`` returns a sample of 4 217, whose
+    bound is *at most 3 of 8 000* at a prevalence of 0.0375 %. The sentence then said *"au plus 3 …
+    (prévalence ≤ 0.0%)"*: two numbers in one parenthesis, one of them false, and false in the
+    flattering direction — a residual-prevalence bound of zero reads as *nothing relevant remains*.
+    That is §0.2's failure re-created by a format specifier.
+
+    So the precision **widens until the figure is non-zero**, and a share that is genuinely zero
+    (``count_upper == 0``, which a sample reaches only above ``n > N(1-c)`` — §0.2's own 1 330 of
+    1 400) is rendered without a decimal, because *"0.0 %"* and *"0 %"* are different claims and
+    only the second one is being made.
+
+    Lives here rather than in ``statement.py`` because ``sampling.py``'s sizing preview states the
+    same figure and must not be able to round it differently — one renderer, one rounding.
+    """
+    if prevalence_upper <= 0:
+        return "0 %"
+    for decimals in (1, 2, 3, 4):
+        rendered = f"{prevalence_upper:.{decimals}%}"
+        if any(c in "123456789" for c in rendered):
+            return rendered
+    # Below 0.0001 % the exact figure stops being readable; a strict inequality is still true and
+    # is never the flattering direction.
+    return "< 0.0001%"
+
+
 def pieces_upper_bound(
     *, count_upper_families: int, family_sizes: Sequence[int] | None
 ) -> int | None:
@@ -208,6 +238,18 @@ class RecordedBound:
     at a census, where every unit was read. The two *pièce* fields are deliberately separate: a
     worst case and an exact count are different kinds of statement and must not share a slot, since
     a slot shared is a slot a renderer can mistake (Story 5.2, OQ-4 input 2).
+
+    ``scope`` is the *RBAC scope* the number was **computed under** (Story 5.4, FR-23) — the wall at
+    draw time, not the *matter*'s wall now. The two differ after an admin re-scope (Story 1.6), and
+    that difference is the real version of the failure FR-23 describes: a number presented as a fact
+    about a *matter* when it is a fact about one set of walls. It is ``None`` only on a legacy
+    ``recall_review`` row, which never recorded one, and it is left ``None`` rather than back-filled
+    with the *matter*'s current wall — claiming a provenance a row does not have (AD-19).
+
+    ``ranking_version_no``, ``last_retained_piece_id`` and ``case_theory_version_id`` are FR-23's
+    *accompanying record*: the requirement is that the sentence names them **or carries them in the
+    accompanying record**, and this is that record. They ride beside the sentence on every surface
+    rather than one click away.
     """
 
     artefact_id: str
@@ -221,3 +263,8 @@ class RecordedBound:
     # How many runs over this same frozen population came first, counting the abandoned ones. FR-22
     # requires a bound resting on a later draw to say so, and the sentence travels alone.
     run_ordinal: int = 1
+    # ── Story 5.4: what qualifies the number, and the accompanying record (FR-23) ────────────────
+    scope: str | None = None
+    ranking_version_no: int | None = None
+    last_retained_piece_id: str | None = None
+    case_theory_version_id: str | None = None

@@ -972,34 +972,30 @@ function SamplingPanel({ matter }: { matter: string }) {
               </button>
             </div>
           )}
-          {/* The two registers (Story 5.2, OQ-4 input 2). A census states a FACT and never a
-              percentage; a sample states a bound over FAMILIES with the pièce figure beside it as
-              an explicit worst case. They are told apart by `estimate_kind`, not by whether a
-              number happens to be zero — a 39-of-40 draw can bound at zero and is still a sample. */}
-          {run.estimate_kind === "census" && run.census_fr && (
-            <p className="apx-seal apx-seal--ok" style={{ marginTop: ".5rem" }}>🛡 {run.census_fr}</p>
-          )}
-          {run.estimate_kind === "bound" && (
-            <p className="apx-seal apx-seal--ok" style={{ marginTop: ".5rem" }}>
-              🛡 {run.sample_size}/{run.population_families} familles relues ·{" "}
-              {run.relevant_found} pertinente(s) → au plus <strong>{run.count_upper}</strong>{" "}
-              familles ({((run.prevalence_upper ?? 0) * 100).toFixed(1)}%) à{" "}
-              {Math.round(run.confidence * 100)}%
-              {run.count_upper_pieces !== null
-                ? <>, soit au plus <strong>{run.count_upper_pieces}</strong> pièces au pire.</>
-                : <>. Le pire cas en pièces n’est pas calculable pour ce tirage.</>}
+          {/* Story 5.4 — ONE sentence, composed by the server, rendered verbatim.
+              This replaced three hand-assembled arms: a census string, a bound assembled from
+              numeric fields, and a counts-only paragraph typed out here. Three composers for four
+              registers is three places the disjoint registers can be re-branched, and the client is
+              the worst of them — a claim assembled here can silently omit the RBAC scope and the
+              staleness the server puts INSIDE the string (FR-23/FR-58). `statement-one-composer`
+              fails the build if any of them comes back.
+              This paragraph is deliberately NOT copyable: the matter's constat panel is the one
+              place a lawyer quotes from, because only that reading holds the freshness verdict. */}
+          {run.statement_fr && (
+            <p
+              className={`apx-seal apx-seal--${
+                run.estimate_kind === "counts_only" ? "review" : "ok"}`}
+              style={{ marginTop: ".5rem" }}
+            >
+              🛡 {run.statement_fr}
             </p>
           )}
-          {/* Story 5.3 — the register that can say no. CONFIRMED by the review: this branch
-              enumerated a register set that had grown, so a COMPLETED counts-only run rendered no
-              outcome at all. A lawyer who has just spent an evening on verdicts and is shown
-              nothing concludes the tool lost her work, not that it refused to state a number. */}
-          {run.estimate_kind === "counts_only" && (
-            <p className="apx-seal apx-seal--review" style={{ marginTop: ".5rem" }}>
-              🛡 {run.sample_size}/{run.population_families} familles relues ·{" "}
-              {run.relevant_found} pertinente(s). Aucune borne n’est énoncée : l’estimateur n’a pas
-              été prouvé par simulation, et le produit ne publie pas un chiffre qu’il ne peut pas
-              défendre.
+          {/* FR-23's seventh consequence: the sample came back mostly relevant, so the finding is
+              about the ORDER, not about where it was cut. Stated in words, with the one remedy on
+              offer — and never a line move. */}
+          {run.unfit_fr && (
+            <p className="apx-seal apx-seal--review" style={{ marginTop: ".4rem" }}>
+              ⚠ {run.unfit_fr}
             </p>
           )}
           {/* FR-22: a later draw over the same population is presented ALONGSIDE the earlier ones,

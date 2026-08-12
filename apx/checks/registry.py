@@ -52,6 +52,7 @@ from apx.checks import (
     scope_admin,
     secrets,
     staleness_triggers,
+    statement,
     taxonomy_label_ownership,
     tenant_isolation,
     triage_sets_one_derivation,
@@ -191,6 +192,11 @@ CHECKS: list[Callable[[], CheckResult]] = [
     estimator.the_bound_consumes_no_model_number,
     # Story 5.3 — the simulation gate: "proven" is un-writable without the proof running (FR-23).
     estimator.the_simulation_gate_is_wired,
+    # Story 5.4 — the SENTENCE: one composer, composed offline, and an unfit ranking that offers a
+    # re-rank rather than a re-cut (FR-23/FR-55/FR-56).
+    statement.the_sentence_has_one_composer,
+    statement.the_sentence_is_composed_offline,
+    statement.unfitness_offers_no_line_move,
     # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,

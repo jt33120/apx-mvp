@@ -68,6 +68,7 @@ from apx.checks import (
     scope_admin,
     secrets,
     staleness_triggers,
+    statement,
     taxonomy_label_ownership,
     tenant_isolation,
     triage_sets_one_derivation,
@@ -411,7 +412,8 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "confidence fields read off a model response (vacuous until 4.x)"),
     _p("no-banned-confidence-phrasing", "FR-23", "FR-23", "no banned confidence-bound phrasing",
        forward_looking.no_banned_confidence_phrasing,
-       "banned phrases in string literals / locale resources (vacuous until 5.4/6.x)"),
+       "banned phrases + proximity shapes (fr/en/it) in runtime string literals, locale resources "
+       "and apx/web/src — LIVE since Story 5.4, when the sentence it polices shipped"),
     # ── story 2.12: the gold-set merge gate — ranking code cannot merge before recall runs ──────
     _p("gold-set-merge-gate", "FR-54", "AD-34",
        "ranking code is gated by the gold-set recall harness",
@@ -593,9 +595,10 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "prevalence × pièces (Story 5.2, OQ-4 input 1)"),
     _p("estimator-census-no-bound", "FR-22", "AD-19", "a census states no bound",
        estimator.a_census_states_no_bound,
-       "census_statement_fr and estimate_for_run in core/domain/sampling.py — a census carries an "
-       "exact count and no percentage, the bound register carries no exact count (Story 5.2, "
-       "OQ-4 input 2)"),
+       "_census_claim_fr and _counts_only_claim_fr in core/domain/statement.py (the WORDS, since "
+       "Story 5.4) plus estimate_for_run in core/domain/sampling.py (the SHAPE) — a census "
+       "carries an exact count and no percentage, the bound register carries no exact count "
+       "(Story 5.2, OQ-4 input 2)"),
     _p("estimator-one-run-one-bound", "FR-22", "AD-37", "one run, one bound, chosen by recency",
        estimator.one_run_one_bound_chosen_by_recency,
        "prevalence_upper_bound call sites across apx/** and read_current_bound's ordering — runs "
@@ -616,6 +619,19 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        estimator.the_bound_consumes_no_model_number,
        "core/domain/confidence.py and core/domain/sampling.py — the estimator reaches neither the "
        "FR-19 projection nor any model-reported confidence field (Story 5.2, OQ-4 input 5)"),
+    # ── story 5.4: the SENTENCE — one composer, offline, and the unfitness declaration ─────────
+    _p("statement-one-composer", "FR-23", "AD-37", "the sentence has one composer",
+       statement.the_sentence_has_one_composer,
+       "confidence-bound wording in runtime string literals + apx/web/src — the sentence is "
+       "composed only in core/domain/statement.py, never re-assembled by a reader or the client"),
+    _p("statement-composed-offline", "FR-55", "AD-4", "the sentence is composed offline",
+       statement.the_sentence_is_composed_offline,
+       "the transitive import closure of core/domain/statement.py — Domain-only, no networking "
+       "module, and the composer must exist and export statement_fr"),
+    _p("unfitness-offers-no-line-move", "FR-23", "AD-33", "an unfit ranking offers no line move",
+       statement.unfitness_offers_no_line_move,
+       "core/domain/statement.py (never names the re-line offer), api/app.py (ships unfit_fr), and "
+       "apx/web/src line-move sites (vacuous until Story 4.9's surface lands)"),
     # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
     _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
        inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),

@@ -250,8 +250,10 @@ def test_a_census_states_a_fact_and_never_a_percentage(tmp_path: Path, monkeypat
     assert run["is_census"] is True
     _judge_all(client, run)
     done = _complete(client, run["run_id"])
-    assert done["census_fr"] is not None
-    assert "recensement" in done["census_fr"] and "%" not in done["census_fr"]
+    # Story 5.4 — ONE server-composed sentence per run, in whichever register applies. It replaced
+    # `census_fr`, which had an arm for one register and left the other three to the client.
+    assert done["statement_fr"] is not None
+    assert "ecensement" in done["statement_fr"] and "%" not in done["statement_fr"]
     # CONFIRMED [HIGH] by the Story 5.3 review. This asserted `prevalence_upper == 0.0` — a bound
     # of zero on a payload for a population that was read in full. The register is disjoint on the
     # WIRE now, not only in the sentence: `/sampling/runs` reads its numbers off the register-aware

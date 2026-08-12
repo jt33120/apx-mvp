@@ -147,7 +147,7 @@ def test_a_census_states_an_exact_count_and_carries_no_bound(tmp_path: Path, mon
     assert done["estimate_kind"] == "census"
     assert done["count_upper_pieces"] is None             # nothing is bounded
     assert done["relevant_pieces"] is not None            # everything is known
-    assert done["census_fr"] is not None and "%" not in done["census_fr"]
+    assert done["statement_fr"] is not None and "%" not in done["statement_fr"]
 
 
 def test_the_copied_sentence_of_a_census_never_states_a_percentage(

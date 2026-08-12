@@ -102,6 +102,67 @@ def _estimator_proven_sound() -> None:
                     for v in vacuous))
 
 
+def _the_sentence_renders_offline() -> None:
+    """The *confidence bound* sentence renders here, in the offline frame (story 5.4, FR-55/FR-23).
+
+    FR-55 names this stage in as many words: *"the confidence bound sentence is regenerable from
+    the audit record WITHOUT a model call — a statistical statement must never depend on a network
+    call — and this is asserted here."* FR-36 makes machine-generated user-facing text
+    model-produced; FR-55's own assumption note resolves the contradiction in favour of templated,
+    locally rendered text, and ``needs_model`` is therefore False for this stage on purpose — the
+    sentence LEAVES the degradation list, which is the whole point of the requirement.
+
+    It composes all four registers from flat inputs — no store, no clock, no provider — and asserts
+    the two things a paste must carry: the wall, and the freshness state (FR-23/FR-58). A register
+    that dropped either would still LOOK right on screen, where the panel says both; it is the
+    copied string that would arrive without them."""
+    from apx.core.domain.sampling import (
+        KIND_BOUND,
+        KIND_CENSUS,
+        KIND_COUNTS_ONLY,
+        KIND_NO_POPULATION,
+    )
+    from apx.core.domain.statement import StatementInputs, statement_fr
+
+    unit = "familles de quasi-doublons écartées"
+    common = dict(
+        unit_fr=unit, population_units=1400, sample_units=200, relevant_units=0, confidence=0.95,
+        piece_count=1400, scope="mur-a", freshness_fr="à jour")
+    bound = statement_fr(StatementInputs(
+        kind=KIND_BOUND, count_upper_units=21, prevalence_upper=0.015, count_upper_pieces=34,
+        **common))
+    census = statement_fr(StatementInputs(
+        kind=KIND_CENSUS, relevant_pieces=0, **{**common, "sample_units": 1400}))
+    counts = statement_fr(StatementInputs(kind=KIND_COUNTS_ONLY, **common))
+    empty = statement_fr(StatementInputs(
+        kind=KIND_NO_POPULATION, unit_fr=unit, population_units=0, sample_units=0,
+        relevant_units=0, confidence=0.95))
+
+    for name, sentence in (("bound", bound), ("census", census), ("counts_only", counts)):
+        assert "mur-a" in sentence, f"the {name} sentence drops the RBAC scope (FR-23)"
+        assert "à jour" in sentence, f"the {name} sentence drops its freshness state (FR-58)"
+    # A census estimates nothing, so it never carries a percentage — §0.2 with better arithmetic.
+    assert "%" not in census and "%" not in counts
+    assert "%" in bound, "the bound register states a prevalence — that is what a sample bounds"
+    # An empty discarded set is its own statement, never a flattering zero.
+    assert "0" not in empty and "aucune borne" in empty.lower()
+    # A bound whose wall was never recorded STATES that, rather than dropping the clause: the
+    # review found the "named unconditionally" decision implemented as `if inputs.scope`, so a
+    # legacy row's copied sentence said nothing at all about whose walls the number was counted
+    # under. An absence of evidence is stated here exactly as an unstamped freshness is.
+    unwalled = statement_fr(StatementInputs(
+        kind=KIND_BOUND, count_upper_units=21, prevalence_upper=0.015,
+        **{**common, "scope": None}))
+    assert "périmètre non enregistré" in unwalled, (
+        "a bound with no recorded wall must SAY so, never drop the clause (FR-23)")
+    # A positive bound never renders as a zero share: two numbers in one parenthesis, one of them
+    # false in the flattering direction, is §0.2 re-created by a format specifier.
+    tiny = statement_fr(StatementInputs(
+        kind=KIND_BOUND, count_upper_units=3, prevalence_upper=3 / 8000,
+        **{**common, "population_units": 8000, "sample_units": 4217, "piece_count": 8000}))
+    assert "0.0%" not in tiny, "a positive bound rendered as a zero percentage (FR-23/§0.2)"
+
+
 # The pipeline. Order is the FR-55 sequence. `needs_model=True` marks a capability
 # that does NOT survive the model provider's absence (the degradation list, AC4).
 STAGES: list[Stage] = [
@@ -123,11 +184,11 @@ STAGES: list[Stage] = [
     ),
     Stage("produce an audit record", "5.5", PENDING),
     Stage(
-        "confidence bound",
+        "confidence bound as a sentence",
         "5.4",
-        PENDING,
-        needs_model=True,
-        invariant="regenerable from the audit record with NO model call",
+        ASSERTED,
+        check=_the_sentence_renders_offline,
+        invariant="regenerable from the record with NO model call — templated, never generated",
     ),
     Stage("export the retained set", "6.1", PENDING),
 ]

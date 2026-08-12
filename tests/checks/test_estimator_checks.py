@@ -22,9 +22,13 @@ from apx.checks.estimator import (
 _APX = Path(__file__).resolve().parents[2] / "apx"
 _STORE = _APX / "adapters" / "store_postgres" / "store.py"
 _SAMPLING = _APX / "core" / "domain" / "sampling.py"
+# Story 5.4 — the sentence functions moved to their own module. The check followed them, so the
+# fixtures mutate whichever of the two files carries the property under test: the SHAPE legs mutate
+# sampling.py and pass the real statement.py, the WORDS legs do the reverse.
+_STATEMENT = _APX / "core" / "domain" / "statement.py"
 # the census sentence's first statement, split so this file stays inside ruff's 100
 _CENSUS_HEAD = (
-    '    head = f"recensement : les {piece_count} pièces écartées '
+    '    head = f"recensement : les {pieces_total} pièces écartées '
     'ont toutes été examinées ; "')
 
 
@@ -153,17 +157,17 @@ def test_it_fires_when_the_census_branch_carries_a_bound(tmp_path: Path) -> None
         "**common)",
         "        return Estimate(kind=KIND_CENSUS, relevant_pieces=relevant_pieces_drawn, "
         "prevalence_upper=0.0, **common)")
-    r = a_census_states_no_bound(copy)
+    r = a_census_states_no_bound(copy, statement_path=_STATEMENT)
     assert not r.ok and "prevalence_upper" in r.detail and "disjoint" in r.detail
 
 
 def test_it_fires_when_the_census_sentence_states_a_percentage(tmp_path: Path) -> None:
     """FR-22's named failure: a residual-risk figure over a population that was read in full."""
     copy = _mutated(
-        tmp_path, _SAMPLING,
+        tmp_path, _STATEMENT,
         'return head + "aucune n\'était pertinente"',
         'return head + "au plus 0,0 % est pertinent"')
-    r = a_census_states_no_bound(copy)
+    r = a_census_states_no_bound(_SAMPLING, statement_path=copy)
     assert not r.ok and "can reach a percentage" in r.detail
 
 
@@ -171,53 +175,53 @@ def test_it_fires_when_the_bound_branch_claims_an_exact_count(tmp_path: Path) ->
     copy = _mutated(
         tmp_path, _SAMPLING, "        kind=KIND_BOUND,",
         "        kind=KIND_BOUND, relevant_pieces=0,")
-    r = a_census_states_no_bound(copy)
+    r = a_census_states_no_bound(copy, statement_path=_STATEMENT)
     assert not r.ok and "never states an exact count" in r.detail
 
 
 def test_it_fires_when_the_percentage_hides_in_a_helper(tmp_path: Path) -> None:
-    """CONFIRMED by the review. The percent leg read ``census_statement_fr``'s own body only, so
+    """CONFIRMED by the review. The percent leg read the census claim's own body only, so
     moving the percentage one function over left the census sentence carrying a prevalence with the
     gate green — the exact failure the check exists for, not a variation on it."""
     copy = _mutated(
-        tmp_path, _SAMPLING,
+        tmp_path, _STATEMENT,
         _CENSUS_HEAD,
-        "    head = _residual(piece_count)")
+        "    head = _residual(pieces_total)")
     copy.write_text(
         copy.read_text(encoding="utf-8").replace(
-            "def census_statement_fr(",
+            "def _census_claim_fr(",
             "def _residual(n: int) -> str:\n"
             "    return f\"résiduel {0.0:.1%} sur {n} — \"\n\n\n"
-            "def census_statement_fr(", 1), encoding="utf-8")
-    r = a_census_states_no_bound(copy)
+            "def _census_claim_fr(", 1), encoding="utf-8")
+    r = a_census_states_no_bound(_SAMPLING, statement_path=copy)
     assert not r.ok and "can reach a percentage" in r.detail and "_residual()" in r.detail
 
 
 def test_it_fires_when_the_percentage_hides_in_a_module_constant(tmp_path: Path) -> None:
     """The other half of the same evasion: hoist the string out of the function entirely."""
     copy = _mutated(
-        tmp_path, _SAMPLING,
+        tmp_path, _STATEMENT,
         _CENSUS_HEAD,
         "    head = _RESIDUAL")
     copy.write_text(
         copy.read_text(encoding="utf-8").replace(
-            "def census_statement_fr(",
+            "def _census_claim_fr(",
             "_RESIDUAL = \"au plus 0,0 % du jeu écarté — \"\n\n\n"
-            "def census_statement_fr(", 1), encoding="utf-8")
-    r = a_census_states_no_bound(copy)
+            "def _census_claim_fr(", 1), encoding="utf-8")
+    r = a_census_states_no_bound(_SAMPLING, statement_path=copy)
     assert not r.ok and "the module constant _RESIDUAL" in r.detail
 
 
 def test_the_census_check_fails_closed_when_a_register_disappears(tmp_path: Path) -> None:
     copy = _mutated(tmp_path, _SAMPLING, "        kind=KIND_BOUND,", '        kind="bound",')
-    r = a_census_states_no_bound(copy)
+    r = a_census_states_no_bound(copy, statement_path=_STATEMENT)
     assert not r.ok and "no longer builds every register" in r.detail
 
 
 def test_the_census_check_fails_closed_when_the_sentence_is_renamed(tmp_path: Path) -> None:
     copy = _mutated(
-        tmp_path, _SAMPLING, "def census_statement_fr(", "def census_sentence_renamed(")
-    r = a_census_states_no_bound(copy)
+        tmp_path, _STATEMENT, "def _census_claim_fr(", "def census_sentence_renamed(")
+    r = a_census_states_no_bound(_SAMPLING, statement_path=copy)
     assert not r.ok and "renamed?" in r.detail
 
 
@@ -484,7 +488,7 @@ def test_the_counts_only_register_may_carry_no_bound(tmp_path: Path) -> None:
         tmp_path, _SAMPLING,
         "        return Estimate(kind=KIND_COUNTS_ONLY, **common)",
         "        return Estimate(kind=KIND_COUNTS_ONLY, prevalence_upper=0.0, **common)")
-    r = a_census_states_no_bound(copy)
+    r = a_census_states_no_bound(copy, statement_path=_STATEMENT)
     assert not r.ok and "counts-only branch" in r.detail
 
 
@@ -493,7 +497,7 @@ def test_the_census_check_fails_closed_when_the_counts_only_register_disappears(
 ) -> None:
     copy = _mutated(
         tmp_path, _SAMPLING, "kind=KIND_COUNTS_ONLY, **common", 'kind="counts_only", **common')
-    r = a_census_states_no_bound(copy)
+    r = a_census_states_no_bound(copy, statement_path=_STATEMENT)
     assert not r.ok and "every register" in r.detail
 
 
