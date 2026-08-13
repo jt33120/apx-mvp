@@ -1,8 +1,8 @@
 ---
 name: APX
-description: The visual identity of a law-firm instrument for mass-document triage — navy ink, one restrained gold, warm paper. Ratified from apx/web/src/tokens.css (AD-29); this is the source of truth for how APX looks, product-wide. Extended 2026-07-30 with the Epic-3 truth-status vocabulary (Story 3.4) and the pièce-viewer vocabulary (Story 3.5); extended 2026-08-05 with the Epic-4 triage-surface vocabulary (Stories 4.6–4.11).
+description: The visual identity of a law-firm instrument for mass-document triage — navy ink, one restrained gold, warm paper. Ratified from apx/web/src/tokens.css (AD-29); this is the source of truth for how APX looks, product-wide. Extended 2026-07-30 with the Epic-3 truth-status vocabulary (Story 3.4) and the pièce-viewer vocabulary (Story 3.5); extended 2026-08-05 with the Epic-4 triage-surface vocabulary (Stories 4.6–4.11); extended 2026-08-13 with the Epic-5 audit-drawer and export vocabulary (Story 5.7).
 status: final
-updated: 2026-08-05
+updated: 2026-08-13
 sources:
   - apx/web/src/tokens.css            # the implemented design system — this file formalises it
   - docs/context/03-design-and-ux-inventory.md  # salvage verdicts; the three legacy systems reconciled here
@@ -232,6 +232,58 @@ components:
     verified: { color: '{colors.kept}', background: '{colors.kept-bg}' }
     unverified: { color: '{colors.review}', background: '{colors.review-bg}' }
     extract-id: '{typography.mono}'
+  audit-drawer:
+    note: 'Epic 5 (Story 5.7). The trust surface the sceptic lives in — a right-hand panel over the triage table or the viewer, never a route of its own (the lawyer must not lose her place in the order to ask why). Four bands in a fixed order, and the order IS the argument: the decision, what it rests on, what will be written, what you can do. Salvaged in shape and vocabulary from the v1 mockup; its confidence bar and its "reasoning as audit trail" are deliberately NOT salvaged.'
+    width: '30rem'
+    background: '{colors.surface}'
+    border-left: '1px solid {colors.line}'
+    shadow: '{elevation.shadow}'
+    band-divider: '1px solid {colors.line-2}'
+    band-eyebrow: '{typography.eyebrow}'
+  extract-quote:
+    note: 'Epic 5 (Story 5.7). One retained extract as the drawer and the FULL export show it: the passage quoted in the serif reading face, under it the chunk identity and the exact source position in mono. Its show-time containment verdict is carried on the quote itself — a VERIFIED quote sits on paper; an UNRESOLVED one is review-toned, names its enumerated cause in the lawyer''s language, and shows NO quoted text, because the text it would show is precisely what could not be confirmed.'
+    quote: { fontFamily: '{typography.serif.fontFamily}', color: '{colors.ink-2}' }
+    rule: '2px solid {colors.line}'
+    provenance: '{typography.mono}'
+    verified-rule: '2px solid {colors.kept}'
+    unresolved: { color: '{colors.review}', background: '{colors.review-bg}', rule: '2px dashed {colors.review}' }
+  proposed-entry:
+    note: 'Epic 5 (Story 5.7). The audit-record entry a reversible action WILL append, shown before it exists — rendered as the ROW it will become (act, actor, wall-clock, chain, and for an override its FR-25 ground and the verbatim reason it will carry), never as prose. It is styled like the entries in the journal, one shade quieter, with a "sera inscrit" eyebrow: the lawyer should recognise the thing she is about to create.'
+    background: '{colors.surface-2}'
+    border: '1px dashed {colors.line}'
+    radius: '{rounded.sm}'
+    field-label: '{typography.eyebrow}'
+    value: '{typography.hint}'
+  override-badge:
+    note: 'Epic 5 (Stories 5.6/5.7). An entry that records an OVERRIDE — a decision taken against the tool or around a guard, which FR-25 makes countable apart from an ordinary edit. Review tier, deliberately: it is neither an error (danger) nor routine (muted). Carries its FR-25 ground on hover/inline and its verbatim reason where the tier permits it.'
+    radius: '{rounded.full}'
+    color: '{colors.review}'
+    background: '{colors.review-bg}'
+    eyebrow: '{typography.eyebrow}'
+  export-tier-fork:
+    note: 'Epic 5 (Story 5.7). The tier choice, as a FORK reached BEFORE anything is produced — two cards side by side, never a switch on a download button. NUMBERS-ONLY is the default and is described by what it CANNOT carry; FULL is described by what it WILL carry, itemised, and takes a second deliberate confirmation. This is the one act in the product that moves client content out of the firm on purpose, and the gesture must feel like it.'
+    card: '{components.card}'
+    default-card: { border: '1px solid {colors.ink}', note: 'the default carries the weight, not the accent' }
+    full-card: { border: '1px solid {colors.review}', background: '{colors.review-bg}' }
+    itemised: '{typography.hint}'
+  export-cover:
+    note: 'Epic 5 (Story 5.7). The exported document''s first page — a cover that declares the document''s own limits before any content: matter, RBAC scope, tier, author, timestamp; the continuity verdict PER CHAIN naming which chain a holder of this document alone can recompute; the AD-35 truncation banner when one is unacknowledged; and the degraded state with its count. A reader who stops at page one already knows what this document can and cannot prove.'
+    background: '{colors.surface}'
+    border: '1px solid {colors.line}'
+    title: '{typography.h1}'
+    field-label: '{typography.eyebrow}'
+  degraded-banner:
+    note: 'Epic 5 (Stories 5.7/FR-11). DÉGRADÉ as a state OF THE DOCUMENT, said on the cover with its count ("3 extraits ne se résolvent plus"), never as a footnote and never only as a per-row asterisk. Review tier — the document is honest, not broken. Self-containment is checked at READ time, so a document produced clean can be shown degraded later and must be able to say so.'
+    color: '{colors.review}'
+    background: '{colors.review-bg}'
+    border: '1px solid {colors.review}'
+    radius: '{rounded.sm}'
+  pending-section:
+    note: 'Epic 5 (Story 5.7). A section of the export whose ACT does not exist yet — the validation acts and the accepted-as-is half of the breakdown, both Story 5.8''s. It prints its heading and one explicit sentence naming the act as not yet implemented. NEVER an empty table and NEVER a zero: a zero reads as "nobody validated anything", which is a finding about the firm rather than about the build. The project''s standing rule — asserted with something behind it, or pending with the story that owns it, never faked in between — rendered.'
+    color: '{colors.ink-3}'
+    background: '{colors.surface-2}'
+    border: '1px dashed {colors.line}'
+    eyebrow: '{typography.eyebrow}'
 ---
 
 # APX — Design System
@@ -530,6 +582,34 @@ retained extracts by chunk id, each verified by exact containment *at show time*
 no longer resolves makes the justification **unverified** (review-toned), never ordinary. It
 expands into the audit drawer and is reversible in one recorded act.
 
+### Epic-5 additions — the audit drawer and its export (Story 5.7)
+
+Seven components, and every one of them exists to keep a promise the product would otherwise be
+making with prose. The drawer is where a sceptic asks *why*, and the export is where the answer
+leaves the building and has to stand up without the system behind it.
+
+| Component | What it is, and the rule it keeps |
+|---|---|
+| `audit-drawer` | The panel itself — four bands in a fixed order: **la décision · ce sur quoi elle repose · ce qui sera inscrit · ce que vous pouvez faire**. A panel, never a route: asking *why* must not cost the lawyer her place in the ranked order. |
+| `extract-quote` | One retained extract, with its chunk identity and exact source position, carrying its **show-time** containment verdict. An unresolved extract shows **no quoted text** — the text is exactly what could not be confirmed — and names its cause instead. |
+| `proposed-entry` | The audit entry an action **will** append, rendered as the row it will become. Never prose. The lawyer should recognise the thing she is about to create. |
+| `override-badge` | An entry that records a **dérogation** (FR-25). Review tier: neither an error nor routine. |
+| `export-tier-fork` | The tier choice as a **fork before production**, not a switch on a download button. Numbers-only is the default and is described by what it cannot carry. |
+| `export-cover` | The document's first page, declaring the document's own limits before any content. |
+| `degraded-banner` | **Dégradé** as a state of the document, on the cover, with its count. |
+| `pending-section` | A section whose *act* does not exist yet: heading + one sentence naming the story that owns it. Never an empty table, never a zero. |
+
+**Why the v1 confidence bar did not survive.** `maquette_anfr_v2.html` drew confidence as a bar
+with a number beside it. Story 4.4 made confidence **derived from named observables**, and a bare
+bar is indistinguishable from a self-reported score — the exact reading FR-42 exists to prevent.
+The drawer reuses `{components.confidence-cell}`'s band + *dérivée* marker and names the derivation
+and the ranking version underneath it.
+
+**Why "trace d'audit proposée" changed meaning.** In v1 that label sat above the model's reasoning
+in bullets. In FR-26 it is the **proposed audit-record entry**. Rendering reasoning under that
+label teaches a lawyer that the audit record is prose a machine wrote, which is the opposite of
+what it is and would poison the one artefact a *bâtonnier* is meant to be able to check.
+
 ## Do's and Don'ts
 
 **Do**
@@ -556,3 +636,15 @@ expands into the audit drawer and is reversible in one recorded act.
   **bound**; keep them in different visual registers so a lawyer never confuses the two (FR-19).
 - (Epic 4) Don't draw the line *on* a row or as a bare integer position. It is a cut **between**
   two rows, named by the last retained pièce, and it speaks its commitment in words.
+- (Epic 5) Don't render the proposed audit entry as prose, a summary or a reasoning list. It is
+  the **row that will be appended**; showing anything else teaches the lawyer to mistrust the one
+  artefact a *bâtonnier* can check.
+- (Epic 5) Don't show a quoted passage for an extract that failed containment at show time. The
+  quote is precisely what could not be confirmed; show the cause instead (FR-11).
+- (Epic 5) Don't put the export tier on a toggle beside a download button. It is a **fork** taken
+  before anything is produced, because the full tier moves client content out of the firm.
+- (Epic 5) Don't print a **0** for a section whose act does not exist yet. Zero is a finding about
+  the firm; "not built yet" is a finding about the build, and they must never be confused.
+- (Epic 5) Don't state one continuity verdict over a document spanning two chains. Say which chain
+  a holder of **this document alone** can recompute (AD-43); one boolean would claim a property of
+  bytes the reader does not hold.

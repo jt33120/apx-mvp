@@ -1,0 +1,392 @@
+<title>APX — Maquette Epic 5 (le tiroir d'audit et son export)</title>
+<style>
+  /* ============================================================================
+     APX design tokens — lifted verbatim from apx/web/src/tokens.css (AD-29),
+     extended 2026-08-13 with the Epic-5 audit-drawer + export vocabulary (5.7).
+     Faithful, offline, self-contained. Forces the warm-paper light world.
+     ============================================================================ */
+  :root {
+    color-scheme: light;
+    --apx-ink: #0b1f3a; --apx-ink-2: #33425a; --apx-ink-3: #5b6678;
+    --apx-paper: #f7f4ee; --apx-surface: #ffffff; --apx-surface-2: #fbf9f5;
+    --apx-line: #e6e0d5; --apx-line-2: #efeae0;
+    --apx-gold: #9a7a34; --apx-gold-2: #b8944a; --apx-muted: #6b7280;
+    --apx-kept: #2f6f4f; --apx-kept-bg: #e8f1eb;
+    --apx-review: #9a5a12; --apx-review-bg: #f6ecdd;
+    --apx-discard: #6f6858; --apx-discard-bg: #eeece5;
+    --apx-danger: #a3161c; --apx-danger-bg: #fbeceb;
+    --apx-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --apx-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --apx-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --apx-radius: 12px; --apx-radius-sm: 8px;
+    --apx-ring: 0 0 0 3px rgba(154,122,52,.28);
+    --apx-shadow: 0 1px 2px rgba(11,31,58,.05), 0 12px 30px rgba(11,31,58,.08);
+    --apx-shadow-sm: 0 1px 2px rgba(11,31,58,.06);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0;
+    background: radial-gradient(1200px 480px at 50% -8%, rgba(154,122,52,.06), transparent 60%), var(--apx-paper);
+    color: var(--apx-ink); font-family: var(--apx-sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  h1,h2,h3 { font-family: var(--apx-serif); color: var(--apx-ink); font-weight: 600; letter-spacing: .01em; text-wrap: balance; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.2rem; margin: 0 0 .5rem; }
+  h3 { font-size: 1rem; margin: 0 0 .35rem; }
+  button { font: inherit; cursor: pointer; }
+
+  /* ---- meta chrome for the mock itself (not part of the product) ---- */
+  .mock-bar { position: sticky; top: 0; z-index: 20; display: flex; gap: .5rem; align-items: center;
+    flex-wrap: wrap; padding: .6rem 1rem; background: #101f37; color: #e9e3d5; border-bottom: 3px solid var(--apx-gold); }
+  .mock-bar b { font-family: var(--apx-serif); letter-spacing: .04em; }
+  .mock-bar b i { color: var(--apx-gold-2); font-style: normal; }
+  .mock-tabs { display: flex; gap: .25rem; margin-left: auto; flex-wrap: wrap; }
+  .mock-tabs button { background: transparent; color: #cfc8b8; border: 1px solid #2a3a54; border-radius: 999px;
+    padding: .25rem .8rem; font-size: .82rem; }
+  .mock-tabs button[aria-selected="true"] { background: var(--apx-gold); color: #10203a; border-color: var(--apx-gold); font-weight: 600; }
+  .mock-note { max-width: 74rem; margin: .9rem auto -.2rem; padding: 0 1.25rem; color: var(--apx-ink-3); font-size: .82rem; }
+  .mock-note code { font-family: var(--apx-mono); font-size: .92em; }
+  .screen[hidden] { display: none; }
+
+  /* ---- product shell ---- */
+  .apx-shell { max-width: 74rem; margin: 0 auto; padding: 1.4rem 1.25rem 4rem; }
+  .apx-eyebrow { font-size: .72rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); }
+  .apx-hint { font-size: .88rem; color: var(--apx-muted); }
+  .apx-mono { font-family: var(--apx-mono); font-size: .8rem; color: var(--apx-ink-3); }
+  .apx-card { background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: var(--apx-radius); box-shadow: var(--apx-shadow-sm); }
+  .btn { color: #fff; background: var(--apx-ink); border: 1px solid var(--apx-ink); border-radius: var(--apx-radius-sm); padding: .55rem 1rem; font-weight: 560; }
+  .apx-ghost { color: var(--apx-ink); background: transparent; border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .4rem .85rem; font-size: .88rem; }
+  .apx-ghost:disabled { opacity: .45; cursor: not-allowed; }
+  .chip { display: inline-flex; align-items: center; gap: .35rem; border-radius: 999px; padding: .1rem .65rem; font-size: .78rem; font-weight: 600; }
+  .chip--kept { color: var(--apx-kept); background: var(--apx-kept-bg); }
+  .chip--discard { color: var(--apx-discard); background: var(--apx-discard-bg); }
+  .chip--review { color: var(--apx-review); background: var(--apx-review-bg); }
+
+  /* ---- the drawer over the triage table ---- */
+  .stage { position: relative; display: grid; grid-template-columns: 1fr 30rem; gap: 0; align-items: start; }
+  .behind { padding-right: 1.2rem; opacity: .55; filter: saturate(.7); }
+  .row { display: grid; grid-template-columns: 3rem 1fr 8rem 7rem; gap: .6rem; align-items: center;
+    padding: .55rem .7rem; border-top: 1px solid var(--apx-line-2); font-size: .9rem; }
+  .row .rk { font-family: var(--apx-serif); font-size: 1.15rem; text-align: right; font-variant-numeric: tabular-nums; color: var(--apx-ink-2); }
+  .row--open { background: var(--apx-surface); box-shadow: inset 3px 0 0 var(--apx-gold); opacity: 1; }
+  .theline { display: flex; align-items: center; gap: .7rem; padding: .5rem .7rem; border-top: 2px solid var(--apx-gold); background: rgba(154,122,52,.05); font-size: .86rem; }
+
+  .drawer { background: var(--apx-surface); border-left: 1px solid var(--apx-line); box-shadow: var(--apx-shadow);
+    border-radius: var(--apx-radius) 0 0 var(--apx-radius); overflow: hidden; }
+  .drawer-head { display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem;
+    padding: .9rem 1rem; border-bottom: 1px solid var(--apx-line); background: var(--apx-surface-2); }
+  .band { padding: 1rem; border-top: 1px solid var(--apx-line-2); }
+  .band:first-of-type { border-top: 0; }
+  .band > .apx-eyebrow { display: block; margin-bottom: .55rem; }
+
+  /* band 1 — the derived confidence */
+  .conf { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; }
+  .conf .meter { width: 6rem; height: 6px; border-radius: 999px; background: var(--apx-line-2); overflow: hidden; }
+  .conf .meter i { display: block; height: 100%; background: var(--apx-discard); }
+  .derived { font-size: .68rem; letter-spacing: .09em; text-transform: uppercase; color: var(--apx-ink-3); border: 1px solid var(--apx-line); border-radius: 999px; padding: 0 .45rem; }
+
+  /* band 2 — extracts */
+  .quote { border-left: 2px solid var(--apx-kept); background: var(--apx-surface-2); padding: .6rem .8rem; border-radius: 0 var(--apx-radius-sm) var(--apx-radius-sm) 0; margin-bottom: .7rem; }
+  .quote p { font-family: var(--apx-serif); color: var(--apx-ink-2); margin: 0 0 .4rem; }
+  .quote--bad { border-left: 2px dashed var(--apx-review); background: var(--apx-review-bg); }
+  .quote--bad .cause { color: var(--apx-review); font-size: .88rem; }
+
+  /* band 3 — the proposed entry */
+  .proposed { background: var(--apx-surface-2); border: 1px dashed var(--apx-line); border-radius: var(--apx-radius-sm); padding: .7rem .8rem; }
+  .proposed dl { display: grid; grid-template-columns: 7.5rem 1fr; gap: .3rem .7rem; margin: .5rem 0 0; font-size: .88rem; }
+  .proposed dt { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); padding-top: .15rem; }
+  .proposed dd { margin: 0; color: var(--apx-ink-2); }
+  .reason-field { width: 100%; margin-top: .5rem; padding: .45rem .6rem; border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); font: inherit; font-size: .9rem; }
+
+  /* band 4 — actions */
+  .act { display: block; width: 100%; text-align: left; margin-bottom: .45rem; background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .5rem .7rem; }
+  .act b { display: block; font-weight: 560; color: var(--apx-ink); }
+  .act span { font-size: .82rem; color: var(--apx-muted); }
+  .act:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* ---- the tier fork ---- */
+  .fork { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: 1rem; }
+  .tier { padding: 1rem; border-radius: var(--apx-radius); background: var(--apx-surface); border: 1px solid var(--apx-line); }
+  .tier--default { border: 1px solid var(--apx-ink); }
+  .tier--full { border: 1px solid var(--apx-review); background: var(--apx-review-bg); }
+  .tier ul { margin: .5rem 0 0; padding-left: 1.1rem; font-size: .9rem; color: var(--apx-ink-2); }
+  .tier li { margin-bottom: .2rem; }
+
+  /* ---- the export document ---- */
+  .doc { max-width: 46rem; margin: 0 auto; background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: var(--apx-radius); box-shadow: var(--apx-shadow); padding: 2rem 2.2rem; }
+  .doc hr { border: 0; border-top: 1px solid var(--apx-line); margin: 1rem 0; }
+  .cover dl { display: grid; grid-template-columns: 9rem 1fr; gap: .45rem .9rem; margin: 0; font-size: .92rem; }
+  .cover dt { font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); padding-top: .18rem; }
+  .cover dd { margin: 0; color: var(--apx-ink-2); }
+  .degraded { margin-top: 1rem; color: var(--apx-review); background: var(--apx-review-bg); border: 1px solid var(--apx-review); border-radius: var(--apx-radius-sm); padding: .6rem .8rem; font-size: .9rem; }
+  .pending { color: var(--apx-ink-3); background: var(--apx-surface-2); border: 1px dashed var(--apx-line); border-radius: var(--apx-radius-sm); padding: .7rem .85rem; font-size: .9rem; }
+  .sect { margin-top: 1.6rem; }
+  .sect table { width: 100%; border-collapse: collapse; font-size: .88rem; margin-top: .5rem; }
+  .sect th { text-align: left; font-size: .68rem; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); font-weight: 600; padding: .3rem .4rem; border-bottom: 1px solid var(--apx-line); }
+  .sect td { padding: .35rem .4rem; border-bottom: 1px solid var(--apx-line-2); color: var(--apx-ink-2); vertical-align: top; }
+  .num { font-family: var(--apx-serif); font-variant-numeric: tabular-nums; }
+</style>
+
+<div class="mock-bar">
+  <b>APX<i>.</i></b>
+  <span style="font-size:.82rem">Epic 5 — le tiroir d'audit et son export (story 5.7)</span>
+  <div class="mock-tabs" role="tablist">
+    <button role="tab" aria-selected="true" data-s="a">1 · Le tiroir</button>
+    <button role="tab" aria-selected="false" data-s="b">2 · Extrait non résolu + dérogation</button>
+    <button role="tab" aria-selected="false" data-s="c">3 · Le choix du niveau</button>
+    <button role="tab" aria-selected="false" data-s="d">4 · Le document exporté</button>
+  </div>
+</div>
+
+<!-- ══════════════════════════════ 1 · THE DRAWER ══════════════════════════════ -->
+<section class="screen" id="s-a">
+  <p class="mock-note">Le tiroir est un <b>panneau</b>, jamais une route : demander « pourquoi ? » ne doit pas
+    coûter à l'avocate sa place dans l'ordre. Quatre bandes, et <b>l'ordre est l'argument</b> —
+    conclusion → preuve → conséquence → choix.</p>
+  <div class="apx-shell">
+    <div class="stage">
+      <div class="behind">
+        <div class="apx-card">
+          <div class="row" style="border-top:0"><span class="rk">146</span><span>Compte-rendu de chantier — 14/03</span><span class="chip chip--kept">Retenue</span><span class="apx-hint">confiance élevée</span></div>
+          <div class="row"><span class="rk">147</span><span>Courriel Sogea → maître d'œuvre</span><span class="chip chip--kept">Retenue</span><span class="apx-hint">confiance moyenne</span></div>
+          <div class="theline"><span class="apx-eyebrow" style="color:var(--apx-gold)">La ligne</span>
+            <span>À mon sens, tout ce qui précède — jusqu'à la pièce n° 147.</span></div>
+          <div class="row row--open"><span class="rk">148</span><span>Note interne — planning révisé</span><span class="chip chip--discard">Écartée</span><span class="apx-hint">confiance faible</span></div>
+          <div class="row"><span class="rk">149</span><span>Facture fournisseur n° 2214</span><span class="chip chip--discard">Écartée</span><span class="apx-hint">confiance faible</span></div>
+        </div>
+      </div>
+
+      <aside class="drawer" aria-label="Journal de la pièce">
+        <div class="drawer-head">
+          <div>
+            <h2 style="margin:0">Note interne — planning révisé</h2>
+            <div class="apx-mono">pc-8f31a04c… · rang 148</div>
+          </div>
+          <button class="apx-ghost" aria-label="Fermer">✕</button>
+        </div>
+
+        <div class="band">
+          <span class="apx-eyebrow">La décision</span>
+          <div class="conf">
+            <span class="chip chip--discard">Écartée</span>
+            <span class="apx-hint">sous la ligne</span>
+          </div>
+          <div class="conf" style="margin-top:.6rem">
+            <b>Confiance faible</b>
+            <span class="meter"><i style="width:22%"></i></span>
+            <span class="derived">dérivée</span>
+          </div>
+          <p class="apx-hint" style="margin:.4rem 0 0">
+            Dérivée de : <b>type de document</b>, <b>proximité au thème du cas</b>.
+            Version de classement <span class="apx-mono">rk-2026-08-11-a</span>.
+          </p>
+          <p style="margin:.6rem 0 0">« Note d'organisation interne, sans lien établi avec le retard invoqué. »</p>
+        </div>
+
+        <div class="band">
+          <span class="apx-eyebrow">Ce sur quoi elle repose</span>
+          <div class="quote">
+            <p>« Le planning révisé est communiqué pour information ; il ne modifie pas les jalons contractuels. »</p>
+            <div class="apx-mono">ch-4a19… · pièce 148, caractères 1 204–1 297</div>
+          </div>
+          <p class="apx-hint" style="margin:0">
+            <span class="chip chip--kept">Vérifié</span>
+            L'extrait a été recontrôlé dans la pièce à l'instant de l'affichage.
+          </p>
+        </div>
+
+        <div class="band">
+          <span class="apx-eyebrow">Ce qui sera inscrit</span>
+          <div class="proposed">
+            <span class="apx-eyebrow" style="color:var(--apx-review)">Sera inscrit au journal</span>
+            <dl>
+              <dt>Acte</dt><dd>Épingler la pièce en <b>retenue</b></dd>
+              <dt>Acteur</dt><dd>Claire Fontaine</dd>
+              <dt>Horodatage</dt><dd>à l'instant où vous validerez</dd>
+              <dt>Chaîne</dt><dd>affaire « Vinci / Sogea »</dd>
+              <dt>Dérogation</dt><dd><span class="chip chip--review">Contredit une assertion de l'outil</span></dd>
+            </dl>
+          </div>
+        </div>
+
+        <div class="band">
+          <span class="apx-eyebrow">Ce que vous pouvez faire</span>
+          <button class="act"><b>Reclasser…</b><span>reclassez à nouveau — chaque valeur reste au journal</span></button>
+          <button class="act"><b>Écarter l'appréciation de l'outil</b><span>rétablissez-la — le rejet reste lisible</span></button>
+          <button class="act"><b>Épingler de l'autre côté de la ligne…</b><span>retirez l'épingle — la pose et le retrait restent tous deux inscrits</span></button>
+          <button class="act" disabled><b>J'ai lu cette pièce et j'accepte l'appréciation de l'outil</b><span>Cette action arrive avec la story 5.8.</span></button>
+        </div>
+      </aside>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════ 2 · UNRESOLVED EXTRACT + PENDING OVERRIDE ═════════════════ -->
+<section class="screen" id="s-b" hidden>
+  <p class="mock-note">Un extrait qui ne se résout plus <b>ne montre pas son texte</b> : le texte est exactement
+    ce qui n'a pas pu être confirmé. Il nomme sa cause. Et une dérogation ne peut être commise sans sa phrase.</p>
+  <div class="apx-shell" style="max-width:34rem">
+    <aside class="drawer" style="border-radius:var(--apx-radius)">
+      <div class="drawer-head">
+        <div><h2 style="margin:0">Compte-rendu de chantier — 14/03</h2><div class="apx-mono">pc-2b70f19d… · rang 146</div></div>
+        <button class="apx-ghost" aria-label="Fermer">✕</button>
+      </div>
+
+      <div class="band">
+        <span class="apx-eyebrow">Ce sur quoi elle repose</span>
+        <div class="quote quote--bad">
+          <p class="cause"><b>Cet extrait ne se résout plus.</b> Le texte de la pièce a changé depuis cette citation.</p>
+          <div class="apx-mono">ch-7c02… · pièce 146, caractères 890–1 010</div>
+        </div>
+        <div class="quote">
+          <p>« Le maître d'ouvrage constate un retard de onze jours sur le lot gros œuvre. »</p>
+          <div class="apx-mono">ch-7c02… · pièce 146, caractères 2 340–2 419</div>
+        </div>
+        <p class="apx-hint" style="margin:0">1 extrait sur 2 n'a pas pu être recontrôlé — cette justification est
+          affichée <b>non vérifiée</b>, jamais comme ordinaire.</p>
+      </div>
+
+      <div class="band">
+        <span class="apx-eyebrow">Ce qui sera inscrit</span>
+        <div class="proposed">
+          <span class="apx-eyebrow" style="color:var(--apx-review)">Sera inscrit au journal</span>
+          <dl>
+            <dt>Acte</dt><dd>Épingler la pièce en <b>écartée</b></dd>
+            <dt>Acteur</dt><dd>Claire Fontaine</dd>
+            <dt>Horodatage</dt><dd>à l'instant où vous validerez</dd>
+            <dt>Chaîne</dt><dd>affaire « Vinci / Sogea »</dd>
+            <dt>Dérogation</dt><dd><span class="chip chip--review">Contredit une assertion de l'outil</span> — motif obligatoire</dd>
+          </dl>
+          <input class="reason-field" placeholder="En une ligne : pourquoi contredisez-vous l'outil ?" />
+          <div style="display:flex;gap:.5rem;margin-top:.6rem;align-items:center">
+            <button class="btn" disabled style="opacity:.45;cursor:not-allowed">Épingler</button>
+            <span class="apx-hint">Sans motif, rien n'est inscrit.</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</section>
+
+<!-- ════════════════════════════ 3 · THE TIER FORK ════════════════════════════ -->
+<section class="screen" id="s-c" hidden>
+  <p class="mock-note">Le niveau est une <b>bifurcation prise avant toute production</b>, pas un interrupteur à côté
+    d'un bouton de téléchargement : c'est le seul acte du produit qui fait sortir du contenu client, délibérément.</p>
+  <div class="apx-shell" style="max-width:52rem">
+    <h1>Exporter le journal du dossier</h1>
+    <p class="apx-hint">Affaire « Vinci / Sogea » · mur <b>contentieux-construction</b>. Ce document ne contiendra
+      rien d'autre que ce périmètre, et le dira sur sa première page.</p>
+
+    <div class="fork">
+      <div class="tier tier--default">
+        <span class="apx-eyebrow">Par défaut</span>
+        <h3>Chiffres seuls</h3>
+        <p class="apx-hint" style="margin:.2rem 0 0">Suffit à refaire chaque chiffre de ce document.</p>
+        <ul>
+          <li>Comptes, versions, verdicts, positions, bornes</li>
+          <li><b>Aucun extrait</b></li>
+          <li><b>Aucun motif rédigé</b></li>
+          <li><b>Aucun nom de fichier</b></li>
+          <li><b>Aucun contenu client</b></li>
+        </ul>
+        <button class="btn" style="margin-top:.9rem">Produire l'export</button>
+      </div>
+
+      <div class="tier tier--full">
+        <span class="apx-eyebrow" style="color:var(--apx-review)">Sort du contenu client</span>
+        <h3>Dossier complet</h3>
+        <p class="apx-hint" style="margin:.2rem 0 0">Tout ce qui précède, <b>plus</b> :</p>
+        <ul>
+          <li>les extraits retenus</li>
+          <li>les motifs de dérogation <b>mot pour mot</b></li>
+          <li>les justifications</li>
+          <li>les noms et chemins des fichiers du registre</li>
+        </ul>
+        <button class="apx-ghost" style="margin-top:.9rem;border-color:var(--apx-review);color:var(--apx-review)">
+          Choisir le dossier complet…</button>
+      </div>
+    </div>
+
+    <div class="apx-card" style="margin-top:1.2rem;padding:.9rem 1rem">
+      <span class="apx-eyebrow">Dans les deux cas</span>
+      <p style="margin:.35rem 0 0;font-size:.92rem">Produire cet export est <b>un acte inscrit au journal</b> :
+        le niveau, votre nom, l'affaire, le périmètre et l'instant.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ═════════════════════════ 4 · THE EXPORTED DOCUMENT ═════════════════════════ -->
+<section class="screen" id="s-d" hidden>
+  <p class="mock-note">La première page <b>déclare les limites du document</b> avant tout contenu. Un lecteur qui
+    s'arrête là sait déjà ce que ce document prouve et ce qu'il ne prouve pas.</p>
+  <div class="apx-shell">
+    <div class="doc">
+      <div class="cover">
+        <span class="apx-eyebrow">Journal du dossier</span>
+        <h1 style="font-size:1.7rem;margin:.1rem 0 1rem">« Vinci / Sogea »</h1>
+        <hr/>
+        <dl>
+          <dt>Périmètre</dt><dd>mur « contentieux-construction » — <b>ce document ne contient rien d'autre</b></dd>
+          <dt>Niveau</dt><dd>Chiffres seuls</dd>
+          <dt>Produit par</dt><dd>Claire Fontaine · 13 août 2026, 14 h 22</dd>
+        </dl>
+        <hr/>
+        <dl>
+          <dt>Continuité</dt>
+          <dd>
+            <b>affaire « Vinci / Sogea »</b> — 412 actes, la chaîne se recalcule sans rupture
+            <b>à partir de ce seul document</b>.<br/>
+            <b>chaîne du cabinet</b> — 38 actes ici, vérifiée dans le système ; un lecteur qui ne
+            détiendrait que ce document ne peut pas refaire ces maillons.
+          </dd>
+        </dl>
+        <div class="degraded">⚠ <b>Dégradé</b> — 3 extraits retenus ne se résolvent plus (voir § 4).</div>
+      </div>
+
+      <div class="sect">
+        <span class="apx-eyebrow">§ 1</span>
+        <h2>Le dénominateur du périmètre</h2>
+        <table>
+          <tr><td>Pièces soumises</td><td class="num" style="text-align:right">5 012</td></tr>
+          <tr><td>Au corpus</td><td class="num" style="text-align:right">4 780</td></tr>
+          <tr><td>Au registre, ouvertes</td><td class="num" style="text-align:right">231</td></tr>
+          <tr><td>Écartées par dérogation</td><td class="num" style="text-align:right">1</td></tr>
+          <tr><td>Exclues comme bruit</td><td class="num" style="text-align:right">64</td></tr>
+        </table>
+        <p class="apx-hint" style="margin:.5rem 0 0">1 archive non ouverte, contenu inconnu — jamais additionnée à un total.</p>
+      </div>
+
+      <div class="sect">
+        <span class="apx-eyebrow">§ 6</span>
+        <h2>Les dérogations</h2>
+        <p class="apx-hint" style="margin:0"><b class="num">4</b> dérogations sur 486 actes — dénombrées sur
+          l'ensemble du journal, non sur la liste ci-dessous.</p>
+        <table>
+          <tr><th>Acte</th><th>Motif invoqué</th><th>Auteur</th><th>Date</th></tr>
+          <tr><td>Épingle en retenue</td><td><span class="chip chip--review">Contredit l'outil</span></td><td>Claire Fontaine</td><td>11 août 2026</td></tr>
+          <tr><td>Sortie du registre</td><td><span class="chip chip--review">Sans ingestion réussie</span></td><td>Claire Fontaine</td><td>12 août 2026</td></tr>
+        </table>
+        <p class="apx-hint" style="margin:.5rem 0 0">Niveau « chiffres seuls » : les motifs rédigés ne figurent pas
+          dans ce document.</p>
+      </div>
+
+      <div class="sect">
+        <span class="apx-eyebrow">§ 7</span>
+        <h2>Les actes de validation</h2>
+        <div class="pending">
+          Cette section est vide <b>parce que l'acte n'existe pas encore</b> : la validation par un humain est
+          livrée avec la story 5.8. Ce document ne dit donc rien de ce qui a été relu — ni qu'il y en a eu,
+          ni qu'il n'y en a pas eu.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<script>
+  const tabs = document.querySelectorAll('.mock-tabs button');
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.setAttribute('aria-selected', String(x === t)));
+    document.querySelectorAll('.screen').forEach(s => { s.hidden = s.id !== 's-' + t.dataset.s; });
+    window.scrollTo({ top: 0 });
+  }));
+</script>
