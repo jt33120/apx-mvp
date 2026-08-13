@@ -1,8 +1,9 @@
-"""AD-38 — the *denominator* is one record of six disjoint counts, with no `int` representation and
-the unknown cardinality never summed (Story 2.7). Two static shadows of AD-38:
+"""AD-38 — the *denominator* is one record of seven disjoint counts, with no `int` representation
+and the unknown cardinality never summed (Story 2.7; the seventh count is Story 5.6's). Two static
+shadows of AD-38:
 
 (A) ``inventory_record_fields_enumerated`` — the ``Inventory`` domain record declares EXACTLY the
-    six named fields; a dropped, added or renamed field fails the build (the same shape as
+    seven named fields; a dropped, added or renamed field fails the build (the same shape as
     ``payload_schema.chunk_columns_enumerated`` enforcing the chunk column set). This is the "one
     record with exactly these fields" half of AD-38.
 (B) ``unknown_cardinality_never_summed`` — ``unknown_cardinality_entries``, ``excluded_as_noise``
@@ -26,9 +27,11 @@ from apx.checks.payload_schema import _iter_py, _parse
 _APX_ROOT = Path(__file__).resolve().parent.parent  # the apx/ package
 _INVENTORY = _APX_ROOT / "core" / "domain" / "inventory.py"
 
-# AD-38's one record — exactly these six disjoint named counts.
-_SIX_FIELDS = frozenset({
-    "submitted_pieces", "in_corpus", "open_register_entries",
+# AD-38's one record — exactly these seven disjoint named counts. ``overridden_register_entries``
+# is Story 5.6's third identity term: FR-25 lets a person take a register entry out of `open`
+# although the document never entered the corpus, and neither of the two other terms can hold it.
+_SEVEN_FIELDS = frozenset({
+    "submitted_pieces", "in_corpus", "open_register_entries", "overridden_register_entries",
     "excluded_as_noise", "retired", "unknown_cardinality_entries",
 })
 # The counts AD-38 keeps OUTSIDE the two-term identity — never summed into any total. (`in_corpus`
@@ -50,8 +53,8 @@ def _inventory_fields(tree: ast.Module) -> set[str] | None:
 
 
 def inventory_record_fields_enumerated(root: Path | None = None) -> CheckResult:
-    """The ``Inventory`` record declares EXACTLY AD-38's six disjoint fields (Story 2.7)."""
-    name, ad = "the inventory record declares exactly AD-38's six fields", "AD-38"
+    """The ``Inventory`` record declares EXACTLY AD-38's seven disjoint fields (Story 2.7/5.6)."""
+    name, ad = "the inventory record declares exactly AD-38's seven fields", "AD-38"
     path = root if root is not None else _INVENTORY
     tree = _parse(path)
     if tree is None:
@@ -59,12 +62,13 @@ def inventory_record_fields_enumerated(root: Path | None = None) -> CheckResult:
     fields = _inventory_fields(tree)
     if fields is None:
         return CheckResult(name, ad, False, "no `Inventory` record found (failing closed)")
-    if fields != _SIX_FIELDS:
-        missing, extra = sorted(_SIX_FIELDS - fields), sorted(fields - _SIX_FIELDS)
+    if fields != _SEVEN_FIELDS:
+        missing, extra = sorted(_SEVEN_FIELDS - fields), sorted(fields - _SEVEN_FIELDS)
         return CheckResult(
             name, ad, False,
             f"Inventory fields != AD-38's six (missing={missing}, extra={extra})")
-    return CheckResult(name, ad, True, "the six disjoint denominator counts are all present")
+    return CheckResult(
+        name, ad, True, "the seven disjoint denominator counts are all present")
 
 
 def _is_forbidden_operand(node: ast.AST) -> bool:

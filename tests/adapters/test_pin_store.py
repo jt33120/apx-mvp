@@ -14,7 +14,7 @@ from apx.adapters.store_postgres.store import ScopeDenied, SqlStore, StalePin
 from apx.core.app.ingest import IngestionResult
 from apx.core.domain.cascade import Band, CascadeResult, PieceJudgement, Stage
 from apx.core.domain.config import CascadeConfig
-from apx.core.domain.pin import MissingPinReason
+from apx.core.domain.override import MissingOverrideReason
 from apx.core.domain.ranking import RankingIdentityInputs, assemble_identity, rank_cascade
 from apx.core.domain.triage_sets import Line, PinSide
 
@@ -96,7 +96,7 @@ def test_pinning_moves_exactly_one_piece_and_nothing_else_changes() -> None:
 # ── AC-2 — a pin requires a reason and is recorded as an override ────────────────────────────────
 def test_a_blank_reason_is_refused_and_nothing_is_written() -> None:
     store = _store()
-    with pytest.raises(MissingPinReason):
+    with pytest.raises(MissingOverrideReason):
         store.pin_piece(tenant="t", matter="m", actor="c", scopes={"w"}, piece_id="c",
                         side=PinSide.RETAIN, reason="   ")
     with store._sf() as s:

@@ -244,6 +244,15 @@ USER_ACTIONS: tuple[UserAction, ...] = (
     _read("/api/matters/{matter}/case-theory", "read-case-theory", "the current theory; a read"),
     _read("/api/matters/{matter}/case-theory/versions", "read-case-theory-history",
           "every retained version; a read"),
+    # Story 5.6 — FR-25's second ground: an entry leaves `open` although the document never
+    # entered the corpus. NOT deletion-shaped: the row stays and is still listed by every register
+    # read, with `overridden` where `open` was — exactly the shape of the `open → resolved` retry
+    # beside it. What changes is that a person, not an ingestion, decided it, and owes a sentence.
+    _http("POST", "/api/register/{entry_id}/override", "override-register-entry",
+          "flips one failure-register entry from `open` to `overridden` under a row lock, appends "
+          "its mandatory reason to the append-only register_override ledger and writes one "
+          "`register_override` audit entry carrying the reason verbatim — all in one transaction "
+          "(FR-25/FR-5/AD-37/AD-22)"),
     _read("/api/matters/{matter}/register", "read-matter-register", "the failure register; a read"),
     _read("/api/register", "read-register", "the failure register across matters; a read"),
     _read("/api/register/export", "export-register",
@@ -251,7 +260,8 @@ USER_ACTIONS: tuple[UserAction, ...] = (
           changes_state=True),
     _read("/api/matters/{matter}/triage", "read-triage", "the deduplication summary; a read"),
     _read("/api/matters/{matter}/labels", "read-labels", "the current triage labels; a read"),
-    _read("/api/matters/{matter}/inventory", "read-inventory", "the six-field denominator; a read"),
+    _read("/api/matters/{matter}/inventory", "read-inventory",
+          "the seven-field denominator; a read"),
     _read("/api/matters/{matter}/triage-table", "read-triage-table",
           "the whole triage surface for one ranking version — order, line, pins, labels and counts "
           "read against that one version so the parts cannot drift (AD-23); a pure read"),
@@ -358,6 +368,11 @@ USER_ACTIONS: tuple[UserAction, ...] = (
           "projects the cost of a move; writes nothing (Story 4.9)", changes_state=False),
     _seam("line.move_line",
           "appends a new placement with the priced statement shown; the prior placement stays",
+          changes_state=True),
+    _seam("register_override.override_register_entry",
+          "closes one failure-register entry by override — a conditional commit on an observed "
+          "`open`, with the mandatory reason on an append-only ledger and in the record "
+          "(Story 5.6/FR-25)",
           changes_state=True),
     _seam("pin.pin_piece",
           "appends a pin_entry as an override with its mandatory reason (Story 4.11/FR-25)",

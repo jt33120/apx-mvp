@@ -73,6 +73,9 @@ from apx.core.app.read.triage_table import (
     read_piece_change_log,
     read_triage_table,
 )
+from apx.core.app.register_override import (
+    override_register_entry as core_override_register_entry,
+)
 from apx.core.app.sampling import (
     abandon_sampling_run,
     complete_sampling_run,
@@ -95,6 +98,7 @@ from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.freshness import Freshness
 from apx.core.domain.head_journal import open_journal
 from apx.core.domain.inventory import Inventory
+from apx.core.domain.override import MissingOverrideReason, ground_label_fr
 from apx.core.domain.sampling import KIND_BOUND, KIND_CENSUS
 from apx.core.domain.taxonomy_label import OutOfTaxonomyLabel
 from apx.core.domain.triage_table import ChangeLogEntry
@@ -378,15 +382,31 @@ class RegisterOut(BaseModel):
     entries: list[RegisterEntryOut]
 
 
+class RegisterOverrideIn(BaseModel):
+    """The one thing an *override* costs (FR-25). No default and no `| None`: a request body that
+    omits the field is a 422 at the edge, before the act is even attempted."""
+
+    reason: str
+
+
+class RegisterOverrideOut(BaseModel):
+    entry_id: str
+    resolution_state: str
+
+
 class InventoryOut(BaseModel):
-    """The permanent *denominator* (AD-38): the six disjoint named counts, the words for
+    """The permanent *denominator* (AD-38): the seven disjoint named counts, the words for
     unknown-cardinality containers (never a number folded into a total), and the consistency flag
-    (FR-6). ``submitted_pieces == in_corpus + open_register_entries`` over known pièces; noise and
-    retired are their own lines, outside the identity."""
+    (FR-6). ``submitted_pieces == in_corpus + open_register_entries +
+    overridden_register_entries`` over known pièces; noise and retired are their own lines, outside
+    the identity."""
 
     submitted_pieces: int
     in_corpus: int
     open_register_entries: int
+    # Story 5.6 (FR-25): documents the firm decided to live without — never in the corpus, no
+    # longer open. Defaulted so an older client that does not read it still parses the record.
+    overridden_register_entries: int = 0
     excluded_as_noise: int
     retired: int
     unknown_cardinality_entries: int
@@ -436,6 +456,12 @@ class AuditEntryOut(BaseModel):
     # matter from one whose matter went missing (FR-24 as amended).
     chain_scope: str
     chain_label_fr: str
+    # FR-25 (Story 5.6): an *override* is countable and filterable SEPARATELY from an ordinary
+    # modification, so the entry says which it is and — when it is one — on which of FR-25's three
+    # grounds. Derived from the act catalogue at read time, never a stored flag.
+    override: bool = False
+    override_ground: str | None = None
+    override_ground_fr: str | None = None
 
 
 class ChainSliceOut(BaseModel):
@@ -456,6 +482,9 @@ class AuditTrailOut(BaseModel):
     entries: list[AuditEntryOut]
     verified: bool
     slices: list[ChainSliceOut] = []
+    # Counted over the WHOLE trail, never over the filtered list (FR-25).
+    overrides: int = 0
+    entries_total: int = 0
 
 
 class DuplicateGroupOut(BaseModel):
@@ -530,12 +559,13 @@ class SuggestiveOut(BaseModel):
 
 
 class DenominatorOut(BaseModel):
-    """The AD-38 six-field scoped denominator, on the wire. ``unknown_cardinality_entries`` is a
+    """The AD-38 seven-field scoped denominator, on the wire. ``unknown_cardinality_entries`` is a
     SUBSET of ``open_register_entries``, rendered in words by the surface, never summed."""
 
     submitted_pieces: int
     in_corpus: int
     open_register_entries: int
+    overridden_register_entries: int = 0   # Story 5.6 (FR-25) — decided away, never in the corpus
     excluded_as_noise: int
     retired: int
     unknown_cardinality_entries: int
@@ -578,7 +608,9 @@ class MatterOut(BaseModel):
 def _inventory_out(inv) -> InventoryOut:  # noqa: ANN001
     return InventoryOut(
         submitted_pieces=inv.submitted_pieces, in_corpus=inv.in_corpus,
-        open_register_entries=inv.open_register_entries, excluded_as_noise=inv.excluded_as_noise,
+        open_register_entries=inv.open_register_entries,
+        overridden_register_entries=inv.overridden_register_entries,
+        excluded_as_noise=inv.excluded_as_noise,
         retired=inv.retired, unknown_cardinality_entries=inv.unknown_cardinality_entries,
         unknown_cardinality_phrase=inv.unknown_cardinality_phrase(),
         consistent=inv.is_consistent(),
@@ -1307,7 +1339,9 @@ def _exhaustive_payload(store: SqlStore, ident: Identity, q: str) -> ExhaustiveO
         truth_status=rs.truth_status.value, query=q,
         denominator=DenominatorOut(
             submitted_pieces=d.submitted_pieces, in_corpus=d.in_corpus,
-            open_register_entries=d.open_register_entries, excluded_as_noise=d.excluded_as_noise,
+            open_register_entries=d.open_register_entries,
+            overridden_register_entries=d.overridden_register_entries,
+            excluded_as_noise=d.excluded_as_noise,
             retired=d.retired, unknown_cardinality_entries=d.unknown_cardinality_entries),
         ocr_share=rs.ocr_share, below_quality_share=rs.below_quality_share,
         register_hits=[RegisterHitOut(matter=h.matter, filename=h.filename,
@@ -1318,11 +1352,13 @@ def _exhaustive_payload(store: SqlStore, ident: Identity, q: str) -> ExhaustiveO
 
 
 def _inventory_of(d: DenominatorOut) -> Inventory:
-    """The domain denominator behind the wire model — so a query audit records the six-field
+    """The domain denominator behind the wire model — so a query audit records the seven-field
     record (AD-38), never a re-implemented number."""
     return Inventory(
         submitted_pieces=d.submitted_pieces, in_corpus=d.in_corpus,
-        open_register_entries=d.open_register_entries, excluded_as_noise=d.excluded_as_noise,
+        open_register_entries=d.open_register_entries,
+        overridden_register_entries=d.overridden_register_entries,
+        excluded_as_noise=d.excluded_as_noise,
         retired=d.retired, unknown_cardinality_entries=d.unknown_cardinality_entries)
 
 
@@ -1659,27 +1695,39 @@ def get_piece_layout(piece_id: str, ident: Identity = Depends(current_identity))
 
 
 @app.get("/api/matters/{matter}/audit", response_model=AuditTrailOut)
-def read_audit(matter: str, ident: Identity = Depends(current_identity)) -> AuditTrailOut:
+def read_audit(
+    matter: str, overrides_only: bool = False, ident: Identity = Depends(current_identity),
+) -> AuditTrailOut:
     """The audit trail for a matter — 403 if its scope is not held.
 
     A matter's history spans up to two chains (AD-43): its own, and the tenant chain, which holds
     both the matterless acts and everything written before Story 5.5. `slices` reports each one
     separately, because only the matter's own chain is verifiable by a reader holding nothing but
     the export — the other's links run through entries outside their scope. One boolean over both
-    would claim a property of bytes the reader does not hold."""
+    would claim a property of bytes the reader does not hold.
+
+    `overrides_only` filters the entries to the *overrides* (FR-25). `overrides` and
+    `entries_total` are always counted over the whole trail, so the filtered read reports how much
+    of the record it is not showing."""
     store = _require_store()
     try:
-        trail = store.read_audit(matter, ident.tenant, ident.scopes)
+        trail = store.read_audit(
+            matter, ident.tenant, ident.scopes, overrides_only=overrides_only)
     except ScopeDenied as exc:
         raise HTTPException(status_code=403, detail="outside your scope") from exc
     return AuditTrailOut(
         entries=[
             AuditEntryOut(seq=e.seq, actor=e.actor, action=e.action, detail=e.detail,
                           timestamp=e.timestamp, chain_scope=e.chain_scope,
-                          chain_label_fr=AUDIT.chain_label_fr(e.chain_scope))
+                          chain_label_fr=AUDIT.chain_label_fr(e.chain_scope),
+                          override=e.override, override_ground=e.override_ground,
+                          override_ground_fr=(ground_label_fr(e.override_ground)
+                                              if e.override_ground else None))
             for e in trail.entries
         ],
         verified=trail.verified,
+        overrides=trail.overrides,
+        entries_total=trail.entries_total,
         slices=[
             ChainSliceOut(
                 chain_scope=sl.chain_scope, label_fr=AUDIT.chain_label_fr(sl.chain_scope),
@@ -1796,9 +1844,10 @@ def _register_out(e: object) -> RegisterEntryOut:
 
 @app.get("/api/matters/{matter}/register", response_model=RegisterOut)
 def read_register(matter: str, ident: Identity = Depends(current_identity)) -> RegisterOut:
-    """The failure register for one matter (Story 2.6, FR-5) — 403 outside the scope. Open and
-    resolved entries; a resolved one is kept as history (AD-7). The retry/bulk-retry actions and
-    the register screen are the deferred UX pass; this is the read contract."""
+    """The failure register for one matter (Story 2.6, FR-5) — 403 outside the scope. Every entry
+    whatever its state: open, resolved, and (Story 5.6) overridden — each kept as history, never
+    removed (AD-7). The retry/bulk-retry actions and the register screen are the deferred UX pass;
+    this is the read contract."""
     store = _require_store()
     try:
         entries = store.register(matter, ident.tenant, ident.scopes)
@@ -1824,6 +1873,30 @@ def export_register(ident: Identity = Depends(current_identity)) -> RegisterOut:
     export = store.export_register(
         ident.tenant, ident.scopes, ident.actor, is_admin=ident.is_admin)
     return RegisterOut(entries=[_register_out(e) for e in export.lines])
+
+
+@app.post("/api/register/{entry_id}/override", response_model=RegisterOverrideOut)
+def override_register_entry(
+    entry_id: str, req: RegisterOverrideIn, ident: Identity = Depends(current_identity),
+) -> RegisterOverrideOut:
+    """Close a *failure register* entry by *override* — FR-5's other exit, FR-25's second ground.
+
+    The document never entered the *corpus* and never will (a source that no longer exists, a
+    password nobody holds), so a person takes the entry out of `open` and owes one sentence for it,
+    stored verbatim in the *audit record*. 400 when the reason is blank or the entry is no longer
+    open; 403 outside the caller's scope — an undetermined-matter entry is admin-only (FR-49)."""
+    store = _require_store()
+    try:
+        state = core_override_register_entry(
+            store, entry_id=entry_id, tenant=ident.tenant, actor=ident.actor, reason=req.reason,
+            scopes=ident.scopes, is_admin=ident.is_admin)
+    except MissingOverrideReason as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return RegisterOverrideOut(entry_id=entry_id, resolution_state=state)
 
 
 @app.get("/api/matters/{matter}/triage", response_model=TriageOut)

@@ -85,9 +85,10 @@ def test_exhaustive_endpoint_serialises_truth_status_and_denominator(tmp_path, m
     assert r.status_code == 200, r.text
     body = r.json()
     assert body["truth_status"] == "exhaustive"                 # the status is on the wire (FR-15)
-    assert body["denominator"]["in_corpus"] == 1                # the scoped six-field denominator
-    assert set(body["denominator"]) == {                        # all six fields serialised (AD-38)
+    assert body["denominator"]["in_corpus"] == 1              # the scoped seven-field denominator
+    assert set(body["denominator"]) == {                      # all seven serialised (AD-38)
         "submitted_pieces", "in_corpus", "open_register_entries",
+        "overridden_register_entries",                        # Story 5.6 — FR-25's third term
         "excluded_as_noise", "retired", "unknown_cardinality_entries"}
     assert body["normalization"] == "fr-fold-v1"
     assert [h["piece_id"] for h in body["results"]] == ["p1"]

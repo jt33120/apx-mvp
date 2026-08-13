@@ -38,6 +38,7 @@ from apx.checks import (
     no_legacy_bound,
     no_truncation,
     originals_encrypted,
+    override,
     payload_schema,
     perf_gate,
     pin_ledger_ownership,
@@ -198,10 +199,15 @@ CHECKS: list[Callable[[], CheckResult]] = [
     audit_record.audit_catalogue_is_complete,
     audit_record.audit_sequence_is_not_generated,
     audit_record.audit_record_is_append_only,
+    # Story 5.6 — the OVERRIDE: one validator for "mandatory", the reason verbatim in the record,
+    # and a classification counted by its ground and never by its act class (FR-25).
+    override.override_reason_has_one_validator,
+    override.override_reason_reaches_the_record,
+    override.override_names_its_ground,
     statement.the_sentence_has_one_composer,
     statement.the_sentence_is_composed_offline,
     statement.unfitness_offers_no_line_move,
-    # story 2.7 — the inventory guarantee: the six-field denominator record, unknown never summed.
+    # story 2.7 — the inventory guarantee: the denominator record, unknown never summed.
     inventory_record.inventory_record_fields_enumerated,
     inventory_record.unknown_cardinality_never_summed,
     # story 1.12 — the manifest meta-checks: the harness checks ITSELF (AD-33/FR-56).

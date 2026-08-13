@@ -52,6 +52,7 @@ from apx.adapters.store_postgres.models import (
     PinEntry,
     RankedEntry,
     RecallReview,
+    RegisterOverride,
     SamplingRun,
     SamplingRunItem,
     SamplingVerdict,
@@ -131,11 +132,14 @@ from apx.core.domain.line_projection import (
     price_line_move as project_line_move,
 )
 from apx.core.domain.normalization import normalize
+from apx.core.domain.override import (
+    override_detail,
+    validate_override_reason,
+)
 from apx.core.domain.pin import (
     PinAction,
     PinLogEntry,
     current_pins,
-    validate_pin_reason,
 )
 from apx.core.domain.ranking import (
     RankedOrder,
@@ -520,6 +524,12 @@ class AuditEntry:
     chain: str
     timestamp: str
     chain_scope: str = ""   # the chain this entry is counted on: the matter, or "" (tenant chain)
+    # FR-25 (Story 5.6): whether this entry records an *override*, and on which of FR-25's three
+    # grounds. Derived from the catalogue at read time, never stored — the classification is a
+    # property of the act, and a copy on the row would let a reclassification leave the past
+    # reading the old way while the code reads the new one.
+    override: bool = False
+    override_ground: str | None = None
 
 
 @dataclass(frozen=True)
@@ -544,6 +554,12 @@ class AuditTrail:
     entries: list[AuditEntry]
     verified: bool  # every slice recomputes cleanly (no gap, reorder or truncation)
     slices: tuple[ChainSlice, ...] = ()
+    # FR-25: *overrides* are countable SEPARATELY from ordinary modifications. Both counts are
+    # taken over the WHOLE trail, before any filter — under `overrides_only` the entries shrink and
+    # these do not. A count that is really the length of what the filter returned agrees with the
+    # true count on every unfiltered read, which is exactly how it would survive to production.
+    overrides: int = 0
+    entries_total: int = 0
 
 
 @dataclass(frozen=True)
@@ -1333,7 +1349,8 @@ class SqlStore:
                       f"quarantined={quarantined}")
             # Story 2.7 (SM-3): the inventory guarantee MUST hold at completion — a violation is a
             # release blocker, raised loudly (and rolls back this tx), never a job silently marked
-            # done over a lost pièce. submitted_pieces == in_corpus + open_register_entries.
+            # done over a lost pièce: submitted_pieces == in_corpus +
+            # open_register_entries + overridden_register_entries (AD-38, three terms since 5.6).
             self._durable_inventory(session, j.matter, j.tenant).require_consistent()
             self._append_audit(session, j.tenant, j.matter, j.actor, AUDIT.ACT_INGEST, detail, now)
             j.state = "done"
@@ -1391,11 +1408,19 @@ class SqlStore:
         pièce lost outside the normal flow. Called by ``save`` and ``quarantine_unit`` (the
         submission paths). A RESOLVE uses ``_settle_submitted_after_retry`` instead, because a
         resolution to a content-DUPLICATE legitimately LOWERS the distinct count (a failed duplicate
-        was never a distinct pièce), which a monotonic max would wrongly flag as a lost pièce."""
+        was never a distinct pièce), which a monotonic max would wrongly flag as a lost pièce.
+
+        The OVERRIDDEN count belongs in the sum for the same reason it belongs in the identity
+        (Story 5.6). Without it the ``max`` sees a total that is short by every written-off entry,
+        so a genuinely new *pièce* arriving after an override would not raise the watermark at all
+        — and the next consistency check would report the new pièce as lost. The failure is
+        invisible until a matter has both an override and a later submission."""
         in_corpus, open_failures = self._counts(session, matter, tenant)
+        overridden = self._overridden_count(session, matter, tenant)
         ms = session.get(MatterScope, {"tenant": tenant, "matter": matter})
         if ms is not None:
-            ms.submitted_pieces = max(ms.submitted_pieces, in_corpus + open_failures)
+            ms.submitted_pieces = max(
+                ms.submitted_pieces, in_corpus + open_failures + overridden)
 
     def _settle_submitted_after_retry(self, session: Session, matter: str, tenant: str) -> None:
         """Settle ``submitted_pieces`` to the reconciled known population after a RETRY (AD-38). A
@@ -1407,19 +1432,38 @@ class SqlStore:
         frozen watermark ABOVE the live sum and falsely trips SM-3 (the retry would crash and the
         entry could never resolve; a bulk retry would persist a wedged matter). A pièce lost outside
         the normal flow is still caught: a raw deletion runs no retry, so the next
-        read / ``finish_import`` sees the stale high mark and raises."""
+        read / ``finish_import`` sees the stale high mark and raises.
+
+        The OVERRIDDEN count is part of that sum since Story 5.6, and leaving it out was not a
+        rounding error: it would have made the next retry of any matter silently rewrite the
+        watermark downwards by the number of entries a lawyer had written off — an *override*
+        shrinking the *denominator*, which is the one thing AD-38 exists to prevent, arriving
+        through a path nobody would have thought to look at."""
         in_corpus, open_failures = self._counts(session, matter, tenant)
+        overridden = self._overridden_count(session, matter, tenant)
         ms = session.get(MatterScope, {"tenant": tenant, "matter": matter})
         if ms is not None:
-            ms.submitted_pieces = in_corpus + open_failures
+            ms.submitted_pieces = in_corpus + open_failures + overridden
+
+    def _overridden_count(self, session: Session, matter: str, tenant: str) -> int:
+        """Register entries a person closed although the document never entered the *corpus* — the
+        third term of SM-3's identity (FR-25/AD-38, Story 5.6)."""
+        return session.scalar(
+            select(func.count()).select_from(Failure).where(
+                Failure.matter == matter, Failure.tenant == tenant,
+                Failure.resolution_state == "overridden",
+            )
+        ) or 0
 
     def _durable_inventory(self, session: Session, matter: str, tenant: str) -> Inventory:
-        """The six-field *denominator* (AD-38) from the durable ledger. ``submitted_pieces`` is the
-        FROZEN high-water mark (read, never recomputed as the sum — Story 2.7); ``in_corpus`` and
-        ``open_register_entries`` are counted live (their identity is the SM-3 check);
-        ``excluded_as_noise`` and ``unknown_cardinality_entries`` are counted durably (Story 2.7
-        Task 3/4); ``retired`` is reserved (0 — no retirement transition exists yet, AD-7)."""
+        """The seven-field *denominator* (AD-38) from the durable ledger. ``submitted_pieces`` is
+        the FROZEN high-water mark (read, never recomputed as the sum — Story 2.7); ``in_corpus``,
+        ``open_register_entries`` and ``overridden_register_entries`` are counted live (their
+        identity is the SM-3 check); ``excluded_as_noise`` and ``unknown_cardinality_entries`` are
+        counted durably (Story 2.7 Task 3/4); ``retired`` is reserved (0 — no retirement transition
+        exists yet, AD-7)."""
         in_corpus, open_failures = self._counts(session, matter, tenant)
+        overridden = self._overridden_count(session, matter, tenant)
         submitted = session.scalar(
             select(MatterScope.submitted_pieces).where(
                 MatterScope.matter == matter, MatterScope.tenant == tenant
@@ -1438,6 +1482,7 @@ class SqlStore:
         ) or 0
         return Inventory(
             submitted_pieces=submitted, in_corpus=in_corpus, open_register_entries=open_failures,
+            overridden_register_entries=overridden,
             excluded_as_noise=excluded, unknown_cardinality_entries=unknown,
         )
 
@@ -1479,8 +1524,10 @@ class SqlStore:
             retryable=f.resolution_state == "open")
 
     def register(self, matter: str, tenant: str, scopes: set[str]) -> list[RegisterEntry]:
-        """The durable failure register for one matter — scope-checked; OPEN and RESOLVED entries
-        (a resolved entry is kept as history, never removed — AD-7), deterministically ordered."""
+        """The durable failure register for one matter — scope-checked; every entry whatever its
+        state — OPEN, RESOLVED, and (since Story 5.6) OVERRIDDEN — because none is ever removed
+        (AD-7) and a written-off entry that vanished from the register would be the one thing FR-25
+        exists to prevent. Deterministically ordered."""
         with self._sf() as session:
             scope = session.scalar(select(MatterScope.scope).where(
                 MatterScope.matter == matter, MatterScope.tenant == tenant))
@@ -1691,6 +1738,62 @@ class SqlStore:
                 session, f.tenant, f.matter, actor, AUDIT.ACT_RETRY,
                 f"entry={entry_id} outcome={outcome}", now)
         return RetryOutcome(entry_id, outcome, state)
+
+    def override_register_entry(
+        self, *, entry_id: str, tenant: str, actor: str, reason: str, scopes: set[str],
+        is_admin: bool = False, now: datetime | None = None,
+    ) -> str:
+        """AD-37's `open → overridden` — the ONE owning use case, a CONDITIONAL COMMIT, and FR-5's
+        other exit: the document never entered the *corpus* and a person decided the entry closes
+        anyway (FR-25's second ground).
+
+        The reason is validated FIRST, outside the transaction: a blank one writes nothing at all,
+        which is what "refused" has to mean. Then one transaction observes the entry ``open`` under
+        a ROW LOCK, re-authorises (scope may have moved), flips the state, appends the reason to
+        its own append-only ledger and writes the ``register_override`` audit entry carrying the
+        reason verbatim — all four together (AD-22). An entry already ``resolved`` or already
+        ``overridden`` is REFUSED rather than re-closed: a retry that succeeded between the read
+        and the write is never quietly undone, which is the same defence `retry_failure` runs in
+        the other direction ("the AD-37 override-race defense" its comments name).
+
+        Returns the resulting ``resolution_state``. Raises :class:`MissingOverrideReason` (blank
+        reason), ``ScopeDenied`` (out of scope / cross-tenant / undetermined without admin / and
+        ABSENT — one answer, so an id probe cannot map what exists behind a wall), or
+        ``ValueError`` (no longer open)."""
+        validate_override_reason(reason)
+        stamp = now or datetime.now(UTC)
+        box: list[str] = []
+
+        def _work(session: Session, _now: datetime) -> None:
+            f = session.get(Failure, entry_id, with_for_update=True)
+            if f is None:
+                # Absent and out-of-scope are ONE answer, as everywhere else a caller names an
+                # identifier (``register``: *"fail closed, and never disclose existence"*). Telling
+                # them apart would let a probe read, one id at a time, which entries exist behind a
+                # wall it does not hold — a slow but real disclosure over a tenant boundary.
+                raise ScopeDenied(entry_id)
+            self._authorise_entry(session, f, tenant, scopes, is_admin)
+            if f.resolution_state != "open":
+                raise ValueError(
+                    f"register entry {entry_id} is {f.resolution_state}, not open — an override "
+                    "closes an OPEN entry and never re-closes one that moved")
+            f.resolution_state = "overridden"
+            session.add(RegisterOverride(
+                id=hashlib.sha256(
+                    f"{tenant}\x00{entry_id}\x00{stamp.isoformat()}".encode()).hexdigest(),
+                tenant=tenant, entry_id=entry_id, actor=actor, reason=reason, at=stamp))
+            # The *matter* is deliberately NOT a field here: it is already the entry's own column,
+            # and it is a name the firm chooses — a matter called "x reason=…" would put the mark
+            # ahead of the real reason and the extractor would hand a reader that instead. The
+            # renderer refuses it either way; not passing it is the fix, refusing it is the guard.
+            self._append_audit(
+                session, tenant, f.matter, actor, AUDIT.ACT_REGISTER_OVERRIDE,
+                override_detail(reason, entry=entry_id[:12], error_class=f.error_class),
+                stamp)
+            box.append(f.resolution_state)
+
+        self._audited_tx(_work)
+        return box[-1]
 
     def bulk_retry(
         self, tenant: str, scopes: set[str], *,
@@ -2000,6 +2103,8 @@ class SqlStore:
             submitted_pieces=int(submitted),
             in_corpus=_count(Piece),
             open_register_entries=_count(Failure, Failure.resolution_state == "open"),
+            overridden_register_entries=_count(
+                Failure, Failure.resolution_state == "overridden"),
             excluded_as_noise=_count(NoiseExclusion),
             unknown_cardinality_entries=_count(
                 Failure, Failure.resolution_state == "open", Failure.cardinality == "unknown"),
@@ -2395,9 +2500,14 @@ class SqlStore:
 
     def clear_truncation(self, tenant: str, actor: str, reason: str) -> None:
         """Clear an active truncation by an audited OVERRIDE with a reason (AD-35/AD-25) — the only
-        way it clears; it is never repaired. Refuses an empty reason and a no-op (none active)."""
-        if not reason.strip():
-            raise ValueError("a reason is required to override a truncation")
+        way it clears; it is never repaired. Refuses an empty reason (FR-25's one validator, since
+        Story 5.6 — this path had its own copy of the rule) and a no-op (none active).
+
+        The reason reaches the AUDIT RECORD, not only the marker row. It did not before 5.6, which
+        made this override the one act in the product that cost a sentence nobody could read from
+        the record: FR-25 requires the reason stored verbatim *in the audit record*, and the marker
+        row is not it — it is a mutable row outside the chain."""
+        validate_override_reason(reason)
 
         def _work(session: Session, now: datetime) -> None:
             m = session.get(TruncationMarker, tenant)
@@ -2406,7 +2516,7 @@ class SqlStore:
             m.cleared_by, m.reason, m.cleared_at = actor, reason, now
             self._append_audit(
                 session, tenant, None, actor, AUDIT.ACT_TRUNCATION_OVERRIDE,
-                f"journal_seq={m.journal_seq} live_seq={m.live_seq}", now)
+                override_detail(reason, journal_seq=m.journal_seq, live_seq=m.live_seq), now)
 
         self._audited_tx(_work)
         self._journal_acknowledged_heads(tenant)
@@ -3068,11 +3178,18 @@ class SqlStore:
 
         self._audited_tx(_work)
 
-    def read_audit(self, matter: str, tenant: str, scopes: set[str]) -> AuditTrail:
+    def read_audit(
+        self, matter: str, tenant: str, scopes: set[str], *, overrides_only: bool = False,
+    ) -> AuditTrail:
         """The audit trail for a matter — scope-checked. The chain is per-tenant
         (a single authority, FR-24), so verification recomputes the WHOLE tenant
         chain end to end; a gap, reorder or truncation anywhere flips `verified`.
-        The returned entries are this matter's slice (FR-53)."""
+        The returned entries are this matter's slice (FR-53).
+
+        ``overrides_only`` filters the returned entries to the *overrides* (FR-25). It filters
+        **only** the entries: `overrides`, `entries_total`, `verified` and every slice are computed
+        over the whole trail, because a filtered read must not be able to report a cleaner or
+        emptier record than an unfiltered one."""
         with self._sf() as session:
             scope = session.scalar(
                 select(MatterScope.scope).where(
@@ -3124,15 +3241,24 @@ class SqlStore:
             AuditEntry(
                 e.seq, e.actor if e.actor is not None else "«illisible»", e.action,
                 e.detail if e.detail is not None else "«illisible»", e.chain,
-                timestamps[e.chain].isoformat(), e.chain_scope)
+                timestamps[e.chain].isoformat(), e.chain_scope,
+                # FR-25: the classification comes from the catalogue, so a *pin* counts as the
+                # override it is even though its FR-24 class is `pin`. Counting `act_class ==
+                # "override"` instead would report zero on a matter with forty pins.
+                override=AUDIT.is_override(e.action),
+                override_ground=AUDIT.override_ground(e.action))
             for e in sorted(mine + legacy, key=lambda e: (e.timestamp, e.chain_scope, e.seq))
         ]
+        overrides = sum(1 for e in entries if e.override)
+        entries_total = len(entries)
+        if overrides_only:
+            entries = [e for e in entries if e.override]
         # `verified` requires something to have been verified. all([]) is True, so a matter whose
         # every chain had been removed — head row and all — reported an intact record,
         # indistinguishable from a matter that never acted (review, confirmed). A record with no
         # chain is not a clean record; it is a record with nothing to check.
         verified = bool(slices) and all(s.verified for s in slices)
-        return AuditTrail(entries, verified, tuple(slices))
+        return AuditTrail(entries, verified, tuple(slices), overrides, entries_total)
 
     # ── Story 4.1: the optional case theory — versioned, audited, referenceable ────────────────
     def _version_view(self, row: CaseTheoryVersion) -> CaseTheoryVersionView:
@@ -3895,9 +4021,14 @@ class SqlStore:
         session.add(PinEntry(
             id=entry_id, tenant=tenant, matter=matter, piece_id=piece_id, seq=seq,
             action=action.value, reason=reason, set_by=actor, at=now))
-        self._append_audit(
-            session, tenant, matter, actor, audit_action,
-            f"piece={piece_id[:12]} action={action.value} seq={seq} reason={reason}", now)
+        fields = {"piece": piece_id[:12], "action": action.value, "seq": seq}
+        # A pin carries its reason into the record through the ONE renderer (FR-25 — verbatim, and
+        # recoverable verbatim); a REMOVAL is not an override, costs no reason, and must not be
+        # rendered as though it had one — an empty `reason=` on a removal would make the trail read
+        # as an override whose author declined to say why.
+        detail = (override_detail(reason, **fields) if AUDIT.is_override(audit_action)
+                  else " ".join(f"{k}={v}" for k, v in fields.items()))
+        self._append_audit(session, tenant, matter, actor, audit_action, detail, now)
         return seq
 
     def _current_pin_action(
@@ -3916,14 +4047,15 @@ class SqlStore:
     ) -> int:
         """Pin a *pièce* into or out of the *retained set* — the ONE owning use case (AD-37),
         APPEND-ONLY (FR-43). A pin is an *override* of **the line** and **requires a one-line
-        reason** (FR-25 — a blank reason raises :class:`MissingPinReason`, nothing written). Appends
+        reason** (FR-25 — a blank reason raises :class:`MissingOverrideReason`, nothing written).
+        Appends
         one ledger
         entry with a server monotonic ``seq`` (AD-49) ATOMIC with one ``pin_override`` audit entry
         carrying the reason verbatim (AD-22). CONDITIONAL on ``expected_seq`` (a moved pin raises
         :class:`StalePin`). Scope-checked (``ScopeDenied``). Touches ONLY ``pin_entry`` — never the
         ranked order, never **the line** — so exactly one *pièce* crosses and nothing else moves
         (FR-43, the derivation is Story 4.7). Returns the new ``seq``."""
-        validate_pin_reason(reason)
+        validate_override_reason(reason)
         box: list[int] = []
 
         def _work(session: Session, now: datetime) -> None:

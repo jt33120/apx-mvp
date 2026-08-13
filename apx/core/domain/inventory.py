@@ -1,11 +1,11 @@
 """The inventory guarantee (FR-6) and the *denominator* record (AD-38), as a domain invariant.
 
-The *denominator* is **one record of six disjoint named counts, never a bare integer** (AD-38):
-``submitted_pieces``, ``in_corpus``, ``open_register_entries``, ``excluded_as_noise``, ``retired``
-and ``unknown_cardinality_entries``. The identity SM-3 asserts, over **known** *pièces* after
-container expansion, is
+The *denominator* is **one record of seven disjoint named counts, never a bare integer** (AD-38):
+``submitted_pieces``, ``in_corpus``, ``open_register_entries``, ``overridden_register_entries``,
+``excluded_as_noise``, ``retired`` and ``unknown_cardinality_entries``. The identity SM-3 asserts,
+over **known** *pièces* after container expansion, is
 
-    submitted_pieces == in_corpus + open_register_entries      # exactly, always
+    submitted_pieces == in_corpus + open_register_entries + overridden_register_entries
 
 — ``excluded_as_noise`` (filesystem noise, FR-6) and ``retired`` (AD-7) sit **outside** the
 identity as their own named lines; ``unknown_cardinality_entries`` is a **subset** of
@@ -21,6 +21,15 @@ pièce. The full accounting still has no unnamed remainder — every enumerated 
 → ``submitted_pieces`` → ``in_corpus`` xor ``open_register_entries``, or is ``excluded_as_noise`` —
 but the SM-3 identity is the two-term core. The count that makes the identity a real check, not a
 tautology, is ``submitted_pieces`` read from the frozen application-owned ledger — Story 2.7.)*
+
+*(Extended in Story 5.6 to a THIRD term. FR-25's second ground lets a person take a register entry
+out of ``open`` although the document never entered the *corpus* (FR-5) — a third destination for a
+submitted* pièce*, and the first one the two-term identity could not express. The alternatives were
+both dishonest: subtracting the override from ``submitted_pieces`` would make an* override *a way
+to shrink the* denominator*, which is the one thing AD-38 exists to prevent; leaving it out of the
+identity would have* ``require_consistent`` *raise on the next retry of that* matter*. So it is a
+named line INSIDE the identity — the count of documents the firm has decided to live without, which
+is precisely the number FR-25 exists to keep visible.)*
 """
 
 from __future__ import annotations
@@ -30,13 +39,18 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class Inventory:
-    """The *denominator* — AD-38's one record with exactly these six disjoint named counts. There is
-    deliberately **no `int` representation** of the whole (a structural property forbids collapsing
-    it to one number, and ``unknown_cardinality_entries`` is never summed into a total)."""
+    """The *denominator* — AD-38's one record with exactly these seven disjoint named counts. There
+    is deliberately **no `int` representation** of the whole (a structural property forbids
+    collapsing it to one number, and ``unknown_cardinality_entries`` is never summed into a
+    total)."""
 
     submitted_pieces: int
     in_corpus: int
     open_register_entries: int
+    # Story 5.6 (FR-25/FR-5): entries a person took out of `open` although the document never
+    # entered the corpus. The THIRD term of the identity, and it defaults to 0 so every existing
+    # construction site keeps meaning exactly what it meant.
+    overridden_register_entries: int = 0
     # ── outside the SM-3 identity, each its own named line ──
     excluded_as_noise: int = 0     # filesystem noise (FR-6): declared, configured, never a pièce
     retired: int = 0               # AD-7: retired by state, never hard-deleted (reserved; 0 today)
@@ -45,15 +59,16 @@ class Inventory:
 
     def is_consistent(self) -> bool:
         """The SM-3 invariant: over **known** *pièces*, ``submitted_pieces == in_corpus +
-        open_register_entries``. ``excluded_as_noise`` and ``retired`` sit **outside** the identity
-        (their own named lines); ``unknown_cardinality_entries`` is a subset of
-        ``open_register_entries`` and is never a term here (AD-38 — an unknown cardinality is never
-        summed into a total)."""
+        open_register_entries + overridden_register_entries``. ``excluded_as_noise`` and ``retired``
+        sit **outside** the identity (their own named lines); ``unknown_cardinality_entries`` is a
+        subset of ``open_register_entries`` and is never a term here (AD-38 — an unknown cardinality
+        is never summed into a total)."""
         return (
-            self.submitted_pieces == self.in_corpus + self.open_register_entries
+            self.submitted_pieces == (
+                self.in_corpus + self.open_register_entries + self.overridden_register_entries)
             and min(
                 self.submitted_pieces, self.in_corpus, self.open_register_entries,
-                self.excluded_as_noise, self.retired) >= 0
+                self.overridden_register_entries, self.excluded_as_noise, self.retired) >= 0
             and 0 <= self.unknown_cardinality_entries <= self.open_register_entries
         )
 
@@ -75,6 +90,7 @@ class Inventory:
                 "inventory invariant violated: "
                 f"submitted_pieces={self.submitted_pieces} != in_corpus={self.in_corpus} "
                 f"+ open_register_entries={self.open_register_entries} "
+                f"+ overridden_register_entries={self.overridden_register_entries} "
                 f"(excluded_as_noise={self.excluded_as_noise}, retired={self.retired}, "
                 f"unknown_cardinality_entries={self.unknown_cardinality_entries} — outside the "
                 "identity / never summed)"

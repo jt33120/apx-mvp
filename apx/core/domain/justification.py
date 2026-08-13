@@ -83,11 +83,12 @@ def validate_named_evidence(
     sentence: str, basis: JustificationBasis, evidence: tuple[EvidenceExtract, ...]
 ) -> None:
     """The FR-41 invariant, callable at a **write seam** before anything is persisted (mirrors
-    ``pin.validate_pin_reason``): a justification carries a one-line sentence and **names checkable
-    evidence** — retained extracts, or an intrinsic basis with ≥1 named signal — and every named
-    extract carries a non-empty quote (an empty quote would pass containment vacuously, so it is
-    not evidence). :class:`Justification` delegates its ``__post_init__`` here, so the write seam
-    and the read path enforce ONE invariant: a persisted justification is always readable."""
+    ``override.validate_override_reason``): a justification carries a one-line sentence and **names
+    checkable evidence** — retained extracts, or an intrinsic basis with ≥1 named signal — and
+    every named extract carries a non-empty quote (an empty quote would pass containment
+    vacuously, so it is not evidence). :class:`Justification` delegates its ``__post_init__``
+    here, so the write seam and the read path enforce ONE invariant: a persisted justification
+    is always readable."""
     if not sentence or not sentence.strip():
         raise ValueError("a justification carries a one-line sentence")
     if any(not e.quoted_text for e in evidence):

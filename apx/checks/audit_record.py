@@ -40,6 +40,10 @@ EVIDENTIAL_TABLES: tuple[str, ...] = (
     "taxonomy_label_entry",
     "sampling_run",
     "sampling_verdict",
+    # Story 5.6 — the register-override ledger. It holds the one sentence a person owed for closing
+    # an entry the machine never resolved (FR-25), and the whole point of keeping it off the
+    # mutable ``failure`` row is that it is never rewritten.
+    "register_override",
 )
 
 #: The model classes those tables map to (checked by ORM class name, since a delete()/update() is
@@ -53,6 +57,7 @@ EVIDENTIAL_MODELS: tuple[str, ...] = (
     "TaxonomyLabelEntry",
     "SamplingRun",
     "SamplingVerdict",
+    "RegisterOverride",
 )
 
 #: The subset that is APPEND-ONLY row by row: a loaded instance is never edited in place either.
@@ -70,6 +75,7 @@ APPEND_ONLY_MODELS: tuple[str, ...] = (
     "PinEntry",
     "TaxonomyLabelEntry",
     "SamplingVerdict",
+    "RegisterOverride",
 )
 
 _APPEND_AUDIT = "_append_audit"

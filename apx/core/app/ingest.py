@@ -3,7 +3,8 @@
 Pure orchestration in the Application layer: it depends on the Domain and on the
 ``Extractor`` and ``Expander`` ports, never on an adapter (AD-4). It produces an
 ``IngestionResult`` whose inventory holds the guarantee (AD-38) — over KNOWN pièces,
-``submitted_pieces == in_corpus + open_register_entries``, with filesystem noise a
+``submitted_pieces == in_corpus + open_register_entries + overridden_register_entries``
+(the third term is Story 5.6's), with filesystem noise a
 separate named line and nothing lost silently.
 
 Containers are expanded, not treated as opaque pieces: a .zip is unpacked and its
@@ -85,7 +86,9 @@ class IngestionResult:
     @property
     def inventory(self) -> Inventory:
         # submitted_pieces counts pièces only (noise is never a pièce → its own line, AD-38):
-        # submitted_pieces == in_corpus + open_register_entries, exactly.
+        # submitted_pieces == in_corpus + open_register_entries, exactly. The identity's third term
+        # (overridden_register_entries, Story 5.6) is 0 by construction here: an ingestion result
+        # is what a run just produced, and nothing in it has been overridden yet.
         unknown = sum(
             1 for f in self.failures if f.error_class is ErrorClass.CONTAINER_UNOPENABLE)
         return Inventory(

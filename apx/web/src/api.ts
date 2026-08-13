@@ -1,5 +1,9 @@
+// Story 5.6 — `overridden_register_entries` is the identity's THIRD term (FR-25): documents the
+// firm decided to live without, never in the corpus and no longer open. It is never folded into
+// `open_register_entries`; a surface that hid it would let an override shrink the denominator.
 export type Inventory = {
   submitted_pieces: number; in_corpus: number; open_register_entries: number;
+  overridden_register_entries: number;
   excluded_as_noise: number; retired: number; unknown_cardinality_entries: number;
   unknown_cardinality_phrase: string; consistent: boolean;
 };
@@ -11,9 +15,13 @@ export type MatterSummary = { matter: string; scope: string; inventory: Inventor
 // Story 5.5 — an entry NAMES the chain it is counted on: the matter, or "" for the tenant chain
 // (AD-43). Two chains carry one matter's history, so `seq` alone is no longer unique across the
 // trail — key a row by chain + seq, never by seq.
+// Story 5.6 — FR-25: an entry says whether it records an OVERRIDE and on which of FR-25's three
+// grounds. Derived server-side from the act catalogue: a *pin* is an override although its FR-24
+// class is `pin`, so the surface must never re-derive this from the verb.
 export type AuditEntry = {
   seq: number; actor: string; action: string; detail: string; timestamp: string;
   chain_scope: string; chain_label_fr: string;
+  override: boolean; override_ground: string | null; override_ground_fr: string | null;
 };
 // What the reader can conclude about ONE chain. `verifiable_in_isolation` is true only for the
 // matter's own chain: the pre-5.5 slice on the tenant chain is verified server-side by recomputing
@@ -22,7 +30,13 @@ export type AuditSlice = {
   chain_scope: string; label_fr: string; entries: number; verified: boolean;
   verifiable_in_isolation: boolean; broken_at: number | null;
 };
-export type AuditTrail = { entries: AuditEntry[]; verified: boolean; slices: AuditSlice[] };
+// `overrides` and `entries_total` count the WHOLE trail, never the filtered list — under
+// `overridesOnly` the entries shrink and the counts do not, so the surface can say how much of the
+// record it is not showing (FR-25).
+export type AuditTrail = {
+  entries: AuditEntry[]; verified: boolean; slices: AuditSlice[];
+  overrides: number; entries_total: number;
+};
 export type DuplicateGroup = { representative: string; members: string[]; size: number };
 export type Triage = { submitted: number; distinct: number; duplicates: number; groups: DuplicateGroup[] };
 export type LabelledPiece = { provenance: string; label: string; rationale: string };
@@ -36,6 +50,7 @@ export type SuggestiveResult = {
 };
 export type Denominator = {
   submitted_pieces: number; in_corpus: number; open_register_entries: number;
+  overridden_register_entries: number;
   excluded_as_noise: number; retired: number; unknown_cardinality_entries: number;
 };
 export type RegisterHit = { matter: string; filename: string; error_class: string };
@@ -247,8 +262,23 @@ export async function readLabels(matter: string): Promise<Labels> {
   return res.json();
 }
 
-export async function readAudit(matter: string): Promise<AuditTrail> {
-  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/audit`);
+export async function readAudit(matter: string, overridesOnly = false): Promise<AuditTrail> {
+  const q = overridesOnly ? "?overrides_only=true" : "";
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/audit${q}`);
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+// Close a *failure register* entry by OVERRIDE (FR-25/FR-5): the document never entered the corpus
+// and never will. The reason is mandatory — the server refuses a blank one, and so does this.
+export async function overrideRegisterEntry(
+  entryId: string, reason: string,
+): Promise<{ entry_id: string; resolution_state: string }> {
+  const res = await fetch(`/api/register/${encodeURIComponent(entryId)}/override`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ reason }),
+  });
   if (!res.ok) throw new Error(await detail(res));
   return res.json();
 }

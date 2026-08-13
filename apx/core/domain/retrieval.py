@@ -85,7 +85,7 @@ class ExhaustiveResultSet:
     ``EXHAUSTIVE`` — the second engine, set at its one site, never derived. It is the **complete**
     match set: it carries **no** ``limit``/``top_k``/page-size field, so it can never be truncated
     (a truncation would downgrade it to suggestive — AD-20). Its honesty is the ``denominator`` (the
-    AD-38 six-field ``Inventory``, which itself carries the open-register and unknown-cardinality
+    AD-38 seven-field ``Inventory``, which itself carries the open-register and unknown-cardinality
     counts) plus the OCR-quality shares of the searched set (AD-42, as data). ``register_hits``
     are searched **separately** and are never inside ``results`` (AD-21). ``normalization`` declares
     the rule the search ran under (AD-21)."""

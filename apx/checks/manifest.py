@@ -54,6 +54,7 @@ from apx.checks import (
     no_legacy_bound,
     no_truncation,
     originals_encrypted,
+    override,
     payload_schema,
     perf_gate,
     pin_ledger_ownership,
@@ -631,8 +632,22 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "in store.py must be taken with_for_update — allocated inside the entry's own transaction"),
     _p("audit-record-append-only", "FR-24", "AD-22", "an evidential row is never edited or removed",
        audit_record.audit_record_is_append_only,
-       "delete()/update() built against any of the 7 evidential models across apx/** — the "
+       "delete()/update() built against any of the 8 evidential models across apx/** — the "
        "audit_chain_head allocator is deliberately exempt, being the counter and not the record"),
+    # ── story 5.6: the OVERRIDE — one validator, the reason verbatim, a ground on every one ────
+    _p("override-reason-one-validator", "FR-25", "AD-37", "the override reason has one validator",
+       override.override_reason_has_one_validator,
+       "every module that names an override act AND appends to the record, across apx/** — each "
+       "validates through core/domain/override.py, and no second blank-reason test exists"),
+    _p("override-reason-in-the-record", "FR-25", "AD-22", "the override reason reaches the record",
+       override.override_reason_reaches_the_record,
+       "every _append_audit call site whose verb is an override, across apx/** — the detail is "
+       "composed by override_detail(), never by hand, so the verbatim reason cannot be dropped"),
+    _p("override-ground-named", "FR-25", "AD-33", "an override names its FR-25 ground",
+       override.override_names_its_ground,
+       "the act catalogue (every override names one of FR-25's three grounds; the override class "
+       "has a writer) + any comparison against the override act CLASS across apx/** — a pin is an "
+       "override whose class is 'pin', so a class-based count reports zero on a matter with forty"),
     # ── story 5.4: the SENTENCE — one composer, offline, and the unfitness declaration ─────────
     _p("statement-one-composer", "FR-23", "AD-37", "the sentence has one composer",
        statement.the_sentence_has_one_composer,
@@ -646,9 +661,11 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        statement.unfitness_offers_no_line_move,
        "core/domain/statement.py (never names the re-line offer), api/app.py (ships unfit_fr), and "
        "apx/web/src line-move sites (vacuous until Story 4.9's surface lands)"),
-    # ── story 2.7: the inventory guarantee — the six-field denominator, unknown never summed ────
-    _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly six fields",
-       inventory_record.inventory_record_fields_enumerated, "Inventory fields in core/domain"),
+    # ── story 2.7: the inventory guarantee — the denominator record, unknown never summed ──────
+    _p("inventory-record-fields", "FR-6", "AD-38", "the inventory record has exactly seven fields",
+       inventory_record.inventory_record_fields_enumerated,
+       "Inventory fields in core/domain — seven since Story 5.6 added the identity's third term, "
+       "overridden_register_entries (a register entry closed by decision, never in the corpus)"),
     _p("unknown-cardinality-never-summed", "FR-6", "AD-38", "unknown cardinality never summed",
        inventory_record.unknown_cardinality_never_summed, "'+' operands across apx/**"),
     # ── story 1.12: the harness checks ITSELF (the meta-checks) ───────────────────────────────

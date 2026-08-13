@@ -773,7 +773,13 @@ function MatterRow({ m }: { m: MatterSummary }) {
           {m.matter}
         </div>
         <div className="apx-hint">
-          {m.inventory.in_corpus} indexées · {m.inventory.open_register_entries} à revoir · tri &amp; journal
+          {m.inventory.in_corpus} indexées · {m.inventory.open_register_entries} à revoir
+          {/* Story 5.6 — named on its own, never folded into "à revoir": a document the firm
+              decided to live without is not a document still waiting to be looked at. */}
+          {m.inventory.overridden_register_entries > 0
+            ? ` · ${m.inventory.overridden_register_entries} écartée(s) par dérogation`
+            : ""}
+          {" "}· tri &amp; journal
         </div>
       </div>
       {/* Story 4.10 — the triage surface, reached from the matter once a ranking exists */}
@@ -1027,8 +1033,30 @@ function Journal({ trail }: { trail: AuditTrail }) {
   // anything written before the migration, the cabinet's. Only the first is something a reader
   // holding the export alone can recompute, and the seal says which is which rather than
   // collapsing both into one reassuring sentence.
+  //
+  // Story 5.6 — FR-25: the OVERRIDES are countable and filterable SEPARATELY from ordinary
+  // modifications. The counts come from the server, computed over the whole trail, and are never
+  // recomputed from `shown` — a count taken from the filtered list agrees with the true one on
+  // every unfiltered read, which is how it would survive to production.
+  const [overridesOnly, setOverridesOnly] = useState(false);
+  const shown = overridesOnly ? trail.entries.filter((e) => e.override) : trail.entries;
   return (
     <div className="apx-block">
+      <p className="apx-hint">
+        <strong style={{ color: "var(--apx-ink-2)" }}>
+          {trail.overrides} dérogation{trail.overrides > 1 ? "s" : ""}
+        </strong>{" "}
+        sur {trail.entries_total} acte{trail.entries_total > 1 ? "s" : ""} — une dérogation
+        contredit l'outil ou contourne une garde, et coûte une phrase écrite.{" "}
+        <button
+          type="button"
+          className="apx-ghost apx-btn-sm"
+          onClick={() => setOverridesOnly((v) => !v)}
+          disabled={trail.overrides === 0 && !overridesOnly}
+        >
+          {overridesOnly ? "Voir tous les actes" : "Ne montrer que les dérogations"}
+        </button>
+      </p>
       {trail.slices.length === 0 ? (
         <p className="apx-seal apx-seal--bad">
           ⚠ Aucune chaîne à vérifier pour cette affaire — un registre sans chaîne n'est pas un
@@ -1051,8 +1079,11 @@ function Journal({ trail }: { trail: AuditTrail }) {
         </p>
       ))}
       <ol className="apx-hint apx-inline-list">
-        {trail.entries.map((e) => (
+        {shown.map((e) => (
           <li key={`${e.chain_scope}#${e.seq}`}>
+            {e.override ? (
+              <span className="apx-tag" title={e.override_ground_fr ?? ""}>dérogation</span>
+            ) : null}{" "}
             <strong style={{ color: "var(--apx-ink-2)" }}>{e.action}</strong> — {e.detail}{" "}
             <span style={{ color: "var(--apx-muted)" }}>· {e.actor} · {e.timestamp.replace("T", " ").slice(0, 19)} · {e.chain_label_fr}</span>
           </li>

@@ -9,8 +9,10 @@ versions* until explicitly removed (FR-43) — survival is a shape, not a copy s
 This module owns the ledger vocabulary and the derived **in-force** view; the :class:`Pin` /
 :class:`PinSide` a pin resolves to (the operand ``derive_triage_sets`` applies **after** the line,
 moving exactly one *pièce*) live in ``triage_sets.py`` (Story 4.7). A pin **requires a one-line
-reason** and is recorded as an *override* (FR-25); this module refuses a blank one
-(:func:`validate_pin_reason`). The *override* record itself (an audit act) and the ledger are the
+reason** and is recorded as an *override* (FR-25). The rule that a reason is mandatory used to be
+implemented here; since Story 5.6 there is exactly one implementation of it, in ``override.py``
+(:func:`~apx.core.domain.override.validate_override_reason`), because a rule stated in three places
+is a rule that will hold in two. The *override* record itself (an audit act) and the ledger are the
 store's (Story 4.11's owning use case).
 """
 
@@ -42,17 +44,6 @@ class PinLogEntry:
     piece_id: str
     seq: int
     action: PinAction
-
-
-class MissingPinReason(ValueError):
-    """A pin was attempted without a one-line reason (FR-25): an *override* contradicts a machine
-    assertion and cannot be committed without a reason. Nothing is written."""
-
-
-def validate_pin_reason(reason: str) -> None:
-    """Reject a blank/whitespace-only pin reason (FR-25 — a pin requires a one-line reason)."""
-    if not reason or not reason.strip():
-        raise MissingPinReason("a pin requires a one-line reason (FR-25)")
 
 
 def current_pins(entries: Iterable[PinLogEntry]) -> tuple[Pin, ...]:

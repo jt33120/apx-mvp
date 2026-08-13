@@ -63,6 +63,10 @@ ENCRYPTED_COLUMNS = [
     # single-PK (`id`), so key rotation addresses both directly.
     ("pin_entry", "id", "reason", "pin_entry.reason"),
     ("pin_entry", "id", "set_by", "pin_entry.set_by"),
+    # Story 5.6: the register-override ledger — the mandatory one-line reason (content) AND the
+    # actor (PII) are encrypted; single-PK (`id`), so key rotation addresses both directly.
+    ("register_override", "id", "actor", "register_override.actor"),
+    ("register_override", "id", "reason", "register_override.reason"),
     # Story 4.6: the per-pièce justification — the one-line sentence (model summary — content) and
     # the named extracts' quoted passages (client content, the containment target) are encrypted;
     # the rejection ledger's optional reason (content) AND actor (PII) are encrypted. Single-PK
@@ -292,10 +296,16 @@ def backfill_failure_cardinality(conn: Connection) -> int:
 
 def backfill_submitted_pieces(conn: Connection) -> int:
     """Freeze each existing matter's ``submitted_pieces`` watermark from its current known
-    population (Story 2.7, AD-38): ``in_corpus + open_register_entries``. A safe post-hoc initial
-    value — on a healthy store the watermark equals this sum, and thereafter it is only raised by
-    ingestion (never recomputed at read time). Run ONCE, after the column is added. Returns the
-    number of matter rows set."""
+    population (Story 2.7, AD-38): ``in_corpus + open_register_entries +
+    overridden_register_entries``. A safe post-hoc initial value — on a healthy store the watermark
+    equals this sum, and thereafter it is only raised by ingestion (never recomputed at read time).
+    Run ONCE, after the column is added. Returns the number of matter rows set.
+
+    The third term is Story 5.6's and matters here because this recompute is re-runnable by
+    design: without it, a re-run over a store where a lawyer had written entries off would set the
+    watermark BELOW the true submitted count and wedge those matters — every later retry raising
+    on an inventory invariant nobody had touched. At migration 0020 the term simply matches
+    nothing, `overridden` not being a state any entry could yet hold."""
     return conn.execute(text(
         "UPDATE matter_scope SET submitted_pieces = ("
         "  (SELECT count(*) FROM piece"
@@ -303,7 +313,7 @@ def backfill_submitted_pieces(conn: Connection) -> int:
         "  + (SELECT count(*) FROM failure"
         "       WHERE failure.tenant = matter_scope.tenant"
         "         AND failure.matter = matter_scope.matter"
-        "         AND failure.resolution_state = 'open'))")).rowcount or 0
+        "         AND failure.resolution_state IN ('open', 'overridden')))")).rowcount or 0
 
 
 def _cipher_if(needed: bool) -> Cipher | None:

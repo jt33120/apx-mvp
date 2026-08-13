@@ -57,7 +57,7 @@ def test_a_justification_cannot_exist_without_named_evidence() -> None:
 
 def test_the_invariant_is_callable_at_a_write_seam() -> None:
     # the review's CONFIRMED finding: the rule must be runnable BEFORE anything is persisted, so a
-    # write seam refuses what the read path could not rebuild (mirrors pin.validate_pin_reason).
+    # write seam refuses what the read path could not rebuild (mirrors validate_override_reason).
     ct = JustificationBasis.case_theory("v")
     with pytest.raises(ValueError, match="name checkable evidence"):
         validate_named_evidence("a sentence alone", ct, ())

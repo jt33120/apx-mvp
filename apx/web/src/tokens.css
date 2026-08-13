@@ -252,6 +252,14 @@ button:focus-visible { box-shadow: var(--apx-ring); }
 /* Story 5.3 — the counts-only register: the product refusing to state a number it cannot
    defend. The review tier, not the danger tier: nothing is wrong, something is withheld. */
 .apx-seal--review { color: var(--apx-review); }
+/* Story 5.6 — an OVERRIDE on the audit trail (FR-25). The REVIEW tier, deliberately: an override
+   is neither an error (danger) nor a routine act (muted) — it is a decision someone took against
+   the tool and argued for in writing, and it should read as something to look at. */
+.apx-tag {
+  display: inline-block; border-radius: 999px; padding: 0.02rem 0.5rem;
+  font-size: 0.68rem; letter-spacing: 0.07em; text-transform: uppercase; font-weight: 600;
+  color: var(--apx-review); background: var(--apx-review-bg); vertical-align: 0.05rem;
+}
 .apx-inline-list { margin: 0; padding-left: 1.2rem; }
 .apx-inline-list li { margin-bottom: 0.2rem; }
 

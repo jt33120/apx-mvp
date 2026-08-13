@@ -1,16 +1,13 @@
-"""The pin ledger vocabulary + the in-force view + the mandatory reason (Story 4.11, FR-43/FR-25).
-Pure: current pins are the latest action per pièce (REMOVED lifts it); a blank reason is refused."""
+"""The pin ledger vocabulary + the in-force view (Story 4.11, FR-43).
+Pure: current pins are the latest action per pièce (REMOVED lifts it). The mandatory reason moved
+to ``tests/domain/test_override.py`` with the rule itself (Story 5.6 — one validator, FR-25)."""
 
 from __future__ import annotations
 
-import pytest
-
 from apx.core.domain.pin import (
-    MissingPinReason,
     PinAction,
     PinLogEntry,
     current_pins,
-    validate_pin_reason,
 )
 from apx.core.domain.triage_sets import PinSide
 
@@ -48,13 +45,3 @@ def test_the_in_force_pins_are_ordered_by_piece_id() -> None:
 
 def test_no_entries_means_no_pins() -> None:
     assert current_pins([]) == ()
-
-
-def test_a_blank_reason_is_refused() -> None:
-    for bad in ("", "   ", "\t\n"):
-        with pytest.raises(MissingPinReason):
-            validate_pin_reason(bad)
-
-
-def test_a_real_reason_passes() -> None:
-    validate_pin_reason("aveu implicite au §4 — décisif malgré le rang")  # no raise

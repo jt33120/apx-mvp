@@ -64,3 +64,43 @@ def test_a_piece_in_no_term_fails_the_invariant() -> None:
 def test_negative_counts_are_rejected() -> None:
     assert not Inventory(
         submitted_pieces=0, in_corpus=-1, open_register_entries=1).is_consistent()
+
+
+# ── Story 5.6: the identity's third term (FR-25) ──────────────────────────────────────────────
+
+def test_an_overridden_entry_is_a_term_of_the_identity_not_a_line_beside_it() -> None:
+    # a submitted pièce that is neither in the corpus nor an open register entry: the document a
+    # person decided to live without (FR-25). Without the third term this record is "inconsistent"
+    # and `require_consistent` raises on a matter nothing is wrong with.
+    inv = Inventory(
+        submitted_pieces=3, in_corpus=1, open_register_entries=1,
+        overridden_register_entries=1)
+    assert inv.is_consistent()
+    inv.require_consistent()
+
+
+def test_the_denominator_never_shrinks_when_an_entry_is_written_off() -> None:
+    # the alternative that would also have "passed": subtract the override from submitted_pieces.
+    # It is consistent arithmetic and a lie — an *override* would become a way to shrink the
+    # *denominator*, which is the one thing AD-38 exists to prevent.
+    shrunk = Inventory(submitted_pieces=2, in_corpus=1, open_register_entries=1)
+    named = Inventory(
+        submitted_pieces=3, in_corpus=1, open_register_entries=1,
+        overridden_register_entries=1)
+    assert shrunk.is_consistent() and named.is_consistent()
+    assert named.submitted_pieces > shrunk.submitted_pieces   # the same firm, one honest record
+
+
+def test_a_negative_override_count_is_rejected() -> None:
+    assert not Inventory(
+        submitted_pieces=0, in_corpus=1, open_register_entries=0,
+        overridden_register_entries=-1).is_consistent()
+
+
+def test_the_override_count_is_not_a_subset_of_the_open_count() -> None:
+    # unlike unknown_cardinality_entries, it is disjoint from open_register_entries: an entry is
+    # open XOR overridden, never both, so it is summed rather than annotated
+    inv = Inventory(
+        submitted_pieces=2, in_corpus=0, open_register_entries=0,
+        overridden_register_entries=2)
+    assert inv.is_consistent() and inv.unknown_cardinality_entries == 0

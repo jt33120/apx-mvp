@@ -48,6 +48,9 @@ from apx.core.app.label import assign_taxonomy_label, revert_taxonomy_label
 from apx.core.app.line import move_line, place_line, price_line_move
 from apx.core.app.pin import pin_piece, remove_pin
 from apx.core.app.rank import produce_ranking
+from apx.core.app.register_override import (
+    override_register_entry as core_override_register_entry,
+)
 from apx.core.domain.cascade import CascadeUnit, IntrinsicSignal
 from apx.core.domain.config import CascadeConfig
 from apx.core.domain.failures import ErrorClass
@@ -197,13 +200,31 @@ def _units(store: SqlStore, matter: str) -> list[CascadeUnit]:
 
 
 def _seed_failure(store: SqlStore, matter: str) -> None:
-    """A real failure-register entry, so the probe has one to protect (FR-5/FR-21)."""
+    """Real failure-register entries, so the probe has some to protect (FR-5/FR-21).
+
+    Three, because three registered actions act on one each and each consumes it: the retry, and
+    Story 5.6's two override steps (the seam and the route). An override closes an OPEN entry and
+    refuses one that moved, so they cannot share."""
     store.save(
-        IngestionResult(failures=[IngestedFailure(
-            filename="scelle.pdf", submitted_path="/dossier/scelle.pdf", matter=matter,
-            tenant=TENANT, error_class=ErrorClass.PASSWORD_PROTECTED, detail="mot de passe",
-            custodian="Me Martin")]), actor="Me Dupont",
-        scope=WALL, matter=matter, tenant=TENANT)
+        IngestionResult(failures=[
+            IngestedFailure(
+                filename=name, submitted_path=path, matter=matter, tenant=TENANT,
+                error_class=ErrorClass.PASSWORD_PROTECTED, detail="mot de passe",
+                custodian="Me Martin")
+            for name, path in (
+                ("scelle.pdf", "/dossier/scelle.pdf"),
+                ("scelle-2.pdf", "/dossier/scelle-2.pdf"),
+            )
+        ]), actor="Me Dupont", scope=WALL, matter=matter, tenant=TENANT)
+
+
+def _open_entry(store: SqlStore, submitted_path: str) -> str:
+    """The id of the still-OPEN register entry at ``submitted_path`` — resolved at step time, so a
+    step never assumes what an earlier step left behind."""
+    for e in store.register_all(TENANT, {WALL, WALL2}, is_admin=True):
+        if e.submitted_path == submitted_path and e.resolution_state == "open":
+            return e.id
+    raise AssertionError(f"no open register entry at {submitted_path}")
 
 
 def _seed_discards(store: SqlStore, matter: str) -> None:
@@ -353,6 +374,21 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
                 "current_password": "motdepasse", "new_password": "motdepasse2"})
             assert r.status_code == 200, r.text
             _login(client, ADMIN, pw="motdepasse2")  # the change reaps every live session (AD-15)
+
+        def _override_register_seam() -> None:
+            """Story 5.6 — FR-5's other exit through the core/app seam, on its OWN entry."""
+            entry = _open_entry(store, "/dossier/scelle.pdf")
+            core_override_register_entry(
+                store, entry_id=entry, tenant=TENANT, actor="me.durand",
+                reason="scellé jamais ouvert, mot de passe perdu chez le client",
+                scopes={WALL, WALL2}, is_admin=True)
+
+        def _override_register_route() -> None:
+            """The same act over HTTP, on a SECOND entry — an override closes an OPEN entry and
+            never re-closes one that moved, so each step needs its own."""
+            entry = _open_entry(store, "/dossier/scelle-2.pdf")
+            _post(f"/api/register/{entry}/override",
+                  {"reason": "support physique détruit, jamais versé"})
 
         def _clear_truncation() -> None:
             with store._sf() as s, s.begin():   # arrange an active truncation to override
@@ -534,6 +570,8 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             _Step(("change-own-password",), _change_password),
             _Step(("rescope-matter",), lambda: _post(
                 f"/api/admin/matters/{MATTER}/rescope", {"scope": WALL2})),
+            _Step(("register_override.override_register_entry",), _override_register_seam),
+            _Step(("override-register-entry",), _override_register_route),
             _Step(("clear-truncation",), _clear_truncation),
         ]
 

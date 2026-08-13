@@ -224,9 +224,44 @@ class Failure(Base):
     # AD-38: `one` for an ordinary pièce; `unknown` for a `container-unopenable` entry (it stands
     # for an unknown number of pièces and is never summed into a total).
     cardinality: Mapped[str] = mapped_column(String, nullable=False, default="one")
-    resolution_state: Mapped[str] = mapped_column(String, nullable=False)  # open|resolved
+    # open | resolved | overridden (Story 5.6 — AD-37's third exit, taken by a human with a
+    # reason rather than by the document becoming readable)
+    resolution_state: Mapped[str] = mapped_column(String, nullable=False)
     detail: Mapped[str | None] = mapped_column(EncryptedText("failure.detail"), nullable=True)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class RegisterOverride(Base):
+    """One *failure register* override (Story 5.6, FR-25 / FR-5 / AD-37): a human took an entry out
+    of ``open`` although the document never entered the *corpus*, and said in one line why.
+
+    **Append-only, and separate from ``failure`` on purpose.** ``failure`` is a mutable row — its
+    ``error_class``, ``cardinality`` and ``detail`` are refreshed by every retry. A reason parked
+    there could be edited afterwards while the copy chained into the *audit record* stayed as
+    written, and the surface would show the editable one. Here nothing is ever updated: the row is
+    the act, and the act happened once.
+
+    The *audit record* still holds the reason verbatim (FR-25 requires it *there*); this table is
+    what lets the register surface answer "why is this closed?" without reading the whole chain.
+    Both copies are written in the same transaction, so they cannot diverge at birth, and neither
+    is ever rewritten, so they cannot diverge later."""
+
+    __tablename__ = "register_override"
+    __table_args__ = (
+        Index("ix_register_override_entry", "tenant", "entry_id"),
+    )
+
+    # sha256(tenant \0 entry_id \0 at) — deterministic, so a retried transaction cannot produce two
+    # rows for one act; a ciphertext column can't be a PK.
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    # the failure-register entry this override closed (Failure.id — an identity hash). No cascade
+    # FK (AD-7): nothing here is deleted when anything else is.
+    entry_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # the actor (PII) and the mandatory one-line reason (content) → application-encrypted (AD-31)
+    actor: Mapped[str] = mapped_column(EncryptedText("register_override.actor"), nullable=False)
+    reason: Mapped[str] = mapped_column(EncryptedText("register_override.reason"), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class NoiseExclusion(Base):

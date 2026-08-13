@@ -121,6 +121,12 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     # Story 4.11 — the pin ledger. ``action`` is a categorical enum (retain | discard | removed),
     # like ``band``/``source``. (The override ``reason`` and the actor ``set_by`` are encrypted.)
     ("PinEntry", "action"),
+    # Story 5.6 — the register-override ledger. ``entry_id`` is a *failure register* entry's
+    # identity hash, the same kind of value as the globally-allowed ``piece_id``/``chunk_id``, and
+    # it is the lookup key for "why is this entry closed?". Encrypting it would make the ledger
+    # unjoinable to the register it explains while protecting a hash of a path that is itself
+    # already encrypted one table over. (The actor and the mandatory ``reason`` are EncryptedText.)
+    ("RegisterOverride", "entry_id"),
     # Story 4.6 — the per-pièce justification. ``basis_kind`` is a categorical enum
     # (case-theory | intrinsic, like ``ranking_version.basis``); ``intrinsic_signals`` is a
     # comma-joined categorical list (the named FR-38 signals, like ``confidence_signals``);

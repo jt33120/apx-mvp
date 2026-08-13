@@ -20,8 +20,8 @@ def pin_piece(
     reason: str, scopes: set[str], expected_seq: int | None = None,
 ) -> int:
     """Pin a *pièce* into or out of the *retained set* through the recorder port (FR-43). Returns
-    the new ledger ``seq``. Raises ``MissingPinReason`` (a blank reason, FR-25), ``StalePin`` (moved
-    ``expected_seq``), or a scope error — the recorder owns validation, the monotonic seq, the
+    the new ledger ``seq``. Raises ``MissingOverrideReason`` (a blank reason, FR-25), ``StalePin``
+    (a moved ``expected_seq``), or a scope error — the recorder owns validation, the monotonic seq,
     conditional commit and the atomic *override* audit; this seam keeps the caller off the adapter
     (AD-4)."""
     return recorder.pin_piece(

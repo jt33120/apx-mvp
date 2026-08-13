@@ -39,6 +39,13 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
+from apx.core.domain.override import (
+    GROUND_CONTRADICTS_MACHINE,
+    GROUND_GUARD_BYPASS,
+    GROUND_REGISTER_EXIT,
+    check_ground,
+)
+
 # ── the chain identity (AD-43) ────────────────────────────────────────────────────────────────
 
 #: The ``chain_scope`` of the matterless per-*tenant* chain. Empty rather than ``None`` so the
@@ -159,7 +166,6 @@ CLASS_SECURITY_EVENT = "security_event"
 PENDING_CLASSES: dict[str, str] = {
     CLASS_VALIDATION: "5.8",     # the validation act
     CLASS_VALUE_ACCEPTED: "5.8",  # "accepted as-is" exists only where a validation act occurred
-    CLASS_OVERRIDE: "5.6",       # the override classification and its mandatory reason
 }
 
 
@@ -168,20 +174,33 @@ PENDING_CLASSES: dict[str, str] = {
 @dataclass(frozen=True)
 class RecordableAct:
     """One catalogued act: the verb stored on the entry, the FR-24 class it discharges, the chain
-    it belongs on, and whether a person or a system component performs it."""
+    it belongs on, whether a person or a system component performs it, and — when FR-25 applies —
+    **which of its three grounds** makes the act an *override*.
+
+    The override is a SECOND axis, not a class. An act has exactly one FR-24 class, and a *pin* is
+    a pin (FR-24 enumerates "every *pin*") **and** an override (FR-25: it contradicts a ranked
+    order the tool produced with a stated confidence). Folding the two together forces a choice
+    between discharging one requirement and discharging the other, and the count that follows from
+    the class — "this matter has 0 overrides" on a matter with forty pins — is wrong in the
+    flattering direction, which is the direction that does not get reported."""
 
     verb: str
     act_class: str
     chain: str          # CHAIN_MATTER | CHAIN_TENANT
     system: bool = False  # True when only a system component performs it
+    override: str | None = None  # an FR-25 ground, or None when the act is not an override
 
     def __post_init__(self) -> None:
         if self.chain not in (CHAIN_MATTER, CHAIN_TENANT):
             raise ValueError(f"unknown chain kind: {self.chain!r}")
+        if self.override is not None:
+            check_ground(self.override)  # UnknownOverrideGround on a fourth ground
 
 
-def _act(verb: str, act_class: str, chain: str, *, system: bool = False) -> RecordableAct:
-    return RecordableAct(verb, act_class, chain, system)
+def _act(
+    verb: str, act_class: str, chain: str, *, system: bool = False, override: str | None = None,
+) -> RecordableAct:
+    return RecordableAct(verb, act_class, chain, system, override)
 
 
 # The chain's own lifecycle (AD-43 / D4).
@@ -192,6 +211,8 @@ ACT_INGEST = "ingest"
 ACT_RETRY = "retry"
 ACT_BULK_RETRY = "bulk-retry"
 ACT_EXPORT_REGISTER = "export-register"
+# An entry leaves `open` without the document ever entering the corpus (FR-5 / FR-25, Story 5.6).
+ACT_REGISTER_OVERRIDE = "register_override"
 
 # The judgment cascade and the per-*pièce* record (FR-24 value_modified).
 ACT_JUDGE = "judge"
@@ -255,6 +276,13 @@ _CATALOGUE: tuple[RecordableAct, ...] = (
     # would make the same verb land in two places by a rule no reader of the export could see.
     _act(ACT_BULK_RETRY, CLASS_IMPORT_JOB, CHAIN_TENANT),
     _act(ACT_EXPORT_REGISTER, CLASS_IMPORT_JOB, CHAIN_TENANT),
+    # On the TENANT chain for the reason above and one more: a register entry's *matter* may be
+    # UNDETERMINED (the column is nullable, and such an entry is admin-only, FR-49). Filing the
+    # ones that have a matter on the matter chain and the ones that do not on the tenant chain
+    # would put one verb in two places by a rule no reader of the export could see. The `matter`
+    # column still records what the act was about, and a matter's trail read returns tenant-chain
+    # entries naming it, so the override is counted where the lawyer looks for it.
+    _act(ACT_REGISTER_OVERRIDE, CLASS_OVERRIDE, CHAIN_TENANT, override=GROUND_REGISTER_EXIT),
 
     _act(ACT_JUDGE, CLASS_VALUE_MODIFIED, CHAIN_MATTER),
     _act(ACT_PIECE_LABELLED, CLASS_VALUE_MODIFIED, CHAIN_MATTER),
@@ -269,7 +297,12 @@ _CATALOGUE: tuple[RecordableAct, ...] = (
 
     _act(ACT_LINE_PLACED, CLASS_LINE_POSITION, CHAIN_MATTER),
     _act(ACT_LINE_MOVED, CLASS_LINE_POSITION, CHAIN_MATTER),
-    _act(ACT_PIN_OVERRIDE, CLASS_PIN, CHAIN_MATTER),
+    # A pin keeps CLASS_PIN — FR-24 enumerates "every *pin*" — and carries the override ground
+    # beside it (FR-25): it moves one *pièce* against a ranked order the tool published with a
+    # confidence. Two requirements, one act, two axes.
+    _act(ACT_PIN_OVERRIDE, CLASS_PIN, CHAIN_MATTER, override=GROUND_CONTRADICTS_MACHINE),
+    # Removing a pin LIFTS a contradiction rather than making one, so it is not an override and
+    # costs no reason (Story 4.11's own reading, kept).
     _act(ACT_PIN_REMOVED, CLASS_PIN, CHAIN_MATTER),
 
     _act(ACT_SAMPLING_RUN_START, CLASS_SAMPLING_RUN, CHAIN_MATTER),
@@ -293,7 +326,11 @@ _CATALOGUE: tuple[RecordableAct, ...] = (
     _act(ACT_GRANT_ADMIN, CLASS_SCOPE_GRANT, CHAIN_TENANT),
     _act(ACT_REVOKE_ADMIN, CLASS_SCOPE_GRANT, CHAIN_TENANT),
     _act(ACT_KEY_ROTATED, CLASS_CONFIG_CHANGE, CHAIN_TENANT),
-    _act(ACT_TRUNCATION_OVERRIDE, CLASS_CONFIG_CHANGE, CHAIN_TENANT),
+    # Filed under CLASS_CONFIG_CHANGE until Story 5.6, for want of a live class rather than because
+    # it is one: clearing the marker that names an incomplete record on every export changes no
+    # configuration, it takes a guard out of the way. The class is read from the catalogue at read
+    # time and never persisted on the row, so moving it orphans nothing already written.
+    _act(ACT_TRUNCATION_OVERRIDE, CLASS_OVERRIDE, CHAIN_TENANT, override=GROUND_GUARD_BYPASS),
 
     _act(ACT_LOGIN_FAILED, CLASS_SECURITY_EVENT, CHAIN_TENANT, system=True),
     _act(ACT_LOGIN_LOCKED_OUT, CLASS_SECURITY_EVENT, CHAIN_TENANT, system=True),
@@ -324,6 +361,31 @@ def covered_classes() -> frozenset[str]:
 
 def verbs_for(act_class: str) -> tuple[str, ...]:
     return tuple(a.verb for a in _CATALOGUE if a.act_class == act_class)
+
+
+# ── the override axis (FR-25) ─────────────────────────────────────────────────────────────────
+
+def is_override(verb: str) -> bool:
+    """Whether this verb records an *override* (FR-25). **This is the only correct way to count
+    overrides.** Counting ``act_class == CLASS_OVERRIDE`` instead reports zero on a matter with
+    forty pins, because a pin's class is CLASS_PIN — the count would be over a set that is not the
+    set being counted, and it would look right on every matter that has never pinned anything.
+
+    An uncatalogued verb is not an override; it is refused at the write (:func:`act`), and this
+    predicate stays total so a read over historical rows can never raise."""
+    found = ACTS.get(verb)
+    return found is not None and found.override is not None
+
+
+def override_ground(verb: str) -> str | None:
+    """Which of FR-25's three grounds makes this verb an *override*, or ``None``."""
+    found = ACTS.get(verb)
+    return found.override if found is not None else None
+
+
+def override_verbs() -> tuple[str, ...]:
+    """Every catalogued verb that records an *override*, in catalogue order."""
+    return tuple(a.verb for a in _CATALOGUE if a.override is not None)
 
 
 # ── the chained content (FR-53) ───────────────────────────────────────────────────────────────
