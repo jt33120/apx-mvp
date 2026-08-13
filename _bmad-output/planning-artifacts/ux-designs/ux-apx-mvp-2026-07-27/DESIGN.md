@@ -1,6 +1,6 @@
 ---
 name: APX
-description: The visual identity of a law-firm instrument for mass-document triage — navy ink, one restrained gold, warm paper. Ratified from apx/web/src/tokens.css (AD-29); this is the source of truth for how APX looks, product-wide. Extended 2026-07-30 with the Epic-3 truth-status vocabulary (Story 3.4) and the pièce-viewer vocabulary (Story 3.5); extended 2026-08-05 with the Epic-4 triage-surface vocabulary (Stories 4.6–4.11); extended 2026-08-13 with the Epic-5 audit-drawer and export vocabulary (Story 5.7).
+description: The visual identity of a law-firm instrument for mass-document triage — navy ink, one restrained gold, warm paper. Ratified from apx/web/src/tokens.css (AD-29); this is the source of truth for how APX looks, product-wide. Extended 2026-07-30 with the Epic-3 truth-status vocabulary (Story 3.4) and the pièce-viewer vocabulary (Story 3.5); extended 2026-08-05 with the Epic-4 triage-surface vocabulary (Stories 4.6–4.11); extended 2026-08-13 with the Epic-5 audit-drawer and export vocabulary (Story 5.7) and the validation-act vocabulary (Story 5.8).
 status: final
 updated: 2026-08-13
 sources:
@@ -278,6 +278,32 @@ components:
     background: '{colors.review-bg}'
     border: '1px solid {colors.review}'
     radius: '{rounded.sm}'
+  validation-act:
+    note: 'Epic 5 (Story 5.8, FR-45). The validation control on all three surfaces — table row, viewer, drawer band 4. Its own text IS the full assertion, « J''ai lu cette pièce et j''accepte l''appréciation de l''outil », followed by the ranking version it accepts (AD-23). NEVER a button labelled « Valider » with the sentence relegated to a tooltip or a follow-up dialog: the record will say a lawyer asserted this, and a control she can press without reading it writes a claim she never made in the words that were recorded. The accessible name is the whole sentence.'
+    sentence: '{typography.body}'
+    version-ref: '{typography.hint}'
+    border: '1px solid {colors.ink}'
+    radius: '{rounded.sm}'
+  validation-provenance:
+    note: 'Epic 5 (Story 5.8, FR-45/FR-44). The consequence line directly beneath the act, stating BEFORE the click what the entry will say: « Vous avez ouvert cette pièce le 13 août à 14 h 32 — inscrite comme lue » (kept) or « …sera inscrite comme acceptée depuis la liste, non comme lue » (review). Second person and a DATE, never « la pièce a été ouverte » and never a bare tick — the fact recorded is about the acting lawyer, and another lawyer''s open is not her reading. Neither state blocks the act; the friction is one sentence naming the consequence, which costs nothing to the lawyer who actually read the document. Rendered as aria-describedby on the control, never as a separate region.'
+    read: { color: '{colors.kept}', background: '{colors.kept-bg}' }
+    from-list: { color: '{colors.review}', background: '{colors.review-bg}' }
+    text: '{typography.hint}'
+    radius: '{rounded.sm}'
+  bulk-validation-confirm:
+    note: 'Epic 5 (Story 5.8, FR-45). The modal confirming a bulk validation. States the COUNT AND THE SPLIT — « Vous en avez ouvert 12. Les 168 autres seront inscrites comme acceptées depuis la liste » — plus the per-pièce entry, the batch size and its identifier. A confirmation naming only the total is friction without information: it obtains consent while telling her nothing she did not know. The confirming verb NAMES THE COUNT (« Valider les 180 pièces »), never « Confirmer » or « OK », and is NOT the initially-focused element — the keyboard''s default gesture must not be to accept 180 documents.'
+    surface: '{colors.surface}'
+    border: '1px solid {colors.review}'
+    radius: '{rounded.DEFAULT}'
+    count: '{typography.numeral-row}'
+    verb: '{components.button-primary}'
+  validation-badge:
+    note: 'Epic 5 (Story 5.8, FR-45). The state afterwards, carrying FOUR facts and never one tick: who, when, lue / depuis la liste, and the ranking version accepted. Dropping the third would launder acceptances into readings at the last surface before the court; dropping the fourth would keep a green check over values a re-rank replaced. Bulk stays visible after the fact (« depuis la liste · lot de 180 »). A never-validated pièce carries NO badge — never « non validée ». Stale (the version moved) and from-the-list both render review, read renders kept, withdrawn renders neutral with both dates.'
+    read: { color: '{colors.kept}', background: '{colors.kept-bg}' }
+    from-list: { color: '{colors.review}', background: '{colors.review-bg}' }
+    withdrawn: { color: '{colors.ink-3}', background: '{colors.surface-2}' }
+    text: '{typography.hint}'
+    radius: '{rounded.full}'
   pending-section:
     note: 'Epic 5 (Story 5.7). A section of the export whose ACT does not exist yet — the validation acts and the accepted-as-is half of the breakdown, both Story 5.8''s. It prints its heading and one explicit sentence naming the act as not yet implemented. NEVER an empty table and NEVER a zero: a zero reads as "nobody validated anything", which is a finding about the firm rather than about the build. The project''s standing rule — asserted with something behind it, or pending with the story that owns it, never faked in between — rendered.'
     color: '{colors.ink-3}'
@@ -648,3 +674,18 @@ what it is and would poison the one artefact a *bâtonnier* is meant to be able 
 - (Epic 5) Don't state one continuity verdict over a document spanning two chains. Say which chain
   a holder of **this document alone** can recompute (AD-43); one boolean would claim a property of
   bytes the reader does not hold.
+- (Epic 5) Don't label the validation control « Valider » or « Marquer comme lu ». Its text **is**
+  the assertion the record will attribute to her, in full. A verb she can press without reading it
+  writes a claim she never made in the words that were recorded (FR-45).
+- (Epic 5) Don't let a selection checkbox validate, and don't add a « lu » checkbox column. A
+  checkbox is state; a validation act is an assertion by a person, and a column of them is one
+  select-all away from the failure the whole trust architecture exists to prevent.
+- (Epic 5) Don't render a validation badge as a bare ✓. Without **lue / depuis la liste** it
+  launders acceptances into readings at the last surface before the court; without the ranking
+  version it keeps a green check over values a re-rank has replaced (FR-45, AD-23).
+- (Epic 5) Don't confirm a bulk validation with the total alone. The **split** — how many she
+  opened, how many she did not — is the information; a count-only dialog is friction that obtains
+  consent while telling her nothing.
+- (Epic 5) Don't let time, scrolling, dwell or presence produce acceptance, in any wording
+  (« lu automatiquement », « consulté », « vu »). FR-45 forbids it by name, and it is the single
+  most tempting affordance in the Epic-5 surface.

@@ -1,0 +1,383 @@
+<title>APX — Maquette Epic 5 (l'acte de validation)</title>
+<style>
+  /* ============================================================================
+     APX design tokens — lifted verbatim from apx/web/src/tokens.css (AD-29),
+     extended 2026-08-13 with the Epic-5 validation-act vocabulary (Story 5.8).
+     Faithful, offline, self-contained. Forces the warm-paper light world.
+     ============================================================================ */
+  :root {
+    color-scheme: light;
+    --apx-ink: #0b1f3a; --apx-ink-2: #33425a; --apx-ink-3: #5b6678;
+    --apx-paper: #f7f4ee; --apx-surface: #ffffff; --apx-surface-2: #fbf9f5;
+    --apx-line: #e6e0d5; --apx-line-2: #efeae0;
+    --apx-gold: #9a7a34; --apx-gold-2: #b8944a; --apx-muted: #6b7280;
+    --apx-kept: #2f6f4f; --apx-kept-bg: #e8f1eb;
+    --apx-review: #9a5a12; --apx-review-bg: #f6ecdd;
+    --apx-discard: #6f6858; --apx-discard-bg: #eeece5;
+    --apx-danger: #a3161c; --apx-danger-bg: #fbeceb;
+    --apx-serif: "Iowan Old Style", "Palatino Linotype", Palatino, "Book Antiqua", Georgia, serif;
+    --apx-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --apx-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+    --apx-radius: 12px; --apx-radius-sm: 8px;
+    --apx-ring: 0 0 0 3px rgba(154,122,52,.28);
+    --apx-shadow: 0 1px 2px rgba(11,31,58,.05), 0 12px 30px rgba(11,31,58,.08);
+    --apx-shadow-sm: 0 1px 2px rgba(11,31,58,.06);
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0;
+    background: radial-gradient(1200px 480px at 50% -8%, rgba(154,122,52,.06), transparent 60%), var(--apx-paper);
+    color: var(--apx-ink); font-family: var(--apx-sans); line-height: 1.55;
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; }
+  h1,h2,h3 { font-family: var(--apx-serif); color: var(--apx-ink); font-weight: 600; letter-spacing: .01em; text-wrap: balance; }
+  h1 { font-size: 1.5rem; margin: 0 0 .25rem; }
+  h2 { font-size: 1.2rem; margin: 0 0 .5rem; }
+  h3 { font-size: 1rem; margin: 0 0 .35rem; }
+  button { font: inherit; cursor: pointer; }
+  :focus-visible { outline: none; box-shadow: var(--apx-ring); border-radius: var(--apx-radius-sm); }
+
+  /* ---- meta chrome for the mock itself (not part of the product) ---- */
+  .mock-bar { position: sticky; top: 0; z-index: 20; display: flex; gap: .5rem; align-items: center;
+    flex-wrap: wrap; padding: .6rem 1rem; background: #101f37; color: #e9e3d5; border-bottom: 3px solid var(--apx-gold); }
+  .mock-bar b { font-family: var(--apx-serif); letter-spacing: .04em; }
+  .mock-bar b i { color: var(--apx-gold-2); font-style: normal; }
+  .mock-tabs { display: flex; gap: .25rem; margin-left: auto; flex-wrap: wrap; }
+  .mock-tabs button { background: transparent; color: #cfc8b8; border: 1px solid #2a3a54; border-radius: 999px;
+    padding: .25rem .8rem; font-size: .82rem; }
+  .mock-tabs button[aria-selected="true"] { background: var(--apx-gold); color: #10203a; border-color: var(--apx-gold); font-weight: 600; }
+  .mock-note { max-width: 74rem; margin: .9rem auto -.2rem; padding: 0 1.25rem; color: var(--apx-ink-3); font-size: .82rem; }
+  .mock-note code { font-family: var(--apx-mono); font-size: .92em; }
+  .screen[hidden] { display: none; }
+
+  /* ---- product shell ---- */
+  .apx-shell { max-width: 74rem; margin: 0 auto; padding: 1.4rem 1.25rem 4rem; }
+  .apx-eyebrow { font-size: .72rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; color: var(--apx-ink-3); }
+  .apx-hint { font-size: .88rem; color: var(--apx-muted); }
+  .apx-mono { font-family: var(--apx-mono); font-size: .8rem; color: var(--apx-ink-3); }
+  .apx-card { background: var(--apx-surface); border: 1px solid var(--apx-line); border-radius: var(--apx-radius); box-shadow: var(--apx-shadow-sm); }
+  .num { font-family: var(--apx-serif); font-variant-numeric: tabular-nums; }
+
+  /* ---- {components.validation-act} — the sentence IS the control ---- */
+  .val-act { display: block; width: 100%; text-align: left; background: var(--apx-surface);
+    border: 1px solid var(--apx-ink); border-radius: var(--apx-radius-sm); padding: .7rem .9rem; color: var(--apx-ink); }
+  .val-act:hover { background: var(--apx-surface-2); }
+  .val-act .sentence { font-size: 1rem; }
+  .val-act .version-ref { display: block; font-size: .88rem; color: var(--apx-muted); margin-top: .15rem; }
+
+  /* ---- {components.validation-provenance} — the consequence, BEFORE the act ---- */
+  .val-prov { margin-top: .5rem; padding: .55rem .8rem; border-radius: var(--apx-radius-sm); font-size: .88rem; }
+  .val-prov b { font-weight: 700; }
+  .val-prov.read { color: var(--apx-kept); background: var(--apx-kept-bg); border: 1px solid rgba(47,111,79,.32); }
+  .val-prov.from-list { color: var(--apx-review); background: var(--apx-review-bg); border: 1px solid rgba(154,90,18,.32); }
+
+  /* ---- {components.validation-badge} — four facts, never one tick ---- */
+  .val-badge { display: inline-flex; align-items: center; gap: .4rem; border-radius: 999px;
+    padding: .15rem .7rem; font-size: .82rem; white-space: nowrap; }
+  .val-badge.read { color: var(--apx-kept); background: var(--apx-kept-bg); }
+  .val-badge.from-list { color: var(--apx-review); background: var(--apx-review-bg); }
+  .val-badge.withdrawn { color: var(--apx-ink-3); background: var(--apx-surface-2); border: 1px solid var(--apx-line); }
+
+  /* ---- table ---- */
+  table { border-collapse: collapse; width: 100%; }
+  th { text-align: left; font-size: .72rem; font-weight: 600; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--apx-ink-3); padding: .5rem .7rem; border-bottom: 1px solid var(--apx-line); }
+  td { padding: .6rem .7rem; border-bottom: 1px solid var(--apx-line-2); vertical-align: top; font-size: .92rem; }
+  td.rank { font-family: var(--apx-serif); font-variant-numeric: tabular-nums; color: var(--apx-ink-3); }
+  tr.selected { background: rgba(154,122,52,.06); }
+
+  /* ---- the selection bar ---- */
+  .sel-bar { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; padding: .7rem .9rem;
+    background: var(--apx-surface-2); border: 1px solid var(--apx-line); border-radius: var(--apx-radius); margin-bottom: .8rem; }
+  .sel-bar .count { font-family: var(--apx-serif); font-variant-numeric: tabular-nums; font-size: 1.15rem; }
+  .btn { border-radius: var(--apx-radius-sm); padding: .45rem .9rem; font-size: .9rem; }
+  .btn-primary { background: var(--apx-ink); color: #fff; border: 1px solid var(--apx-ink); }
+  .btn-ghost { background: transparent; color: var(--apx-ink); border: 1px solid var(--apx-line); }
+
+  /* ---- {components.bulk-validation-confirm} ---- */
+  .scrim { background: rgba(11,31,58,.34); padding: 2.5rem 1rem; border-radius: var(--apx-radius); }
+  .confirm { max-width: 34rem; margin: 0 auto; background: var(--apx-surface);
+    border: 1px solid var(--apx-review); border-radius: var(--apx-radius); box-shadow: var(--apx-shadow); padding: 1.4rem 1.5rem; }
+  .confirm h2 { margin-bottom: .8rem; }
+  .confirm p { margin: .6rem 0; }
+  .confirm .split { background: var(--apx-review-bg); border: 1px solid rgba(154,90,18,.32);
+    border-radius: var(--apx-radius-sm); padding: .8rem .9rem; color: var(--apx-review); }
+  .confirm .actions { display: flex; gap: .6rem; justify-content: flex-end; margin-top: 1.2rem; }
+
+  .sect { padding: 1.1rem 1.25rem; border-bottom: 1px solid var(--apx-line-2); }
+  .sect:last-child { border-bottom: 0; }
+  .row2 { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  @media (max-width: 800px) { .row2 { grid-template-columns: 1fr; } }
+  .anti { border-left: 3px solid var(--apx-danger); background: var(--apx-danger-bg); padding: .7rem .9rem;
+    border-radius: 0 var(--apx-radius-sm) var(--apx-radius-sm) 0; font-size: .88rem; }
+  .anti b { color: var(--apx-danger); }
+</style>
+
+<div class="mock-bar">
+  <b>APX <i>·</i> Epic 5 — l'acte de validation</b>
+  <span style="font-size:.78rem;opacity:.72">Story 5.8 · FR-45 / FR-44</span>
+  <div class="mock-tabs" role="tablist">
+    <button data-s="one" aria-selected="true">1 · L'acte, une pièce</button>
+    <button data-s="bulk" aria-selected="false">2 · Le lot, et sa confirmation</button>
+    <button data-s="after" aria-selected="false">3 · L'état ensuite</button>
+    <button data-s="record" aria-selected="false">4 · Le dossier exporté, § 7</button>
+  </div>
+</div>
+
+<!-- ═══════════════════════ 1 — the act on one pièce ═══════════════════════ -->
+<section class="screen" id="s-one">
+  <p class="mock-note">
+    <code>{components.validation-act}</code> + <code>{components.validation-provenance}</code>. La phrase
+    <b>est</b> le contrôle. La ligne en dessous dit ce que le journal <b>dira</b>, avant le clic — et
+    ni l'un ni l'autre des deux états ne bloque l'acte.
+  </p>
+  <div class="apx-shell">
+    <div class="row2">
+
+      <div class="apx-card">
+        <div class="sect">
+          <span class="apx-eyebrow">Tiroir d'audit · bande 4 — ce que vous pouvez faire</span>
+          <h2>Bail commercial — 12 rue de la Paix.pdf</h2>
+          <p class="apx-hint" style="margin:.2rem 0 1rem">Elle a ouvert la pièce dans la visionneuse.</p>
+
+          <button class="val-act">
+            <span class="sentence">J'ai lu cette pièce et j'accepte l'appréciation de l'outil.</span>
+            <span class="version-ref">Appréciation du classement v3 — retenue, confiance élevée.</span>
+          </button>
+          <div class="val-prov read">
+            Vous avez ouvert cette pièce le <b>13 août à 14 h 32</b>. Cette validation sera inscrite
+            comme <b>lue</b>.
+          </div>
+
+          <p class="apx-hint" style="margin-top:1rem">
+            <span class="apx-eyebrow">Sera inscrit au journal</span><br>
+            <code class="apx-mono">validation_act</code> · chaîne du dossier · Me Durand ·
+            classement v3 · ouverte&nbsp;: oui
+          </p>
+        </div>
+      </div>
+
+      <div class="apx-card">
+        <div class="sect">
+          <span class="apx-eyebrow">Table de triage · ligne 47</span>
+          <h2>Relevé bancaire — mars 2024.pdf</h2>
+          <p class="apx-hint" style="margin:.2rem 0 1rem">Elle ne l'a pas ouverte. L'acte reste offert.</p>
+
+          <button class="val-act">
+            <span class="sentence">J'ai lu cette pièce et j'accepte l'appréciation de l'outil.</span>
+            <span class="version-ref">Appréciation du classement v3 — retenue, confiance moyenne.</span>
+          </button>
+          <div class="val-prov from-list">
+            Vous n'avez pas ouvert cette pièce. Cette validation sera inscrite comme
+            <b>acceptée depuis la liste</b>, non comme lue.
+          </div>
+
+          <p class="apx-hint" style="margin-top:1rem">
+            Rien n'est refusé. Ce qui est refusé, c'est de le faire <b>sans savoir</b> ce que le
+            journal en dira.
+          </p>
+        </div>
+      </div>
+
+    </div>
+
+    <div class="apx-card" style="margin-top:1rem">
+      <div class="sect">
+        <div class="anti">
+          <b>Jamais :</b> un contrôle intitulé « Valider », une case à cocher « lu », ni une validation
+          produite par le temps passé, le défilement ou une visite d'écran. Le journal dira qu'une
+          avocate a <i>affirmé</i> avoir lu — un verbe qu'elle peut presser sans le lire inscrirait
+          une affirmation qu'elle n'a jamais faite dans les termes consignés.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 2 — the bulk path ═══════════════════════ -->
+<section class="screen" id="s-bulk" hidden>
+  <p class="mock-note">
+    <code>{components.bulk-validation-confirm}</code>. Le lot est <b>permis</b> — l'interdire produit un
+    contournement, pas de la conformité. Il est rendu <b>impossible à dissimuler</b>&nbsp;: la
+    confirmation nomme le compte <b>et la répartition</b>.
+  </p>
+  <div class="apx-shell">
+
+    <div class="sel-bar">
+      <span class="count">180</span>
+      <span>pièces sélectionnées · classement v3</span>
+      <span style="flex:1"></span>
+      <button class="btn btn-ghost">Reclasser…</button>
+      <button class="btn btn-ghost">Valider les 180 pièces…</button>
+    </div>
+
+    <div class="apx-card" style="margin-bottom:1.2rem">
+      <table>
+        <thead><tr><th style="width:2.5rem"></th><th style="width:4rem">Rang</th><th>Pièce</th><th style="width:11rem">Ouverte par vous</th></tr></thead>
+        <tbody>
+          <tr class="selected"><td><input type="checkbox" checked></td><td class="rank">1</td><td>Bail commercial — 12 rue de la Paix.pdf</td><td class="apx-hint">13 août, 14 h 32</td></tr>
+          <tr class="selected"><td><input type="checkbox" checked></td><td class="rank">2</td><td>Avenant n° 2 au bail.pdf</td><td class="apx-hint">13 août, 15 h 04</td></tr>
+          <tr class="selected"><td><input type="checkbox" checked></td><td class="rank">3</td><td>Relevé bancaire — mars 2024.pdf</td><td class="apx-hint">—</td></tr>
+          <tr class="selected"><td><input type="checkbox" checked></td><td class="rank">4</td><td>Courriel — objet : loyers impayés.msg</td><td class="apx-hint">—</td></tr>
+          <tr><td colspan="4" class="apx-hint" style="text-align:center">… 176 autres lignes sélectionnées …</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="scrim">
+      <div class="confirm" role="dialog" aria-modal="true" aria-labelledby="bulk-h">
+        <span class="apx-eyebrow">Confirmation</span>
+        <h2 id="bulk-h">Valider <span class="num">180</span> pièces</h2>
+
+        <p>
+          Vous êtes sur le point de déclarer avoir lu <b>180 pièces</b> et d'accepter l'appréciation
+          de l'outil pour chacune, sur le <b>classement v3</b>.
+        </p>
+
+        <div class="split">
+          Vous en avez ouvert <b class="num">12</b>. Les <b class="num">168</b> autres seront inscrites
+          comme <b>acceptées depuis la liste</b>, jamais comme lues.
+        </div>
+
+        <p class="apx-hint">
+          Chaque pièce recevra sa propre entrée au journal, portant la taille du lot et son
+          identifiant. Un lecteur du dossier exporté pourra toujours distinguer 12 lectures de
+          168 acceptations.
+        </p>
+
+        <div class="actions">
+          <button class="btn btn-ghost" autofocus>Annuler</button>
+          <button class="btn btn-primary">Valider les 180 pièces</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="apx-card" style="margin-top:1.2rem">
+      <div class="sect">
+        <div class="anti">
+          <b>Jamais :</b> « Valider 180 pièces ? » seul. Une confirmation qui ne nomme que le total
+          obtient le consentement en n'apprenant rien à l'avocate — de la friction sans information.
+          Le verbe nomme le compte, et il n'a <b>pas</b> le focus initial&nbsp;: le geste par défaut du
+          clavier ne peut pas être d'accepter 180 documents.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 3 — the state afterwards ═══════════════════════ -->
+<section class="screen" id="s-after" hidden>
+  <p class="mock-note">
+    <code>{components.validation-badge}</code>. Quatre faits, jamais une coche&nbsp;: qui, quand,
+    <b>lue / depuis la liste</b>, et le classement accepté.
+  </p>
+  <div class="apx-shell">
+    <div class="apx-card">
+      <table>
+        <thead><tr><th style="width:4rem">Rang</th><th>Pièce</th><th style="width:26rem">Validation</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="rank">1</td><td>Bail commercial — 12 rue de la Paix.pdf</td>
+            <td><span class="val-badge read">✓ Validée · Me Durand · 13 août 14 h 36 · <b>lue</b> · classement v3</span></td>
+          </tr>
+          <tr>
+            <td class="rank">3</td><td>Relevé bancaire — mars 2024.pdf</td>
+            <td><span class="val-badge from-list">✓ Validée · Me Durand · 16 août 09 h 12 · <b>depuis la liste</b> · lot de 180 · classement v3</span></td>
+          </tr>
+          <tr>
+            <td class="rank">7</td><td>Attestation de l'expert-comptable.pdf</td>
+            <td>
+              <span class="val-badge from-list">✓ Validée sur le <b>classement v3</b> — le classement actuel est <b>v4</b></span>
+              <div class="apx-hint" style="margin-top:.3rem">Rien n'est effacé, rien n'est invalidé. L'acceptation portait sur une appréciation qui n'est plus celle affichée.</div>
+            </td>
+          </tr>
+          <tr>
+            <td class="rank">12</td><td>Courriel — objet : loyers impayés.msg</td>
+            <td>
+              <span class="val-badge withdrawn">Validée le 14 août · <b>retirée</b> le 18 août · Me Durand</span>
+              <div class="apx-hint" style="margin-top:.3rem">Le retrait est une nouvelle entrée. Les deux restent lisibles.</div>
+            </td>
+          </tr>
+          <tr>
+            <td class="rank">18</td><td>Plan de masse — annexe 4.pdf</td>
+            <td class="apx-hint">— <span style="font-style:italic">(aucun badge : jamais validée n'est pas un état à afficher)</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="apx-card" style="margin-top:1rem">
+      <div class="sect">
+        <div class="anti">
+          <b>Jamais :</b> une coche verte nue. Sans <b>lue / depuis la liste</b>, 168 acceptations
+          deviennent 168 lectures sur la dernière surface avant le tribunal. Sans le classement, la
+          coche survit à une reclassification qui a remplacé les valeurs acceptées.
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ═══════════════════════ 4 — §7 of the exported record ═══════════════════════ -->
+<section class="screen" id="s-record" hidden>
+  <p class="mock-note">
+    La § 7 du dossier exporté. Jusqu'à cette story elle imprimait une phrase disant que l'acte
+    n'existait pas. Elle imprime désormais des <b>chiffres</b> — et un <b>0</b> y signifie enfin ce
+    qu'un lecteur y lirait.
+  </p>
+  <div class="apx-shell" style="max-width:52rem">
+    <div class="apx-card">
+
+      <div class="sect">
+        <span class="apx-eyebrow">§ 7</span>
+        <h2>Les actes de validation</h2>
+        <table>
+          <tbody>
+            <tr><td>Pièces retenues</td><td class="num" style="text-align:right;width:6rem">180</td></tr>
+            <tr><td><b>Validées après lecture</b> — la pièce a été ouverte dans la visionneuse avant l'acte</td><td class="num" style="text-align:right;color:var(--apx-kept)">12</td></tr>
+            <tr><td><b>Acceptées depuis la liste</b> — la pièce n'a pas été ouverte</td><td class="num" style="text-align:right;color:var(--apx-review)">168</td></tr>
+            <tr><td class="apx-hint" style="padding-left:1.6rem">dont en lot — 1 lot du 16 août 2026, identifiant <code class="apx-mono">b7f2…a19</code></td><td class="num apx-hint" style="text-align:right">168</td></tr>
+            <tr><td>Validations retirées</td><td class="num" style="text-align:right">1</td></tr>
+            <tr><td>Jamais validées</td><td class="num" style="text-align:right">0</td></tr>
+          </tbody>
+        </table>
+        <p class="apx-hint" style="margin-top:.8rem">
+          Les deux registres sont comptés <b>séparément et jamais confondus</b>. Un lecteur peut
+          toujours distinguer 12 jugements individuels d'un geste sur 168.
+        </p>
+      </div>
+
+      <div class="sect">
+        <span class="apx-eyebrow">§ 8</span>
+        <h2>Modifié / accepté en l'état</h2>
+        <table>
+          <tbody>
+            <tr><td>Valeurs modifiées par un humain</td><td class="num" style="text-align:right;width:6rem">23</td></tr>
+            <tr><td>Valeurs acceptées en l'état — <b>uniquement</b> là où un acte de validation a eu lieu</td><td class="num" style="text-align:right">179</td></tr>
+          </tbody>
+        </table>
+        <p class="apx-hint" style="margin-top:.8rem">
+          Ni le temps écoulé, ni le défilement, ni une visite d'écran ne produisent une acceptation.
+        </p>
+      </div>
+
+      <div class="sect" style="background:var(--apx-surface-2)">
+        <span class="apx-eyebrow">Ce que cette story retire</span>
+        <p class="apx-hint" style="margin:.3rem 0 0">
+          Les deux blocs <code>{components.pending-section}</code> qui occupaient § 7 et la moitié de
+          § 8 disparaissent — non pas <i>remplacés par un zéro</i>, mais <b>retirés parce que la chose
+          contre laquelle ils protégeaient n'existe plus</b>. Un <b>0</b> en § 7 est désormais un
+          constat sur le cabinet, ce qu'il n'était pas hier.
+        </p>
+      </div>
+
+    </div>
+  </div>
+</section>
+
+<script>
+  const tabs = document.querySelectorAll('.mock-tabs button');
+  tabs.forEach(t => t.addEventListener('click', () => {
+    tabs.forEach(x => x.setAttribute('aria-selected', String(x === t)));
+    document.querySelectorAll('.screen').forEach(s => { s.hidden = s.id !== 's-' + t.dataset.s; });
+    window.scrollTo({ top: 0 });
+  }));
+</script>
