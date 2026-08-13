@@ -826,6 +826,11 @@ class LinePlacement(Base):
     # the actor who placed it (PII), never a SQL predicate → application-encrypted (AD-31).
     placed_by: Mapped[str] = mapped_column(
         EncryptedText("line_placement.placed_by"), nullable=False)
+    # Story 5.7 — the priced statement the mover was SHOWN before committing (FR-19/FR-24). NULL
+    # for the first placement, which was not a move and had no price: an empty string there would
+    # be indistinguishable from a move whose price nobody showed. Free text → encrypted (AD-31).
+    priced_statement: Mapped[str | None] = mapped_column(
+        EncryptedText("line_placement.priced_statement"), nullable=True)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 

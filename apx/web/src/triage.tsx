@@ -37,6 +37,7 @@ import {
   readWorklist,
   setPieceLabel,
 } from "./api";
+import { AuditDrawer } from "./drawer";
 
 const SIDE_WORDS: Record<string, string> = {
   retained: "Retenue",
@@ -75,6 +76,10 @@ export function TriageRoute() {
   // never a bound of zero.
   const [bound, setBound] = useState<Bound | null | undefined>(undefined);
   const [error, setError] = useState<string | null>(null);
+  // Story 5.7 — the drawer is a PANEL over this table, never a route: asking "pourquoi ?" must not
+  // cost the lawyer her place in the ranked order, and the answer is meaningless without the row
+  // it belongs to still visible behind it.
+  const [openPiece, setOpenPiece] = useState<string | null>(null);
   const [absent, setAbsent] = useState(false);
   const [loading, setLoading] = useState(true);
 
@@ -163,7 +168,22 @@ export function TriageRoute() {
             Ordre proposé par l'outil, révisable — ce n'est pas une preuve. Rien n'est
             supprimé&nbsp;: une pièce écartée reste retrouvable par la recherche exhaustive.
           </p>
-          <Table table={table} onCommitted={onCommitted} />
+          <div className="apx-with-drawer">
+            <div className="apx-with-drawer__main">
+              <Table
+                table={table}
+                onCommitted={onCommitted}
+                onOpenDrawer={(id) => setOpenPiece(id)}
+              />
+            </div>
+            {openPiece !== null && (
+              <AuditDrawer
+                matter={table.matter}
+                pieceId={openPiece}
+                onClose={() => setOpenPiece(null)}
+              />
+            )}
+          </div>
           <BoundPanel bound={bound} matter={table.matter} />
           <ChangeLogPanel entries={log} />
         </>
@@ -228,8 +248,9 @@ function Denominator({ table }: { table: TriageTable }) {
   );
 }
 
-function Table({ table, onCommitted }: {
+function Table({ table, onCommitted, onOpenDrawer }: {
   table: TriageTable; onCommitted: (e: ChangeLogEntry[], row: TriageRow) => void;
+  onOpenDrawer: (pieceId: string) => void;
 }) {
   const ranked = useMemo(() => table.rows.filter((r) => r.rank !== null), [table.rows]);
   const unscored = useMemo(() => table.rows.filter((r) => r.rank === null), [table.rows]);
@@ -257,6 +278,7 @@ function Table({ table, onCommitted }: {
               row={row}
               table={table}
               onCommitted={onCommitted}
+              onOpenDrawer={onOpenDrawer}
               lineAfter={row.piece_id === cutAfter}
               discardedZoneAfter={row.piece_id === cutAfter ? table.discarded_count : null}
             />
@@ -269,7 +291,13 @@ function Table({ table, onCommitted }: {
                 count={unscored.length}
               />
               {unscored.map((row) => (
-                <RowGroup key={row.piece_id} row={row} table={table} onCommitted={onCommitted} />
+                <RowGroup
+                  key={row.piece_id}
+                  row={row}
+                  table={table}
+                  onCommitted={onCommitted}
+                  onOpenDrawer={onOpenDrawer}
+                />
               ))}
             </>
           )}
@@ -289,14 +317,17 @@ function Zone({ label, count }: { label: string; count: number }) {
   );
 }
 
-function RowGroup({ row, table, onCommitted, lineAfter = false, discardedZoneAfter = null }: {
+function RowGroup({
+  row, table, onCommitted, onOpenDrawer, lineAfter = false, discardedZoneAfter = null,
+}: {
   row: TriageRow; table: TriageTable;
   onCommitted: (e: ChangeLogEntry[], row: TriageRow) => void;
+  onOpenDrawer: (pieceId: string) => void;
   lineAfter?: boolean; discardedZoneAfter?: number | null;
 }) {
   return (
     <>
-      <Row row={row} table={table} onCommitted={onCommitted} />
+      <Row row={row} table={table} onCommitted={onCommitted} onOpenDrawer={onOpenDrawer} />
       {lineAfter && <TheLine table={table} />}
       {discardedZoneAfter !== null && (
         <Zone
@@ -336,9 +367,10 @@ function TheLine({ table }: { table: TriageTable }) {
   );
 }
 
-function Row({ row, table, onCommitted }: {
+function Row({ row, table, onCommitted, onOpenDrawer }: {
   row: TriageRow; table: TriageTable;
   onCommitted: (e: ChangeLogEntry[], row: TriageRow) => void;
+  onOpenDrawer: (pieceId: string) => void;
 }) {
   const [entry, setEntry] = useState<ChangeLogEntry | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
@@ -389,6 +421,13 @@ function Row({ row, table, onCommitted }: {
       <td className="apx-piece-cell">
         <Link className="n" to={`/piece/${encodeURIComponent(row.piece_id)}`}>{row.name}</Link>
         <span className="id">{row.piece_id}</span>
+        <button
+          type="button"
+          className="apx-why"
+          onClick={() => onOpenDrawer(row.piece_id)}
+        >
+          Pourquoi ?
+        </button>
       </td>
       <td className="apx-confidence-cell">
         {row.confidence_derived ? (

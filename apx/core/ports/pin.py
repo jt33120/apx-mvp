@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from apx.core.domain.pin import PinLogRecord
 from apx.core.domain.triage_sets import Pin, PinSide
 
 
@@ -45,4 +46,15 @@ class PinRecorder(Protocol):
         """The in-force pins for a *matter* — a VIEW over the ledger (the latest action per *pièce*;
         ``removed`` lifts it), the input :meth:`read_triage_sets` consumes. Returns ``None`` when
         out of scope or absent (non-disclosing). Not audited (a read)."""
+        ...
+
+    def read_pin_log(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> tuple[PinLogRecord, ...] | None:
+        """**Every** entry of the *matter*'s pin ledger, with its actor and its reason (FR-26,
+        Story 5.7) — not the in-force view.
+
+        FR-26 asks for *all pins*. A pin posed and later lifted is a decision that was taken;
+        dropping it because it is no longer in force would let a reader of the export conclude it
+        never happened. Returns ``None`` when out of scope or absent. Not audited (a read)."""
         ...

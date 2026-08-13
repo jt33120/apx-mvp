@@ -59,6 +59,9 @@ ENCRYPTED_COLUMNS = [
     # Story 4.8: the line-placement ledger — the actor who placed the line (PII) is encrypted;
     # single-PK (`id`), so key rotation addresses it directly.
     ("line_placement", "id", "placed_by", "line_placement.placed_by"),
+    # Story 5.7: the priced statement the mover was shown (FR-19) — free text, encrypted; NULL on a
+    # first placement, and the backfill's `WHERE col IS NOT NULL` already skips those.
+    ("line_placement", "id", "priced_statement", "line_placement.priced_statement"),
     # Story 4.11: the pin ledger — the override reason (content) AND the actor (PII) are encrypted;
     # single-PK (`id`), so key rotation addresses both directly.
     ("pin_entry", "id", "reason", "pin_entry.reason"),

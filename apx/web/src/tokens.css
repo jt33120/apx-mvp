@@ -462,3 +462,63 @@ button:focus-visible { box-shadow: var(--apx-ring); }
 /* the unranked row of the equation carries the review tone too: it is the count that says the
    dossier has moved past its own classement */
 .apx-eq-row:last-child .c { color: inherit; }
+
+/* ── Story 5.7: the AUDIT DRAWER and the export tier fork (FR-26) ──────────────────────────── */
+/* A PANEL, never a route: the table stays readable behind it, because the answer to "pourquoi ?"
+   is meaningless without the row it belongs to still in view. */
+.apx-with-drawer { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 1rem; align-items: start; }
+.apx-with-drawer__main { min-width: 0; }
+.apx-drawer {
+  width: 30rem; max-width: 100%; background: var(--apx-surface);
+  border: 1px solid var(--apx-line); border-radius: var(--apx-radius);
+  box-shadow: var(--apx-shadow); overflow: hidden; position: sticky; top: 1rem;
+}
+.apx-drawer-head {
+  display: flex; align-items: flex-start; justify-content: space-between; gap: .7rem;
+  padding: .85rem 1rem; border-bottom: 1px solid var(--apx-line); background: var(--apx-surface-2);
+}
+.apx-band { padding: .95rem 1rem; border-top: 1px solid var(--apx-line-2); }
+.apx-band:first-of-type { border-top: 0; }
+.apx-band > .apx-eyebrow { display: block; margin-bottom: .4rem; }
+.apx-mono-id { font-family: var(--apx-mono); font-size: .74rem; color: var(--apx-ink-3); }
+/* An extract's SHOW-TIME verdict. The unresolved variant shows its cause and NO quoted text:
+   the text is precisely what could not be confirmed (FR-11). */
+.apx-quote {
+  border-left: 2px solid var(--apx-kept); background: var(--apx-surface-2);
+  padding: .55rem .75rem; border-radius: 0 var(--apx-radius-sm) var(--apx-radius-sm) 0;
+  margin-bottom: .5rem;
+}
+.apx-quote--bad { border-left: 2px dashed var(--apx-review); background: var(--apx-review-bg); }
+/* The row an action WILL append — styled like a journal entry, one shade quieter, so the lawyer
+   recognises the thing she is about to create. */
+.apx-proposed {
+  margin-top: .4rem; background: var(--apx-surface-2); border: 1px dashed var(--apx-line);
+  border-radius: var(--apx-radius-sm); padding: .5rem .65rem;
+}
+.apx-act {
+  display: block; margin-bottom: .5rem; background: var(--apx-surface);
+  border: 1px solid var(--apx-line); border-radius: var(--apx-radius-sm); padding: .55rem .7rem;
+}
+.apx-act b { display: block; font-weight: 560; color: var(--apx-ink); }
+.apx-act .apx-hint { display: block; }
+/* Shown, DISABLED, naming its story — never hidden: a hidden control cannot be asked about. */
+.apx-act--disabled { opacity: .55; }
+.apx-why {
+  margin-left: .5rem; border: 0; background: transparent; color: var(--apx-gold);
+  font-size: .78rem; padding: 0; text-decoration: underline; text-underline-offset: 2px;
+}
+.apx-why:hover { color: var(--apx-ink); background: transparent; }
+/* The tier FORK — two cards, reached before anything is produced. Never a toggle beside a
+   download button: this is the one act that can move client content out of the firm. */
+.apx-fork { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; margin-top: .8rem; }
+.apx-tier {
+  padding: .95rem; border-radius: var(--apx-radius); background: var(--apx-surface);
+  border: 1px solid var(--apx-ink);
+}
+.apx-tier--full { border-color: var(--apx-review); background: var(--apx-review-bg); }
+.apx-tier ul { margin: .45rem 0 0; padding-left: 1.1rem; font-size: .9rem; color: var(--apx-ink-2); }
+@media (max-width: 60rem) {
+  .apx-with-drawer { grid-template-columns: minmax(0, 1fr); }
+  .apx-drawer { width: 100%; position: static; }
+  .apx-fork { grid-template-columns: 1fr; }
+}

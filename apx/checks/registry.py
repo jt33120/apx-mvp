@@ -35,6 +35,7 @@ from apx.checks import (
     line_projection_not_a_bound,
     line_stored_by_piece_identity,
     manifest,
+    matter_export,
     no_legacy_bound,
     no_truncation,
     originals_encrypted,
@@ -204,6 +205,10 @@ CHECKS: list[Callable[[], CheckResult]] = [
     override.override_reason_has_one_validator,
     override.override_reason_reaches_the_record,
     override.override_names_its_ground,
+    # Story 5.7 — the matter export: the tier is never chosen for the caller, and a section whose
+    # act does not exist yet is a sentence naming its story, never a zero (FR-26).
+    matter_export.export_tier_is_never_defaulted,
+    matter_export.a_pending_section_is_not_a_zero,
     statement.the_sentence_has_one_composer,
     statement.the_sentence_is_composed_offline,
     statement.unfitness_offers_no_line_move,

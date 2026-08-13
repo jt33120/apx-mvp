@@ -434,6 +434,9 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             _Step(("read-register",), lambda: _get("/api/register")),
             _Step(("read-triage",), lambda: _get(f"/api/matters/{MATTER}/triage")),
             _Step(("read-labels",), lambda: _get(f"/api/matters/{MATTER}/labels")),
+            # Story 5.7 — the audit drawer: a pure read that proposes rows and commits nothing
+            _Step(("read-piece-drawer",),
+                  lambda: _get(f"/api/matters/{MATTER}/pieces/{pieces[0]}/drawer")),
             _Step(("read-inventory",), lambda: _get(f"/api/matters/{MATTER}/inventory")),
             # Story 5.1 — the sampling run's reads. Pure: they render the DERIVED
             # invalidated-in-flight verdict and write nothing.
@@ -572,6 +575,12 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
                 f"/api/admin/matters/{MATTER}/rescope", {"scope": WALL2})),
             _Step(("register_override.override_register_entry",), _override_register_seam),
             _Step(("override-register-entry",), _override_register_route),
+            # Story 5.7 — the THIRD named egress path. It writes exactly ONE evidential row (its
+            # own audit entry) and removes nothing: the record it produces is a read of everything
+            # else. Numbers-only, deliberately: the probe should not need client content to prove
+            # that producing a document destroys nothing.
+            _Step(("export-matter-record",), lambda: _post(
+                f"/api/matters/{MATTER}/record/export?tier=numbers-only")),
             _Step(("clear-truncation",), _clear_truncation),
         ]
 

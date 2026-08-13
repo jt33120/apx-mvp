@@ -9,6 +9,7 @@ import {
   type ImportStarted, type Labels, type MatterSummary, type SamplingRun,
   type SuggestiveResult, type Triage,
 } from "./api";
+import { ExportFork } from "./drawer";
 
 /** Owned auth gate (AD-15): the session — not the request — carries the tenant and
  *  the held scopes. Nothing loads until you are who you say you are. */
@@ -801,6 +802,9 @@ function MatterRow({ m }: { m: MatterSummary }) {
               about. The panel renders "aucun tirage" as its own state. */}
           <SamplingPanel matter={m.matter} />
           {trail && <Journal trail={trail} />}
+          {/* Story 5.7 — the record leaving the building, as a FORK taken before anything is
+              produced (FR-26 §11). It sits under the journal because that is what it exports. */}
+          <ExportFork matter={m.matter} scope={m.scope} />
         </div>
       )}
     </div>

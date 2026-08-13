@@ -51,6 +51,7 @@ from apx.checks import (
     line_placement_ownership,
     line_projection_not_a_bound,
     line_stored_by_piece_identity,
+    matter_export,
     no_legacy_bound,
     no_truncation,
     originals_encrypted,
@@ -643,6 +644,15 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        override.override_reason_reaches_the_record,
        "every _append_audit call site whose verb is an override, across apx/** — the detail is "
        "composed by override_detail(), never by hand, so the verbatim reason cannot be dropped"),
+    # ── story 5.7: the MATTER EXPORT — the tier is demanded, a pending section is a sentence ──
+    _p("export-tier-never-defaulted", "FR-26", "AD-33", "the export tier is never defaulted",
+       matter_export.export_tier_is_never_defaulted,
+       "every function across apx/** taking a `tier` parameter — none defaults it: the one act "
+       "that can move client content out of the firm does not choose for the caller (FR-26 §11)"),
+    _p("pending-section-is-not-a-zero", "FR-26", "AD-33", "a pending section is a sentence",
+       matter_export.a_pending_section_is_not_a_zero,
+       "core/domain/matter_record.py's declared pending sections + any len()/sum() over them "
+       "across apx/** — zero is a finding about the FIRM, not built is a finding about the BUILD"),
     _p("override-ground-named", "FR-25", "AD-33", "an override names its FR-25 ground",
        override.override_names_its_ground,
        "the act catalogue (every override names one of FR-25's three grounds; the override class "

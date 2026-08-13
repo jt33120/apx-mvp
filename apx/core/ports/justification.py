@@ -59,3 +59,9 @@ class JustificationStore(Protocol):
         a delete). Returns the new ``seq``. Raises a typed error when there is nothing to restore,
         on a stale ``expected_seq``, or an out-of-scope *matter*."""
         ...
+
+    def matter_is_held(self, *, tenant: str, matter: str, scopes: set[str]) -> bool:
+        """Whether the caller may see this *matter* at all (AD-13). A read that must fail closed on
+        its own asks this rather than inferring scope from another read's ``None`` — which conflates
+        "out of scope" with "nothing recorded" and leaks the difference (Story 5.7)."""
+        ...

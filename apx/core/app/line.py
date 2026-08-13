@@ -10,7 +10,7 @@ ranked order (FR-17). It imports Ports only (AD-4), touches no store.
 
 from __future__ import annotations
 
-from apx.core.domain.line import LinePlacementView
+from apx.core.domain.line import LinePlacementRecord, LinePlacementView
 from apx.core.domain.line_projection import PricedMove
 from apx.core.ports.line import LinePlacementRecorder
 
@@ -64,3 +64,14 @@ def move_line(
         tenant=tenant, matter=matter, actor=actor, scopes=scopes,
         last_retained_piece_id=last_retained_piece_id, expected_seq=expected_seq,
         priced_statement=priced_statement, version_no=version_no)
+
+
+def read_line_history(
+    recorder: LinePlacementRecorder, *, tenant: str, matter: str, scopes: set[str],
+    version_no: int | None = None,
+) -> tuple[LinePlacementRecord, ...] | None:
+    """Every position the line has held, oldest first, with author and priced statement — what the
+    *matter* export carries (FR-24/FR-26). ``None`` when out of scope or absent (non-disclosing);
+    an empty tuple when the version exists and no line was ever placed."""
+    return recorder.read_line_history(
+        tenant=tenant, matter=matter, scopes=scopes, version_no=version_no)

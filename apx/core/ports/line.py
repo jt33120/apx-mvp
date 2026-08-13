@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from apx.core.domain.line import LinePlacementView
+from apx.core.domain.line import LinePlacementRecord, LinePlacementView
 from apx.core.domain.line_projection import PricedMove
 
 
@@ -59,4 +59,17 @@ class LinePlacementRecorder(Protocol):
         is serialised — a move against a superseded position raises a stale-line error and writes
         nothing. Never reorders the order. Raises a typed error for an out-of-scope *matter* or a
         *pièce* not in the ranked order."""
+        ...
+
+    def read_line_history(
+        self, *, tenant: str, matter: str, scopes: set[str], version_no: int | None = None,
+    ) -> tuple[LinePlacementRecord, ...] | None:
+        """**Every** position the line has held over a *ranking version*, oldest first — with the
+        author and the priced statement each was committed under (FR-24/FR-26, Story 5.7).
+
+        Distinct from :meth:`read_current_line` on purpose: a surface needs the state, an export
+        needs the history, and the history carries PII (the author) that has no business travelling
+        on every triage read. Returns ``None`` when out of scope, absent, or with no such ranking
+        version; an EMPTY tuple means the version exists and no line was ever placed. Not audited
+        (a read)."""
         ...

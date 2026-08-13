@@ -589,3 +589,61 @@ export async function readBound(matter: string): Promise<Bound> {
   if (!res.ok) return fail(res);
   return res.json();
 }
+
+// ── Story 5.7: the audit drawer and the matter export (FR-26) ─────────────────────────────────
+// An UNRESOLVED extract carries its cause and NO quoted text: the text is precisely what could not
+// be confirmed at show time (FR-11). The surface must never fill that gap.
+export type DrawerExtract = {
+  chunk_id: string; verified: boolean; cause: string | null; cause_fr: string | null;
+};
+// The audit row an action WILL append. No timestamp and no seq — neither exists yet, and a shown
+// value that is not the one written would be a lie in the one place that cannot afford one.
+export type ProposedEntry = {
+  action: string; action_fr: string; actor: string; chain_scope: string; chain_label_fr: string;
+  override_ground: string | null; override_ground_fr: string | null; reason_required: boolean;
+};
+export type DrawerAction = {
+  action: string; action_fr: string; reversal_fr: string; proposed: ProposedEntry;
+};
+export type DrawerPendingAction = { label_fr: string; story: string; disabled_reason_fr: string };
+export type Drawer = {
+  piece_id: string; matter: string; ranking_version_no: number | null;
+  sentence: string | null; confidence: number | null; confidence_signals: string[];
+  source_language: string | null; rejected: boolean;
+  is_unverified: boolean; unresolved_extracts: number;
+  extracts: DrawerExtract[]; actions: DrawerAction[]; pending_actions: DrawerPendingAction[];
+};
+
+export async function readDrawer(matter: string, pieceId: string): Promise<Drawer | null> {
+  const res = await fetch(
+    `/api/matters/${encodeURIComponent(matter)}/pieces/${encodeURIComponent(pieceId)}/drawer`);
+  if (res.status === 404) return null;   // out of scope and absent answer identically
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+// The tier is chosen BEFORE production and has no default here either: this is the one act in the
+// product that can move client content out of the firm on purpose (FR-26 §11).
+export type ExportTier = "numbers-only" | "full";
+export type MatterRecordDoc = {
+  cover: Record<string, unknown>;
+  denominator: Record<string, unknown>[];
+  case_theory: Record<string, unknown>[];
+  line_history: Record<string, unknown>[];
+  pins: Record<string, unknown>[];
+  sampling_runs: Record<string, unknown>[];
+  overrides: Record<string, unknown>[];
+  overrides_total: number;
+  modified_values: number;
+  pending: { key: string; heading_fr: string; story: string; sentence_fr: string }[];
+};
+
+export async function exportMatterRecord(
+  matter: string, tier: ExportTier,
+): Promise<MatterRecordDoc> {
+  const res = await fetch(
+    `/api/matters/${encodeURIComponent(matter)}/record/export?tier=${encodeURIComponent(tier)}`,
+    { method: "POST" });
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}

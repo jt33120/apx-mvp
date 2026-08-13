@@ -20,6 +20,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import datetime
 from enum import StrEnum
 
 from apx.core.domain.triage_sets import Pin, PinSide
@@ -44,6 +45,28 @@ class PinLogEntry:
     piece_id: str
     seq: int
     action: PinAction
+
+
+@dataclass(frozen=True)
+class PinLogRecord:
+    """One entry of a *pièce*'s pin ledger **as an export carries it** (FR-26, Story 5.7): the
+    action, who took it, when, and — for a pin, which is an *override* (FR-25) — the mandatory
+    reason verbatim.
+
+    :class:`PinLogEntry` is the derivation's input and carries only what ``current_pins`` needs; it
+    has no actor and no reason by design (the in-force view is computed on every triage read, and a
+    view that carried PII would spread it across every one of them). FR-26 asks for **all** pins,
+    with their reasons — the whole ledger, not the view over it — so the export gets its own shape.
+
+    ``reason`` is the empty string for a ``REMOVED`` action: lifting a pin puts the *pièce* back
+    where the tool had it and costs no sentence (Story 4.11's reading, kept)."""
+
+    piece_id: str
+    seq: int
+    action: PinAction
+    set_by: str
+    at: datetime
+    reason: str = ""
 
 
 def current_pins(entries: Iterable[PinLogEntry]) -> tuple[Pin, ...]:

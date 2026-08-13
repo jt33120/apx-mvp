@@ -123,7 +123,12 @@ from apx.core.domain.justification import (
     validate_named_evidence,
     verify_justification,
 )
-from apx.core.domain.line import LinePlacementView, RankedBand, recommend_line
+from apx.core.domain.line import (
+    LinePlacementRecord,
+    LinePlacementView,
+    RankedBand,
+    recommend_line,
+)
 from apx.core.domain.line_projection import (
     PROJECTION_METHOD,
     PricedMove,
@@ -131,16 +136,32 @@ from apx.core.domain.line_projection import (
 from apx.core.domain.line_projection import (
     price_line_move as project_line_move,
 )
+from apx.core.domain.matter_record import (
+    CaseTheoryLine,
+    ChainVerdictLine,
+    Cover,
+    LineHistoryLine,
+    MatterRecord,
+    OverrideLine,
+    PinLine,
+    SamplingRunLine,
+    Tier,
+    assemble,
+)
 from apx.core.domain.normalization import normalize
 from apx.core.domain.override import (
+    ground_label_fr,
     override_detail,
+    reason_from_detail,
     validate_override_reason,
 )
 from apx.core.domain.pin import (
     PinAction,
     PinLogEntry,
+    PinLogRecord,
     current_pins,
 )
+from apx.core.domain.proposed_entry import ACT_FR
 from apx.core.domain.ranking import (
     RankedOrder,
     RankingIdentity,
@@ -1856,6 +1877,164 @@ class SqlStore:
                 f"lines={len(entries)} scopes={len(scopes)}", now or datetime.now(UTC))
         return RegisterExport(tuple(entries), len(scopes))
 
+    def _degraded_extract_count(
+        self, *, tenant: str, matter: str, scopes: set[str]
+    ) -> int:
+        """How many retained extracts fail exact containment **right now** (FR-11).
+
+        Computed at READ time, per the requirement: self-containment is verified when the document
+        is produced, not when the justification was written, so a matter that was clean last month
+        can produce a degraded document today and must say so. Walks the matter's justifications
+        through the same :meth:`read_justification` a lawyer's drawer uses — one verification path,
+        not a second one that could disagree with what the drawer shows her."""
+        with self._sf() as session:
+            piece_ids = list(session.scalars(
+                select(PieceJustification.piece_id)
+                .where(PieceJustification.tenant == tenant, PieceJustification.matter == matter)
+                .distinct()).all())
+        degraded = 0
+        for piece_id in piece_ids:
+            shown = self.read_justification(
+                tenant=tenant, matter=matter, scopes=scopes, piece_id=piece_id)
+            if shown is not None:
+                degraded += sum(1 for e in shown.extracts if not e.verified)
+        return degraded
+
+    def _assemble_matter_record(
+        self, *, tenant: str, matter: str, actor: str, scopes: set[str], tier: Tier,
+        now: datetime, bound_sentences: dict[str, str] | None = None,
+    ) -> MatterRecord:
+        """Read everything FR-26 enumerates and hand it to the pure assembler.
+
+        Every field this gathers is a READ; the tier is applied inside
+        :func:`~apx.core.domain.matter_record.assemble`, by omission. ``bound_sentences`` maps a run
+        to the sentence the ONE composer produced for it: the document **quotes** the bound and
+        never rebuilds it, because every path through that composer carries the wall and the
+        staleness and a re-assembly could drop either (FR-58/FR-23). Absent, §5 carries the run's
+        numbers and no sentence — which is what "no sentence was composed" looks like, and is
+        different from a sentence we invented."""
+        quoted = bound_sentences or {}
+        trail = self.read_audit(matter, tenant, scopes)
+        overrides = self.read_audit(matter, tenant, scopes, overrides_only=True)
+        truncation = self.truncation_status(tenant)
+        with self._sf() as session:
+            inventory = self._durable_inventory(session, matter, tenant)
+            # The wall the document was produced under, printed on its face as a LIMIT: a reader
+            # must be able to tell what this document could not have contained (FR-26).
+            scope_held = session.scalar(select(MatterScope.scope).where(
+                MatterScope.tenant == tenant, MatterScope.matter == matter)) or ""
+
+        cover = Cover(
+            matter=matter,
+            scope=scope_held,
+            tier=tier,
+            produced_by=actor,
+            produced_at=_audit_ts(now),
+            chains=tuple(
+                ChainVerdictLine(
+                    chain_scope=sl.chain_scope,
+                    label_fr=AUDIT.chain_label_fr(sl.chain_scope),
+                    entries=sl.entries,
+                    verified=sl.verified,
+                    # AD-43: only the matter's own chain can be recomputed by a reader holding
+                    # this document — the tenant chain's links run through entries outside the
+                    # scope, and saying so is the point of printing two lines.
+                    recomputable_from_this_document=sl.verifiable_in_isolation,
+                    broken_at=sl.broken_at)
+                for sl in trail.slices),
+            truncation_unacknowledged=truncation.active,
+            truncation_note=(
+                f"{truncation.entries_lost} acte(s) manquant(s) au journal, non acquitté(s)"
+                if truncation.active else None),
+            degraded_extracts=self._degraded_extract_count(
+                tenant=tenant, matter=matter, scopes=scopes),
+        )
+
+        theories = self.list_case_theory_versions(
+            tenant=tenant, matter=matter, scopes=scopes) or []
+        history = self.read_line_history(tenant=tenant, matter=matter, scopes=scopes) or ()
+        pin_log = self.read_pin_log(tenant=tenant, matter=matter, scopes=scopes) or ()
+        runs = self.list_sampling_runs(tenant=tenant, matter=matter, scopes=scopes) or ()
+
+        return assemble(
+            cover=cover,
+            denominator=inventory,
+            case_theory=tuple(
+                CaseTheoryLine(
+                    version_no=v.version_no, version_id=v.version_id, actor=v.actor,
+                    at=_as_utc(v.created_at).isoformat(), text=v.text)
+                for v in theories),
+            line_history=tuple(
+                LineHistoryLine(
+                    version_no=h.version_no, seq=h.seq,
+                    last_retained_piece_id=h.last_retained_piece_id, basis=h.basis,
+                    placed_by=h.placed_by, at=h.at.isoformat(),
+                    priced_statement=h.priced_statement)
+                for h in history),
+            pins=tuple(
+                PinLine(
+                    piece_id=e.piece_id, seq=e.seq, action=str(e.action), set_by=e.set_by,
+                    at=e.at.isoformat(), reason=e.reason)
+                for e in pin_log),
+            sampling_runs=tuple(
+                SamplingRunLine(
+                    run_id=r.run_id, status=r.status, drawn=len(r.drawn),
+                    reviewed=r.relevant_found if r.relevant_found is not None else 0,
+                    population_size=r.population_families,
+                    bound_sentence_fr=quoted.get(r.run_id))
+                for r in runs),
+            overrides=tuple(
+                OverrideLine(
+                    seq=e.seq, action=e.action,
+                    action_fr=ACT_FR.get(e.action, e.action),
+                    ground=e.override_ground or "",
+                    ground_fr=ground_label_fr(e.override_ground or ""),
+                    actor=e.actor, at=e.timestamp,
+                    reason=reason_from_detail(e.detail))
+                for e in overrides.entries),
+            # FR-25: over the WHOLE record, never the length of the list printed beneath it
+            overrides_total=trail.overrides,
+            modified_values=sum(
+                1 for e in trail.entries
+                if AUDIT.ACTS[e.action].act_class == AUDIT.CLASS_VALUE_MODIFIED),
+        )
+
+    def export_matter_record(
+        self, *, tenant: str, matter: str, actor: str, scopes: set[str], tier: Tier,
+        now: datetime | None = None,
+    ) -> MatterRecord:
+        """The *matter*'s record as a document, and the recorded act of producing it (FR-26 §11).
+
+        The **third named egress path**. It is not content-free, it is deliberate, and until this
+        story producing it had no recorded trace of having occurred — so the act goes on the
+        *matter*'s own chain, where a *bâtonnier* holding the document finds it in the same chain
+        he can recompute.
+
+        ``tier`` is required and has **no default here**: a default on the boundary that produces
+        client content is the wrong place to be forgiving. It is applied inside
+        :func:`~apx.core.domain.matter_record.assemble`, by omission — the numbers-only document is
+        built without the content rather than built and then stripped.
+
+        Scope-checked first, and a refusal writes nothing: a refused export is not an export. The
+        audit entry names the tier, the scope size and the counts, so the record says what left and
+        under which wall."""
+        stamp = now or datetime.now(UTC)
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+
+        record = self._assemble_matter_record(
+            tenant=tenant, matter=matter, actor=actor, scopes=scopes, tier=tier, now=stamp)
+
+        def _work(session: Session, _now: datetime) -> None:
+            self._append_audit(
+                session, tenant, matter, actor, AUDIT.ACT_EXPORT_MATTER_RECORD,
+                f"tier={tier.value} scopes={len(scopes)} overrides={record.overrides_total} "
+                f"degraded_extracts={record.cover.degraded_extracts}", stamp)
+
+        self._audited_tx(_work)
+        return record
+
     def audit_bound_export(
         self, *, tenant: str, matter: str, actor: str, detail: str,
         now: datetime | None = None,
@@ -3468,6 +3647,19 @@ class SqlStore:
             stage3_share=row.stage3_share, ranked_count=ranked, unscored_count=unscored,
             created_at=row.created_at)
 
+    def matter_is_held(self, *, tenant: str, matter: str, scopes: set[str]) -> bool:
+        """Whether the caller may see this *matter* at all (AD-13) — the public form of the scope
+        pre-filter, for a read that must fail closed on its own rather than infer scope from
+        something else's ``None``.
+
+        Story 5.7 added it because the drawer did infer, and the inference was wrong: a
+        justification read returns ``None`` both for "out of scope" and for "no justification
+        recorded", and a drawer built on that answered 200 with an empty panel — and a list of
+        proposed acts — for a *matter* behind a wall the caller does not hold. Non-disclosure is
+        not something a caller can derive from an ambiguous answer."""
+        with self._sf() as session:
+            return self._matter_held(session, tenant, matter, scopes)
+
     def _matter_held(self, session: Session, tenant: str, matter: str, scopes: set[str]) -> bool:
         """Whether the matter's wall is within ``scopes`` (AD-13). A False is indistinguishable from
         an absent matter to the caller (non-disclosing, FR-14)."""
@@ -3846,7 +4038,9 @@ class SqlStore:
             session.add(LinePlacement(
                 id=entry_id, tenant=tenant, matter=matter, ranking_version_id=version.id, seq=seq,
                 last_retained_piece_id=line.last_retained_piece_id, basis=basis, placed_by=actor,
-                at=now))
+                # NULL, explicitly: a first placement is the tool drawing the cut, not a human
+                # move, so there was no price to show and none to record (Story 5.7).
+                priced_statement=None, at=now))
             self._append_audit(
                 session, tenant, matter, actor, AUDIT.ACT_LINE_PLACED,
                 f"version={version.version_no} last_retained={line.last_retained_piece_id[:12]} "
@@ -3890,6 +4084,65 @@ class SqlStore:
                 version_id=version[0], version_no=version[1],
                 last_retained_piece_id=row.last_retained_piece_id, basis=row.basis, seq=row.seq,
                 at=row.at)
+
+    def read_line_history(
+        self, *, tenant: str, matter: str, scopes: set[str], version_no: int | None = None,
+    ) -> tuple[LinePlacementRecord, ...] | None:
+        """**Every** position the line has held over a *ranking version*, oldest first
+        (FR-24/FR-26).
+
+        The export needs the history, not the state: FR-24 records *every* position with its author
+        and the priced statement shown for it. Ascending by ``seq`` so a reader follows the
+        decisions in the order they were taken. Scope pre-filtered (AD-13); ``None`` when out of
+        scope, absent, or with no such ranking version — indistinguishable, as everywhere
+        (non-disclosing). An empty tuple is a real answer: the version exists and no line was ever
+        placed over it. Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            pinned = (
+                [RankingVersionRow.version_no == version_no] if version_no is not None else [])
+            version = session.execute(
+                select(RankingVersionRow.id, RankingVersionRow.version_no)
+                .where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter, *pinned)
+                .order_by(RankingVersionRow.version_no.desc()).limit(1)).first()
+            if version is None:
+                return None
+            rows = session.scalars(
+                select(LinePlacement)
+                .where(LinePlacement.ranking_version_id == version[0])
+                .order_by(LinePlacement.seq)).all()
+            return tuple(
+                LinePlacementRecord(
+                    version_id=version[0], version_no=version[1], seq=r.seq,
+                    last_retained_piece_id=r.last_retained_piece_id, basis=r.basis,
+                    placed_by=r.placed_by, at=_as_utc(r.at),
+                    priced_statement=r.priced_statement)
+                for r in rows)
+
+    def read_pin_log(
+        self, *, tenant: str, matter: str, scopes: set[str],
+    ) -> tuple[PinLogRecord, ...] | None:
+        """**Every** entry of the *matter*'s pin ledger, with its actor and its reason (FR-26).
+
+        Not the in-force view (:meth:`read_current_pins`): FR-26 asks for *all pins*, and a pin that
+        was posed and lifted is a decision that was taken — dropping it from the export because it
+        is no longer in force would let a reader conclude it never happened. Ordered by *pièce*
+        then ``seq``, so each *pièce*'s history reads as a sequence. Scope pre-filtered; ``None``
+        when out of scope or absent. Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            rows = session.scalars(
+                select(PinEntry)
+                .where(PinEntry.tenant == tenant, PinEntry.matter == matter)
+                .order_by(PinEntry.piece_id, PinEntry.seq)).all()
+            return tuple(
+                PinLogRecord(
+                    piece_id=r.piece_id, seq=r.seq, action=PinAction(r.action),
+                    set_by=r.set_by, at=_as_utc(r.at), reason=r.reason or "")
+                for r in rows)
 
     # ── Story 4.9: moving the line is priced — the ranking projection + the serialised move ──────
     def price_line_move(
@@ -3982,7 +4235,10 @@ class SqlStore:
             session.add(LinePlacement(
                 id=entry_id, tenant=tenant, matter=matter, ranking_version_id=version.id, seq=seq,
                 last_retained_piece_id=last_retained_piece_id, basis=basis, placed_by=actor,
-                at=now))
+                # Story 5.7: the statement the mover was SHOWN goes on the ledger as well as on the
+                # chain. FR-24 asks for every position with its priced statement, and recovering it
+                # by parsing a formatted audit detail is not a record, it is a guess with a regex.
+                priced_statement=priced_statement, at=now))
             self._append_audit(
                 session, tenant, matter, actor, AUDIT.ACT_LINE_MOVED,
                 f"version={version.version_no} old={(current_last or 'none')[:12]} "

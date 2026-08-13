@@ -241,6 +241,10 @@ ACT_SAMPLING_RUN_COMPLETE = "sampling-run-complete"
 ACT_SAMPLING_RUN_ABANDON = "sampling-run-abandon"
 ACT_EXPORT_BOUND = "export-bound"
 
+# The matter record leaving the building (FR-26 §11, Story 5.7) — the THIRD named egress path,
+# and the only act in the product that moves client content out of the firm on purpose.
+ACT_EXPORT_MATTER_RECORD = "export-matter-record"
+
 # Reads and retrievals (AD-14/FR-15).
 ACT_SEARCH = "search"
 ACT_EXPORT_SEARCH = "export-search"
@@ -310,6 +314,12 @@ _CATALOGUE: tuple[RecordableAct, ...] = (
     _act(ACT_SAMPLING_RUN_COMPLETE, CLASS_SAMPLING_RUN, CHAIN_MATTER),
     _act(ACT_SAMPLING_RUN_ABANDON, CLASS_SAMPLING_RUN, CHAIN_MATTER),
     _act(ACT_EXPORT_BOUND, CLASS_SAMPLING_RUN, CHAIN_MATTER),
+
+    # On the MATTER's chain, unlike the corpus-wide search beside it: this export is OF one matter,
+    # and a bâtonnier holding that matter's record must find the act that produced it in the same
+    # chain he can recompute. FR-26 requires producing it to be recorded — tier, actor, matter,
+    # scope, timestamp — because it had no recorded trace of having occurred at all.
+    _act(ACT_EXPORT_MATTER_RECORD, CLASS_RETRIEVAL, CHAIN_MATTER),
 
     _act(ACT_SEARCH, CLASS_RETRIEVAL, CHAIN_TENANT),
     _act(ACT_EXPORT_SEARCH, CLASS_RETRIEVAL, CHAIN_TENANT),

@@ -47,6 +47,32 @@ class LinePlacementView:
 
 
 @dataclass(frozen=True)
+class LinePlacementRecord:
+    """One placement in **the line's position history** (FR-24/FR-26, Story 5.7) — what the export
+    must carry, which is more than what a surface needs.
+
+    :class:`LinePlacementView` deliberately drops the actor: a screen showing the current line does
+    not need to name who placed it, and carrying PII onto every read is how PII ends up somewhere
+    it was not meant to be. An export is the opposite case — FR-24 asks for every position *with
+    author and priced statement*, because a position nobody is answerable for is not the record of
+    a decision. Two shapes, therefore, rather than a field added to the first.
+
+    ``priced_statement`` is what the mover was shown before committing (FR-19), carried verbatim:
+    the cost she accepted is part of the decision, not a footnote to recompute. ``None`` means the
+    placement was **not a move** — the first line the tool drew and committed to had no price —
+    which is a different fact from "a move whose price nobody showed", and the export says so."""
+
+    version_id: str
+    version_no: int
+    seq: int
+    last_retained_piece_id: str
+    basis: str
+    placed_by: str
+    at: datetime
+    priced_statement: str | None = None
+
+
+@dataclass(frozen=True)
 class RankedBand:
     """One *pièce*'s position in the ranked order for the purpose of placing the line: its identity
     and its stage-2 :class:`~apx.core.domain.cascade.Band` value (``None`` for a REJECTED *pièce*

@@ -11,6 +11,7 @@ audit trail is the session user. No fixtures, no demo override (FR-33).
 
 from __future__ import annotations
 
+import dataclasses
 import html
 import os
 import shutil
@@ -62,6 +63,7 @@ from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.label import assign_taxonomy_label, revert_taxonomy_label
 from apx.core.app.read.deterministic import MovingPopulation, search_exhaustive
+from apx.core.app.read.drawer import read_drawer
 from apx.core.app.read.freshness import BoundReading, read_bound, read_freshness, read_worklist
 from apx.core.app.read.piece import open_piece
 from apx.core.app.read.render import render_piece
@@ -86,6 +88,7 @@ from apx.core.app.sampling import (
 from apx.core.app.triage import triage_pieces
 from apx.core.domain import audit as AUDIT
 from apx.core.domain import capacity
+from apx.core.domain.chunking import resolution_failure_fr
 from apx.core.domain.confidence import estimator_is_proven
 from apx.core.domain.config import (
     DEFAULT_EXCLUSION_LIST,
@@ -98,6 +101,7 @@ from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.freshness import Freshness
 from apx.core.domain.head_journal import open_journal
 from apx.core.domain.inventory import Inventory
+from apx.core.domain.matter_record import Tier
 from apx.core.domain.override import MissingOverrideReason, ground_label_fr
 from apx.core.domain.sampling import KIND_BOUND, KIND_CENSUS
 from apx.core.domain.taxonomy_label import OutOfTaxonomyLabel
@@ -380,6 +384,79 @@ class RegisterEntryOut(BaseModel):
 
 class RegisterOut(BaseModel):
     entries: list[RegisterEntryOut]
+
+
+class DrawerExtractOut(BaseModel):
+    """One retained extract as the drawer shows it (FR-11). An UNRESOLVED extract carries its
+    enumerated cause and NO quoted text — the text is precisely what could not be confirmed."""
+
+    chunk_id: str
+    verified: bool
+    cause: str | None = None
+    cause_fr: str | None = None
+
+
+class ProposedEntryOut(BaseModel):
+    """The audit row an action WILL append. No timestamp and no sequence: neither exists yet, and a
+    shown value that is not the one that will be written is a lie in the one place that cannot
+    afford one."""
+
+    action: str
+    action_fr: str
+    actor: str
+    chain_scope: str
+    chain_label_fr: str
+    override_ground: str | None = None
+    override_ground_fr: str | None = None
+    reason_required: bool = False
+
+
+class DrawerActionOut(BaseModel):
+    action: str
+    action_fr: str
+    reversal_fr: str          # FR-26: every action names its own reversal
+    proposed: ProposedEntryOut
+
+
+class DrawerPendingActionOut(BaseModel):
+    label_fr: str
+    story: str
+    disabled_reason_fr: str
+
+
+class DrawerOut(BaseModel):
+    """The four bands (FR-26). `justification` is null when the tool recorded none for this pièce —
+    which the surface states as itself, never as an empty band."""
+
+    piece_id: str
+    matter: str
+    ranking_version_no: int | None = None
+    sentence: str | None = None
+    confidence: float | None = None
+    confidence_signals: list[str] = []
+    source_language: str | None = None
+    rejected: bool = False
+    is_unverified: bool = False
+    unresolved_extracts: int = 0
+    extracts: list[DrawerExtractOut] = []
+    actions: list[DrawerActionOut] = []
+    pending_actions: list[DrawerPendingActionOut] = []
+
+
+class MatterRecordOut(BaseModel):
+    """The *matter* record as a document (FR-26). The tier decided what is here: a numbers-only
+    document was BUILT without the client content, not built and then stripped."""
+
+    cover: dict
+    denominator: list[dict]
+    case_theory: list[dict]
+    line_history: list[dict]
+    pins: list[dict]
+    sampling_runs: list[dict]
+    overrides: list[dict]
+    overrides_total: int          # over the WHOLE record, never the length of the list above
+    modified_values: int
+    pending: list[dict]
 
 
 class RegisterOverrideIn(BaseModel):
@@ -1873,6 +1950,95 @@ def export_register(ident: Identity = Depends(current_identity)) -> RegisterOut:
     export = store.export_register(
         ident.tenant, ident.scopes, ident.actor, is_admin=ident.is_admin)
     return RegisterOut(entries=[_register_out(e) for e in export.lines])
+
+
+@app.post("/api/matters/{matter}/record/export", response_model=MatterRecordOut)
+def export_matter_record(
+    matter: str, tier: str, ident: Identity = Depends(current_identity),
+) -> MatterRecordOut:
+    """Produce the *matter*'s record as a document — the THIRD named egress path (FR-26 §11).
+
+    ``tier`` is **required and has no default**: this is the one act in the product that can move
+    client content out of the firm on purpose, and a boundary that guessed would be guessing about
+    that. `numbers-only` carries counts, versions, verdicts, positions and bounds and no client
+    content; `full` adds the retained extracts, the override reasons verbatim, the justifications
+    and the register's filenames.
+
+    A POST, not a GET, because producing it is an ACT: it is recorded on the *matter*'s own chain
+    with the tier, the actor, the scope and the moment. A refusal is not an export and writes
+    nothing. 400 on an unknown tier, 403 outside the caller's scope."""
+    store = _require_store()
+    try:
+        chosen = Tier(tier)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"niveau inconnu : {tier!r} — attendu 'numbers-only' ou 'full'") from exc
+    try:
+        record = store.export_matter_record(
+            tenant=ident.tenant, matter=matter, actor=ident.actor, scopes=ident.scopes,
+            tier=chosen)
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    payload = dataclasses.asdict(record)
+    payload["cover"]["degraded"] = record.cover.degraded
+    payload["cover"]["degraded_sentence_fr"] = record.cover.degraded_sentence_fr
+    return MatterRecordOut(**payload)
+
+
+@app.get("/api/matters/{matter}/pieces/{piece_id}/drawer", response_model=DrawerOut)
+def read_piece_drawer(
+    matter: str, piece_id: str, version_no: int | None = None,
+    ident: Identity = Depends(current_identity),
+) -> DrawerOut:
+    """The *audit drawer* for one *pièce* (FR-26) — the four bands, in the contract's order.
+
+    A pure read. The actions it lists are **proposals**: each carries the audit row it would append
+    and the sentence naming its own reversal, and committing one is a separate call to the use case
+    that owns it. 404 out of scope or absent — the same answer for both (non-disclosing)."""
+    store = _require_store()
+    drawer = read_drawer(
+        store, tenant=ident.tenant, matter=matter, actor=ident.actor, piece_id=piece_id,
+        scopes=ident.scopes, version_no=version_no)
+    if drawer is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    shown = drawer.justification
+    j = shown.justification if shown is not None else None
+    return DrawerOut(
+        piece_id=drawer.piece_id,
+        matter=drawer.matter,
+        ranking_version_no=drawer.ranking_version_no,
+        sentence=j.sentence if j is not None else None,
+        confidence=j.confidence if j is not None else None,
+        confidence_signals=[str(sig) for sig in (j.confidence_signals if j else ())],
+        source_language=j.source_language if j is not None else None,
+        rejected=shown.rejected if shown is not None else False,
+        is_unverified=drawer.is_unverified,
+        unresolved_extracts=drawer.unresolved_extracts,
+        extracts=[
+            DrawerExtractOut(
+                chunk_id=e.chunk_id, verified=e.verified, cause=e.cause,
+                cause_fr=resolution_failure_fr(e.cause))
+            for e in (shown.extracts if shown is not None else ())
+        ],
+        actions=[
+            DrawerActionOut(
+                action=a.action, action_fr=a.action_fr, reversal_fr=a.reversal_fr,
+                proposed=ProposedEntryOut(
+                    action=a.proposed.action, action_fr=a.proposed.action_fr,
+                    actor=a.proposed.actor, chain_scope=a.proposed.chain_scope,
+                    chain_label_fr=a.proposed.chain_label_fr,
+                    override_ground=a.proposed.override_ground,
+                    override_ground_fr=a.proposed.override_ground_fr,
+                    reason_required=a.proposed.reason_required))
+            for a in drawer.actions
+        ],
+        pending_actions=[
+            DrawerPendingActionOut(
+                label_fr=p.label_fr, story=p.story, disabled_reason_fr=p.disabled_reason_fr)
+            for p in drawer.pending_actions
+        ],
+    )
 
 
 @app.post("/api/register/{entry_id}/override", response_model=RegisterOverrideOut)

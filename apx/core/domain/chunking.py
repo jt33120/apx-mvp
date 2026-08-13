@@ -142,6 +142,25 @@ PIECE_GONE = "piece-gone"
 TEXT_CHANGED = "text-changed"
 CONFIG_SUPERSEDED = "config-superseded"
 POSITION_OUT_OF_RANGE = "position-out-of-range"
+
+#: What each cause says to a lawyer (Story 5.7/FR-11). The drawer and the export show the CAUSE in
+#: place of the passage, because the passage is exactly what could not be confirmed — and a reader
+#: who is told "this no longer resolves" without being told *why* cannot judge whether it matters.
+RESOLUTION_FAILURE_FR: dict[str, str] = {
+    PIECE_GONE: "La pièce citée n'est plus dans le corpus.",
+    TEXT_CHANGED: "Le texte de la pièce a changé depuis cette citation.",
+    CONFIG_SUPERSEDED: "Le découpage du corpus a été refait depuis cette citation.",
+    POSITION_OUT_OF_RANGE: "La position citée n'existe plus dans cette pièce.",
+}
+
+
+def resolution_failure_fr(cause: str | None) -> str | None:
+    """The lawyer's sentence for a resolution failure, or ``None`` when there was none. An
+    unrecognised cause returns itself rather than a soothing generic: a cause nobody has written a
+    sentence for is exactly the case worth seeing."""
+    if cause is None:
+        return None
+    return RESOLUTION_FAILURE_FR.get(cause, cause)
 CONTAINMENT_FAILED = "containment-failed"
 
 

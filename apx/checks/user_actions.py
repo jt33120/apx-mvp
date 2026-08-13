@@ -253,6 +253,17 @@ USER_ACTIONS: tuple[UserAction, ...] = (
           "its mandatory reason to the append-only register_override ledger and writes one "
           "`register_override` audit entry carrying the reason verbatim — all in one transaction "
           "(FR-25/FR-5/AD-37/AD-22)"),
+    _read("/api/matters/{matter}/pieces/{piece_id}/drawer", "read-piece-drawer",
+          "the audit drawer's four bands for one pièce (Story 5.7/FR-26) — the derived confidence, "
+          "the extracts verified AT SHOW TIME, the PROPOSED audit rows and the reversible actions; "
+          "a pure read that proposes and commits nothing"),
+    # Story 5.7 — the THIRD named egress path (FR-26 §11). A POST because producing it is an ACT:
+    # the one act in the product that can move client content out of the firm on purpose, recorded
+    # on the matter's own chain with its tier. NOT deletion-shaped: nothing changes state but the
+    # record, which grows by the entry that says material left.
+    _http("POST", "/api/matters/{matter}/record/export", "export-matter-record",
+          "produces the matter's record as a document at the chosen tier and writes ONE "
+          "`export-matter-record` audit entry naming tier, actor, matter and scope (FR-26/FR-53)"),
     _read("/api/matters/{matter}/register", "read-matter-register", "the failure register; a read"),
     _read("/api/register", "read-register", "the failure register across matters; a read"),
     _read("/api/register/export", "export-register",
@@ -364,6 +375,10 @@ USER_ACTIONS: tuple[UserAction, ...] = (
           "appends a line_placement entry naming the last retained pièce (Story 4.8)",
           changes_state=True),
     _seam("line.read_current_line", "reads the current placement", changes_state=False),
+    _seam("line.read_line_history",
+          "reads EVERY position the line has held, with author and priced statement — what the "
+          "matter export carries (Story 5.7/FR-24); a read",
+          changes_state=False),
     _seam("line.price_line_move",
           "projects the cost of a move; writes nothing (Story 4.9)", changes_state=False),
     _seam("line.move_line",
@@ -383,6 +398,10 @@ USER_ACTIONS: tuple[UserAction, ...] = (
           changes_state=True, reads_as_deletion=True,
           reversal="pin.pin_piece again; the ledger keeps every pin and every removal"),
     _seam("pin.read_current_pins", "reads the in-force pins", changes_state=False),
+    _seam("pin.read_pin_log",
+          "reads the WHOLE pin ledger with actors and reasons — a pin posed and lifted is still a "
+          "decision that was taken (Story 5.7/FR-26); a read",
+          changes_state=False),
     _seam("rank.produce_ranking",
           "mints a ranking version and inserts its ranked entries; an earlier version's rows stay "
           "(AD-23 — a version-pinned read must still resolve)", changes_state=True),
@@ -399,6 +418,10 @@ USER_ACTIONS: tuple[UserAction, ...] = (
           changes_state=False),
     _seam("read.scan.read_scan_page",
           "a read of one scanned page plus its OCR layout; the edge audits the served open",
+          changes_state=False),
+    _seam("read.drawer.read_drawer",
+          "assembles the audit drawer's four bands for one pièce from existing reads; writes "
+          "nothing and decides nothing — the acts it lists are PROPOSALS (Story 5.7)",
           changes_state=False),
     _seam("read.deterministic.search_exhaustive",
           "the deterministic exhaustive engine; a read (the query is audited at the edge)",

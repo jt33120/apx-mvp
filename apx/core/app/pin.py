@@ -11,6 +11,7 @@ Ports only (AD-4), touches no store.
 
 from __future__ import annotations
 
+from apx.core.domain.pin import PinLogRecord
 from apx.core.domain.triage_sets import Pin, PinSide
 from apx.core.ports.pin import PinRecorder
 
@@ -47,3 +48,11 @@ def read_current_pins(
     """The in-force pins for a *matter* through the recorder port — the input `read_triage_sets`
     consumes. Returns ``None`` when out of scope or absent (non-disclosing)."""
     return recorder.read_current_pins(tenant=tenant, matter=matter, scopes=scopes)
+
+
+def read_pin_log(
+    recorder: PinRecorder, *, tenant: str, matter: str, scopes: set[str]
+) -> tuple[PinLogRecord, ...] | None:
+    """Every entry of the *matter*'s pin ledger with its actor and reason — what the export carries
+    (FR-26), not the in-force view. ``None`` when out of scope or absent (non-disclosing)."""
+    return recorder.read_pin_log(tenant=tenant, matter=matter, scopes=scopes)
