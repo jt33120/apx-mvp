@@ -111,10 +111,12 @@ def test_deterministic_engine_finds_every_in_scope_match_when_the_scope_is_held(
 
 # ── AC3: the failure register (register_all, fixed to a query pre-filter) leaks nothing ────────
 def test_register_all_never_returns_an_out_of_scope_failure(store: SqlStore) -> None:
-    store.save(IngestionResult(failures=[_fail("in-f", M_IN)]), scope=S_IN, matter=M_IN,
+    store.save(IngestionResult(failures=[_fail("in-f", M_IN)]),
+        actor="Me Dupont", scope=S_IN, matter=M_IN,
                tenant=TENANT)
     # the out-of-scope matter has MORE / worse failures — still never disclosed
     store.save(IngestionResult(failures=[_fail("out-f1", M_OUT), _fail("out-f2", M_OUT)]),
+        actor="Me Dupont",
                scope=S_OUT, matter=M_OUT, tenant=TENANT)
     entries = store.register_all(TENANT, {S_IN}, is_admin=False)
     assert {e.matter for e in entries} == {M_IN}                # zero out-of-scope
@@ -150,7 +152,8 @@ def test_both_engines_read_empty_with_no_scope_regardless_of_identity(store: Sql
 
 def test_register_all_no_scope_admin_sees_only_matterless_system_sees_nothing(
         store: SqlStore) -> None:
-    store.save(IngestionResult(failures=[_fail("in-f", M_IN)]), scope=S_IN, matter=M_IN,
+    store.save(IngestionResult(failures=[_fail("in-f", M_IN)]),
+        actor="Me Dupont", scope=S_IN, matter=M_IN,
                tenant=TENANT)
     # an undetermined-matter (matter IS NULL) failure — inserted directly (arises pre-attribution)
     with store._sf() as s, s.begin():

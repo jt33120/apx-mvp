@@ -38,7 +38,9 @@ def store(engine) -> SqlStore:  # noqa: ANN001
 def _actions(store: SqlStore) -> list[str]:
     with store._sf() as s:
         return list(s.scalars(
-            select(AuditRecord.action).where(AuditRecord.tenant == "t").order_by(AuditRecord.seq)))
+            select(AuditRecord.action)
+            .where(AuditRecord.tenant == "t", AuditRecord.chain_scope == "m")
+            .order_by(AuditRecord.seq)))
 
 
 def test_a_first_write_creates_version_1_and_one_audit_entry(store: SqlStore) -> None:
@@ -120,4 +122,8 @@ def test_a_write_only_touches_the_version_and_its_audit_entry(store: SqlStore) -
     store.append_case_theory_version(tenant="t", matter="m", actor="a", text="x")
     with store._sf() as s:
         assert s.scalar(select(func.count()).select_from(CaseTheoryVersion)) == 1
-        assert s.scalar(select(func.count()).select_from(AuditRecord)) == 1
+        # ONE entry on the matter's own chain. The tenant chain also carries the AD-43
+        # `chain_opened` anchor that brought that chain into existence — an act in its own
+        # right, on a different chain, and not a second record of this write.
+        assert s.scalar(select(func.count()).select_from(AuditRecord).where(
+            AuditRecord.chain_scope == "m")) == 1

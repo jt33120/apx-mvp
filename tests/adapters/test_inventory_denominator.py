@@ -37,7 +37,7 @@ def test_submitted_pieces_equals_the_sum_when_the_matter_is_clean(store: SqlStor
     store.save(
         IngestionResult(
             pieces=[_piece("a", prov="a.txt"), _piece("b", prov="b.txt")],
-            failures=[_fail("bad.pdf")]),
+            failures=[_fail("bad.pdf")]), actor="Me Dupont",
         scope=WALL, matter="m", tenant=TENANT)
     inv = store.inventory("m", TENANT, {WALL})
     assert inv.submitted_pieces == 3 and inv.in_corpus == 2 and inv.open_register_entries == 1
@@ -49,6 +49,7 @@ def test_a_piece_lost_from_the_corpus_fails_the_invariant(store: SqlStore) -> No
     # a pièce dropped from the corpus after being counted makes it exceed the live sum → SM-3 fires.
     store.save(
         IngestionResult(pieces=[_piece("a", prov="a.txt"), _piece("b", prov="b.txt")]),
+            actor="Me Dupont",
         scope=WALL, matter="m", tenant=TENANT)
     assert store.inventory("m", TENANT, {WALL}).submitted_pieces == 2
     lost = piece_id(TENANT, content_hash(b"b"), "m")
@@ -62,18 +63,20 @@ def test_a_piece_lost_from_the_corpus_fails_the_invariant(store: SqlStore) -> No
 
 def test_reimporting_the_same_folder_does_not_grow_submitted_pieces(store: SqlStore) -> None:
     result = IngestionResult(pieces=[_piece("a", prov="a.txt")], failures=[_fail("bad.pdf")])
-    store.save(result, scope=WALL, matter="m", tenant=TENANT)
-    store.save(result, scope=WALL, matter="m", tenant=TENANT)  # the same material again (Story 2.5)
+    store.save(result, actor="Me Dupont", scope=WALL, matter="m", tenant=TENANT)
+    # the same material again (Story 2.5)
+    store.save(result, actor="Me Dupont", scope=WALL, matter="m", tenant=TENANT)
     inv = store.inventory("m", TENANT, {WALL})
     assert inv.submitted_pieces == 2  # NOT 4 — recognised-already-present, the watermark holds
     assert inv.is_consistent()
 
 
 def test_submitted_pieces_grows_monotonically_with_genuinely_new_pieces(store: SqlStore) -> None:
-    store.save(IngestionResult(pieces=[_piece("a", prov="a.txt")]),
+    store.save(IngestionResult(pieces=[_piece("a", prov="a.txt")]), actor="Me Dupont",
                scope=WALL, matter="m", tenant=TENANT)
     assert store.inventory("m", TENANT, {WALL}).submitted_pieces == 1
     store.save(IngestionResult(pieces=[_piece("a", prov="a.txt"), _piece("c", prov="c.txt")]),
+        actor="Me Dupont",
                scope=WALL, matter="m", tenant=TENANT)
     assert store.inventory("m", TENANT, {WALL}).submitted_pieces == 2  # +1 new (a recognised)
 
@@ -84,6 +87,7 @@ def test_retry_resolving_to_a_content_duplicate_keeps_the_invariant(store: SqlSt
     # b.txt — a DUPLICATE (same piece_id) → dedup: in_corpus stays 1, the entry resolves. The
     # distinct count legitimately drops to 1; a monotonic watermark would wrongly trip SM-3.
     store.save(IngestionResult(pieces=[_piece("X", prov="a.txt")], failures=[_fail("b.txt")]),
+        actor="Me Dupont",
                scope=WALL, matter="m", tenant=TENANT)
     assert store.inventory("m", TENANT, {WALL}).submitted_pieces == 2
     entry = next(e for e in store.register("m", TENANT, {WALL}) if e.submitted_path == "b.txt")
@@ -98,6 +102,7 @@ def test_retry_resolving_to_a_content_duplicate_keeps_the_invariant(store: SqlSt
 
 def test_bulk_retry_resolving_to_a_duplicate_never_wedges_the_matter(store: SqlStore) -> None:
     store.save(IngestionResult(pieces=[_piece("X", prov="a.txt")], failures=[_fail("b.txt")]),
+        actor="Me Dupont",
                scope=WALL, matter="m", tenant=TENANT)
     out = store.bulk_retry(
         TENANT, {WALL}, matter="m", actor="avocat",
@@ -114,6 +119,7 @@ def test_noise_is_persisted_counted_and_listable_outside_the_identity(store: Sql
     store.save(
         IngestionResult(
             pieces=[_piece("a", prov="a.txt")], exclusions=["sub/.DS_Store", "sub/Thumbs.db"]),
+                actor="Me Dupont",
         scope=WALL, matter="m", tenant=TENANT)
     inv = store.inventory("m", TENANT, {WALL})
     assert inv.excluded_as_noise == 2 and inv.in_corpus == 1 and inv.submitted_pieces == 1
@@ -125,13 +131,14 @@ def test_noise_is_persisted_counted_and_listable_outside_the_identity(store: Sql
 
 def test_reexcluding_the_same_noise_file_is_idempotent(store: SqlStore) -> None:
     r = IngestionResult(pieces=[_piece("a", prov="a.txt")], exclusions=["x/.DS_Store"])
-    store.save(r, scope=WALL, matter="m", tenant=TENANT)
-    store.save(r, scope=WALL, matter="m", tenant=TENANT)
+    store.save(r, actor="Me Dupont", scope=WALL, matter="m", tenant=TENANT)
+    store.save(r, actor="Me Dupont", scope=WALL, matter="m", tenant=TENANT)
     assert store.inventory("m", TENANT, {WALL}).excluded_as_noise == 1  # not 2
 
 
 def test_the_noise_list_is_scope_checked_fail_closed(store: SqlStore) -> None:
     store.save(IngestionResult(pieces=[_piece("a", prov="a.txt")], exclusions=["x/.DS_Store"]),
+        actor="Me Dupont",
                scope=WALL, matter="m", tenant=TENANT)
     with pytest.raises(ScopeDenied):
         store.noise_exclusions("m", TENANT, {"other-wall"})
@@ -166,6 +173,7 @@ def test_a_tenant_noise_list_replaces_the_default_config_as_data(tmp_path) -> No
 def test_unknown_cardinality_containers_are_counted_durably_and_in_words(store: SqlStore) -> None:
     store.save(
         IngestionResult(failures=[_fail("bomb.zip", cls=ErrorClass.CONTAINER_UNOPENABLE)]),
+            actor="Me Dupont",
         scope=WALL, matter="m", tenant=TENANT)
     inv = store.inventory("m", TENANT, {WALL})
     assert inv.open_register_entries == 1 and inv.unknown_cardinality_entries == 1

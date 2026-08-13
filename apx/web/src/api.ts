@@ -8,8 +8,21 @@ export type IngestResponse = {
   matter: string; inventory: Inventory; failure_list: Failure[]; exclusion_list: string[]; persisted: boolean;
 };
 export type MatterSummary = { matter: string; scope: string; inventory: Inventory };
-export type AuditEntry = { seq: number; actor: string; action: string; detail: string; timestamp: string };
-export type AuditTrail = { entries: AuditEntry[]; verified: boolean };
+// Story 5.5 — an entry NAMES the chain it is counted on: the matter, or "" for the tenant chain
+// (AD-43). Two chains carry one matter's history, so `seq` alone is no longer unique across the
+// trail — key a row by chain + seq, never by seq.
+export type AuditEntry = {
+  seq: number; actor: string; action: string; detail: string; timestamp: string;
+  chain_scope: string; chain_label_fr: string;
+};
+// What the reader can conclude about ONE chain. `verifiable_in_isolation` is true only for the
+// matter's own chain: the pre-5.5 slice on the tenant chain is verified server-side by recomputing
+// the whole tenant chain, which the holder of a scoped export cannot do.
+export type AuditSlice = {
+  chain_scope: string; label_fr: string; entries: number; verified: boolean;
+  verifiable_in_isolation: boolean; broken_at: number | null;
+};
+export type AuditTrail = { entries: AuditEntry[]; verified: boolean; slices: AuditSlice[] };
 export type DuplicateGroup = { representative: string; members: string[]; size: number };
 export type Triage = { submitted: number; distinct: number; duplicates: number; groups: DuplicateGroup[] };
 export type LabelledPiece = { provenance: string; label: string; rationale: string };

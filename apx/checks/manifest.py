@@ -32,6 +32,7 @@ from pathlib import Path
 
 from apx.checks import (
     artefact_stamp_ownership,
+    audit_record,
     case_theory_ownership,
     confidence_derivation,
     configuration,
@@ -619,6 +620,19 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        estimator.the_bound_consumes_no_model_number,
        "core/domain/confidence.py and core/domain/sampling.py — the estimator reaches neither the "
        "FR-19 projection nor any model-reported confidence field (Story 5.2, OQ-4 input 5)"),
+    # ── story 5.5: the AUDIT RECORD — chains per (tenant, matter), a locked sequence authority ──
+    _p("audit-catalogue-complete", "FR-24", "AD-43", "every recorded act is a catalogued act",
+       audit_record.audit_catalogue_is_complete,
+       "every _append_audit call site across apx/** (no literal verbs, every named ACT_* defined) "
+       "and core/domain/audit.py's FR-24 classes — covered by a writer, or pending with its story"),
+    _p("audit-sequence-not-generated", "FR-53", "AD-43", "the audit sequence is never generated",
+       audit_record.audit_sequence_is_not_generated,
+       "Sequence()/nextval/autoincrement anywhere in apx/** (docstrings exempt), and the head row "
+       "in store.py must be taken with_for_update — allocated inside the entry's own transaction"),
+    _p("audit-record-append-only", "FR-24", "AD-22", "an evidential row is never edited or removed",
+       audit_record.audit_record_is_append_only,
+       "delete()/update() built against any of the 7 evidential models across apx/** — the "
+       "audit_chain_head allocator is deliberately exempt, being the counter and not the record"),
     # ── story 5.4: the SENTENCE — one composer, offline, and the unfitness declaration ─────────
     _p("statement-one-composer", "FR-23", "AD-37", "the sentence has one composer",
        statement.the_sentence_has_one_composer,

@@ -15,6 +15,7 @@ from collections.abc import Callable
 
 from apx.checks import (
     artefact_stamp_ownership,
+    audit_record,
     case_theory_ownership,
     confidence_derivation,
     configuration,
@@ -194,6 +195,9 @@ CHECKS: list[Callable[[], CheckResult]] = [
     estimator.the_simulation_gate_is_wired,
     # Story 5.4 — the SENTENCE: one composer, composed offline, and an unfit ranking that offers a
     # re-rank rather than a re-cut (FR-23/FR-55/FR-56).
+    audit_record.audit_catalogue_is_complete,
+    audit_record.audit_sequence_is_not_generated,
+    audit_record.audit_record_is_append_only,
     statement.the_sentence_has_one_composer,
     statement.the_sentence_is_composed_offline,
     statement.unfitness_offers_no_line_move,

@@ -378,19 +378,35 @@ class ImportUnit(Base):
 
 
 class AuditRecord(Base):
-    """Append-only, tamper-evident trail (FR-24, FR-53). Each entry carries a
-    monotonic per-tenant sequence and a chain value over the previous entry, so a
-    gap, a reordering or a truncation is detectable by a reader holding only the
-    export. No user-facing action edits or removes an entry; a correction is a new
-    entry. The validation act (FR-45) and the full recorded surface are later
-    stories; this slice records ingestion under an actor.
+    """Append-only, tamper-evident trail (FR-24, FR-53). Each entry carries a monotonic sequence
+    and a chain value over the previous entry **of its own chain**, so a gap, a reordering or a
+    truncation is detectable by a reader holding only the export. No user-facing action edits or
+    removes an entry; a correction is a new entry.
+
+    **The chain is ``(tenant, chain_scope)`` (AD-43, Story 5.5).** ``chain_scope`` is a *matter*,
+    or the empty string for the matterless *tenant* chain that carries provisioning, scope grants,
+    configuration changes and security events. It is a column rather than a ``matter IS NULL``
+    convention because FR-24 as amended requires the entry to NAME its chain: an act belonging to
+    no *matter* must not be confused with an act whose *matter* went missing on the way in. It is
+    also what makes FR-53 satisfiable at all — an export is per *matter*, and under one chain per
+    *tenant* a *matter*'s export has a hole wherever a sibling wrote in between, with links the
+    reader cannot recompute because they run through entries they may not see.
+
+    ``content_version`` names the recipe the chain value was taken over (see
+    ``apx.core.domain.audit.chained_content``). Entries written before Story 5.5 carry version 1
+    and no versions; recomputing them under the newer recipe would report tampering on a record
+    nobody touched, so the verifier reads the recipe from the entry, never from today's code.
     """
 
     __tablename__ = "audit_record"
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     tenant: Mapped[str] = mapped_column(String, nullable=False)
-    seq: Mapped[int] = mapped_column(nullable=False)          # monotonic per tenant
+    # the chain this entry belongs to: a matter, or "" for the tenant chain (AD-43). NOT NULL, so
+    # the head row's key needs no COALESCE and no entry can be chainless.
+    chain_scope: Mapped[str] = mapped_column(
+        String, nullable=False, default="", server_default="")
+    seq: Mapped[int] = mapped_column(nullable=False)       # monotonic per (tenant, chain_scope)
     matter: Mapped[str | None] = mapped_column(String, nullable=True)
     # actor is a person's display name (PII) and is never a SQL predicate → encrypted (AD-31
     # puts "the audit record" in the encrypted set). action stays plaintext: a categorical
@@ -404,8 +420,47 @@ class AuditRecord(Base):
     detail: Mapped[str] = mapped_column(EncryptedText("audit_record.detail"), nullable=False)
     chain: Mapped[str] = mapped_column(String(64), nullable=False)  # sha256(prev.chain + content)
     timestamp: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    # which recipe produced `chain`, and the two versions FR-24 requires recorded. Both versions
+    # are NULL on a pre-5.5 entry — it genuinely was not recorded, and inventing one now would give
+    # the row a provenance it does not have (the AD-19 rule the 0032 migration also obeys).
+    content_version: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=1, server_default="1")
+    app_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    schema_version: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
-    __table_args__ = (UniqueConstraint("tenant", "seq", name="uq_audit_tenant_seq"),)
+    __table_args__ = (
+        UniqueConstraint("tenant", "chain_scope", "seq", name="uq_audit_chain_seq"),
+    )
+
+
+class AuditChainHead(Base):
+    """The head of one audit chain — the **sequence authority** (AD-43, Story 5.5).
+
+    The sequence number is allocated from this row, taken ``SELECT … FOR UPDATE`` **inside the
+    acting transaction**, and never from a sequence generator. AD-43 is explicit about why:
+    ``nextval`` is non-transactional, so a worker that takes a number and then crashes burns it
+    forever — a permanent gap in a record of asserted legal weight, reported as tampering on every
+    future export, on a machine APX reaches only by telephone, and which AD-22 forbids anyone to
+    repair. Allocating under a row lock makes a gap impossible **by construction** instead.
+
+    It also fixes the read-modify-write the trail used before: an unlocked ``ORDER BY seq DESC
+    LIMIT 1`` lets two concurrent acts compute the same next number, and the loser dies on the
+    unique constraint — a refused legitimate act, which AD-22 turns into a refused *action*.
+    """
+
+    __tablename__ = "audit_chain_head"
+
+    tenant: Mapped[str] = mapped_column(String, primary_key=True)
+    chain_scope: Mapped[str] = mapped_column(String, primary_key=True)  # matter, or "" (tenant)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)     # the last allocated number
+    chain: Mapped[str] = mapped_column(String(64), nullable=False)  # the head entry's chain value
+    # What this chain's FIRST entry chains onto: "" for the tenant chain (the root), and the
+    # anchoring `chain_opened` entry's value for a matter chain. Written once at open and never
+    # again — without it, a reader can prove every link of a matter chain except the one that
+    # attaches it to the tenant, and would have to take the whole chain's existence on trust.
+    anchor: Mapped[str] = mapped_column(String(64), nullable=False, default="", server_default="")
+    opened_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 
 
 class LabelRecord(Base):
@@ -518,7 +573,9 @@ class BackupRecord(Base):
 class TruncationMarker(Base):
     """A detected restore-truncation (story 1.11, AD-35): the live chain head fell BEHIND the head
     journal — the record now ends earlier than it did. Persistent and **never repaired**; cleared
-    only by an audited override with a reason. One row per tenant (the latest detection)."""
+    only by an audited override with a reason. One row per tenant, carrying EVERY chain the latest
+    detection found truncated (a restore rolls the whole database back, so several chains fall at
+    once) together with the total number of entries lost."""
 
     __tablename__ = "truncation_marker"
 
@@ -526,6 +583,13 @@ class TruncationMarker(Base):
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     journal_seq: Mapped[int] = mapped_column(Integer, nullable=False)   # where the record was
     live_seq: Mapped[int] = mapped_column(Integer, nullable=False)      # where it ends now
+    # Story 5.5 — a tenant now runs SEVERAL chains (AD-43), so one restore truncates several at
+    # once and the pair above can only describe one of them. ``chains`` names every truncated
+    # chain with its own loss, and ``entries_lost`` is the TOTAL. Without them the marker reported
+    # whichever chain sorted last, understating the loss and naming no matter (review, confirmed).
+    chains: Mapped[str | None] = mapped_column(Text, nullable=True)   # "scope:journal:live, …"
+    entries_lost: Mapped[int] = mapped_column(
+        Integer, nullable=False, default=0, server_default="0")
     # the override actor (PII) and reason → application-encrypted (AD-31); NULL until cleared
     cleared_by: Mapped[str | None] = mapped_column(
         EncryptedText("truncation_marker.cleared_by"), nullable=True)

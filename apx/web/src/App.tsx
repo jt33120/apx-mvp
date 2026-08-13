@@ -1023,18 +1023,38 @@ function LabelChip({ label }: { label: string }) {
 }
 
 function Journal({ trail }: { trail: AuditTrail }) {
+  // Story 5.5 — one verdict PER CHAIN (AD-43). A matter's history spans its own chain and, for
+  // anything written before the migration, the cabinet's. Only the first is something a reader
+  // holding the export alone can recompute, and the seal says which is which rather than
+  // collapsing both into one reassuring sentence.
   return (
     <div className="apx-block">
-      <p className={trail.verified ? "apx-seal apx-seal--ok" : "apx-seal apx-seal--bad"}>
-        {trail.verified
-          ? "🔒 Journal intègre — la chaîne se recalcule sans rupture."
-          : "⚠ Journal altéré — la chaîne ne se recalcule pas."}
-      </p>
+      {trail.slices.length === 0 ? (
+        <p className="apx-seal apx-seal--bad">
+          ⚠ Aucune chaîne à vérifier pour cette affaire — un registre sans chaîne n'est pas un
+          registre intact, c'est un registre sans rien à contrôler.
+        </p>
+      ) : null}
+      {trail.slices.map((s) => (
+        <p
+          key={s.chain_scope}
+          className={s.verified ? "apx-seal apx-seal--ok" : "apx-seal apx-seal--bad"}
+        >
+          {s.verified
+            ? `🔒 ${s.label_fr} — ${s.entries} acte${s.entries > 1 ? "s" : ""}, la chaîne se recalcule sans rupture`
+            : `⚠ ${s.label_fr} — la chaîne ne se recalcule pas${s.broken_at ? ` (rupture au n° ${s.broken_at})` : ""}`}
+          {s.verified && !s.verifiable_in_isolation
+            ? (s.chain_scope === ""
+                ? " ; vérifiée ici sur toute la chaîne du cabinet, dont cet extrait ne contient qu'une part"
+                : " ; vérifiée ici, mais son point de départ n'a pas été retrouvé — un lecteur qui ne détiendrait que cet extrait ne peut pas refaire le premier maillon")
+            : ""}
+        </p>
+      ))}
       <ol className="apx-hint apx-inline-list">
         {trail.entries.map((e) => (
-          <li key={e.seq}>
+          <li key={`${e.chain_scope}#${e.seq}`}>
             <strong style={{ color: "var(--apx-ink-2)" }}>{e.action}</strong> — {e.detail}{" "}
-            <span style={{ color: "var(--apx-muted)" }}>· {e.actor} · {e.timestamp.replace("T", " ").slice(0, 19)}</span>
+            <span style={{ color: "var(--apx-muted)" }}>· {e.actor} · {e.timestamp.replace("T", " ").slice(0, 19)} · {e.chain_label_fr}</span>
           </li>
         ))}
       </ol>

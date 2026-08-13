@@ -53,7 +53,8 @@ def _piece(content: str, *, prov: str, matter: str = "m") -> IngestedPiece:
 def _seed(
     store: SqlStore, *failures: IngestedFailure, matter: str = "m", scope: str = WALL
 ) -> None:
-    store.save(IngestionResult(failures=list(failures)), scope=scope, matter=matter, tenant=TENANT)
+    store.save(IngestionResult(failures=list(failures)),
+        actor="Me Dupont", scope=scope, matter=matter, tenant=TENANT)
 
 
 # ── AC1: the full field set, cardinality, scope-checked ───────────────────────────────────────
@@ -140,6 +141,7 @@ def test_two_tenants_same_matter_and_path_do_not_clobber(store: SqlStore) -> Non
         store.save(IngestionResult(failures=[IngestedFailure(
             filename="a.pdf", submitted_path="/a.pdf", matter="m", tenant=ten,
             error_class=ErrorClass.EXTRACTION_ERROR, detail="x", custodian=cust)]),
+                actor="Me Dupont",
             scope="wall", matter="m", tenant=ten)
     with store._sf() as s:
         assert s.scalar(select(func.count()).select_from(Failure)) == 2   # two rows, not one

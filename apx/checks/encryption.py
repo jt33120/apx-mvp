@@ -41,6 +41,7 @@ _PLAINTEXT_ALLOWLIST = {
     "id", "tenant", "matter", "scope", "user_id", "piece_id", "chunk_id", "job_id",
     "content_hash", "text_key", "text_identity",
     "extraction_method", "extractor_version", "schema_version", "text_version",
+    "app_version",  # Story 5.5 — the application version stamped on an audit entry (FR-24)
     "full_text_version", "chunking_config_version", "piece_date_status", "external_ref",
     "model_id", "model_version",  # the embedder identity (AD-11) — categorical, non-content (2.8)
     "error_class", "resolution_state", "cardinality", "action", "chain", "label", "judge",
@@ -77,6 +78,23 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     ("ImportJob", "state"),
     ("ImportJob", "spool_path"),
     ("ImportUnit", "state"),
+    # Story 5.5 — the audit chain identity (AD-43). ``chain_scope`` holds a matter identifier or
+    # "" for the tenant chain, and ``anchor`` is a sha256 chain value. Both are exactly as
+    # sensitive as the already-plaintext ``matter`` and ``chain`` columns beside them, and both are
+    # query keys: the head row is looked up by (tenant, chain_scope) under a row lock on every
+    # audited act, and encrypting a lock key would make the sequence authority unlookupable.
+    ("AuditRecord", "chain_scope"),
+    ("AuditChainHead", "chain_scope"),
+    ("AuditChainHead", "anchor"),
+    # Story 5.5 — the truncation marker's per-chain loss listing, "scope:journal->live, …". It is
+    # machine-built from chain scopes (matter identifiers) and two integers, so it holds nothing
+    # the already-plaintext ``matter`` column does not hold beside it on the very same tenant.
+    # The lock-key argument above does NOT apply here — this column is read for display only — so
+    # the decision rests on sensitivity alone: encrypting a list of matter names while every matter
+    # name sits in the clear one table over would protect nothing and only make this allowlist a
+    # less honest record of what was actually weighed. The marker's genuinely content-bearing
+    # columns (``cleared_by``, the human-written ``reason``) are EncryptedText.
+    ("TruncationMarker", "chains"),
     # Story 4.3 — the ranking version's structural metadata, kept plaintext by conscious decision.
     # ``basis`` is a categorical enum (case-theory | intrinsic). ``identity_json`` is the AD-23
     # ranking-version identity (model/embedder/chunking/schema/prompt/config identities + hashes) —

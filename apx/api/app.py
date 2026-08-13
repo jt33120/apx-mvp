@@ -81,6 +81,7 @@ from apx.core.app.sampling import (
     start_sampling_run,
 )
 from apx.core.app.triage import triage_pieces
+from apx.core.domain import audit as AUDIT
 from apx.core.domain import capacity
 from apx.core.domain.confidence import estimator_is_proven
 from apx.core.domain.config import (
@@ -195,6 +196,10 @@ class _LoginRateLimiter:
 
 
 _login_limiter = _LoginRateLimiter(limit=10, window_seconds=300.0)
+
+#: Security events are system-initiated, so they name the component (FR-24) rather than a user —
+#: a failed login has no user to attribute it to, and the one it names may be a stranger's guess.
+_AUTH_ACTOR = AUDIT.system_actor("auth")
 
 
 @app.middleware("http")
@@ -426,11 +431,31 @@ class AuditEntryOut(BaseModel):
     action: str
     detail: str
     timestamp: str
+    # Which chain this entry is counted on — the matter, or "" for the tenant chain (AD-43).
+    # Named on the entry rather than inferred, so a reader can tell an act that belongs to no
+    # matter from one whose matter went missing (FR-24 as amended).
+    chain_scope: str
+    chain_label_fr: str
+
+
+class ChainSliceOut(BaseModel):
+    """What the reader can conclude about one chain of this matter's history."""
+
+    chain_scope: str
+    label_fr: str
+    entries: int
+    verified: bool
+    # True only for the matter's OWN chain: a reader holding just these entries and the anchor
+    # recomputes every link. The pre-5.5 slice on the tenant chain is verified here by
+    # recomputing the whole tenant chain — which the holder of a scoped export cannot do.
+    verifiable_in_isolation: bool
+    broken_at: int | None = None
 
 
 class AuditTrailOut(BaseModel):
     entries: list[AuditEntryOut]
     verified: bool
+    slices: list[ChainSliceOut] = []
 
 
 class DuplicateGroupOut(BaseModel):
@@ -710,10 +735,10 @@ def login(req: LoginRequest, request: Request, response: Response) -> IdentityOu
         # Durably audit the failure (FR-48), not only throttle in memory; audit the lockout
         # once, when this failure crosses the threshold.
         store.record_auth_event(
-            req.tenant, "system:auth", "login_failed", f"email={req.email} ip={ip}")
+            req.tenant, _AUTH_ACTOR, AUDIT.ACT_LOGIN_FAILED, f"email={req.email} ip={ip}")
         _login_limiter.record_failure(ip)
         if _login_limiter.blocked(ip):
-            store.record_auth_event(req.tenant, "system:auth", "login_locked_out", f"ip={ip}")
+            store.record_auth_event(req.tenant, _AUTH_ACTOR, AUDIT.ACT_LOGIN_LOCKED_OUT, f"ip={ip}")
         raise HTTPException(status_code=401, detail="identifiants invalides")
     # Password ok — demand the second factor when the tenant requires MFA (config-as-data).
     # FAIL CLOSED: an MFA-required tenant whose user is not enrolled cannot log in with a
@@ -722,12 +747,12 @@ def login(req: LoginRequest, request: Request, response: Response) -> IdentityOu
     if requires_mfa:
         if not secret:  # not enrolled (or an empty secret) — refuse, never downgrade to 1FA
             store.record_auth_event(
-                user.tenant, "system:auth", "login_mfa_unenrolled", f"user={user.id} ip={ip}")
+                user.tenant, _AUTH_ACTOR, AUDIT.ACT_LOGIN_MFA_UNENROLLED, f"user={user.id} ip={ip}")
             raise HTTPException(
                 status_code=403, detail="MFA requis mais non configuré")
         if not req.totp or not pyotp.TOTP(secret).verify(req.totp, valid_window=1):
             store.record_auth_event(
-                user.tenant, "system:auth", "login_mfa_failed", f"user={user.id} ip={ip}")
+                user.tenant, _AUTH_ACTOR, AUDIT.ACT_LOGIN_MFA_FAILED, f"user={user.id} ip={ip}")
             _login_limiter.record_failure(ip)
             raise HTTPException(status_code=401, detail="code MFA invalide")
     _login_limiter.reset(ip)  # a success clears the counter — legitimate use is never throttled
@@ -1418,7 +1443,7 @@ def export_suggestive(
     store = _require_store()
     out = _suggestive_payload(store, ident, q, k)
     store.audit_query(ident.tenant, ident.actor, term=q, engine=out.truth_status,
-                      scopes=ident.scopes, action="export-search")
+                      scopes=ident.scopes, action=AUDIT.ACT_EXPORT_SEARCH)
     return HTMLResponse(_suggestive_export_html(out))
 
 
@@ -1434,7 +1459,7 @@ def export_exhaustive(
     out = _exhaustive_payload(store, ident, q)
     store.audit_query(ident.tenant, ident.actor, term=q, engine=out.truth_status,
                       scopes=ident.scopes, denominator=_inventory_of(out.denominator),
-                      action="export-search")
+                      action=AUDIT.ACT_EXPORT_SEARCH)
     return HTMLResponse(_exhaustive_export_html(out))
 
 
@@ -1635,8 +1660,13 @@ def get_piece_layout(piece_id: str, ident: Identity = Depends(current_identity))
 
 @app.get("/api/matters/{matter}/audit", response_model=AuditTrailOut)
 def read_audit(matter: str, ident: Identity = Depends(current_identity)) -> AuditTrailOut:
-    """The audit trail for a matter — 403 if its scope is not held. `verified` is
-    the tamper-evidence: the tenant's audit chain recomputes cleanly."""
+    """The audit trail for a matter — 403 if its scope is not held.
+
+    A matter's history spans up to two chains (AD-43): its own, and the tenant chain, which holds
+    both the matterless acts and everything written before Story 5.5. `slices` reports each one
+    separately, because only the matter's own chain is verifiable by a reader holding nothing but
+    the export — the other's links run through entries outside their scope. One boolean over both
+    would claim a property of bytes the reader does not hold."""
     store = _require_store()
     try:
         trail = store.read_audit(matter, ident.tenant, ident.scopes)
@@ -1645,10 +1675,18 @@ def read_audit(matter: str, ident: Identity = Depends(current_identity)) -> Audi
     return AuditTrailOut(
         entries=[
             AuditEntryOut(seq=e.seq, actor=e.actor, action=e.action, detail=e.detail,
-                          timestamp=e.timestamp)
+                          timestamp=e.timestamp, chain_scope=e.chain_scope,
+                          chain_label_fr=AUDIT.chain_label_fr(e.chain_scope))
             for e in trail.entries
         ],
         verified=trail.verified,
+        slices=[
+            ChainSliceOut(
+                chain_scope=sl.chain_scope, label_fr=AUDIT.chain_label_fr(sl.chain_scope),
+                entries=sl.entries, verified=sl.verified,
+                verifiable_in_isolation=sl.verifiable_in_isolation, broken_at=sl.broken_at)
+            for sl in trail.slices
+        ],
     )
 
 

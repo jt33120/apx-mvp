@@ -25,9 +25,37 @@ class HeadJournalUnavailable(RuntimeError):
     gate as the encryption key: without it, a restore-truncation is undetectable."""
 
 
+#: Separates the *tenant* from the *matter* in a journalled chain identity. A unit separator, not
+#: a slash or a colon: those occur in identifiers, and a scope that can be spelled two ways is a
+#: scope whose reconciliation can be aimed at the wrong chain.
+SCOPE_SEP = "\x1f"
+
+
+class AmbiguousScope(ValueError):
+    """A tenant or matter containing the separator — a chain identity that cannot be parsed back."""
+
+
+def journal_scope(tenant: str, chain_scope: str) -> str:
+    """The journal identity of one audit chain (AD-43 chains per (tenant, matter), plus one tenant
+    chain). The *tenant* chain keeps the bare tenant as its scope: that is what every head recorded
+    before Story 5.5 carries, and every one of those heads was in fact a tenant-chain head — so the
+    journal needs no migration and no line is reinterpreted."""
+    for part in (tenant, chain_scope):
+        if SCOPE_SEP in part:
+            raise AmbiguousScope(f"identifier contains the scope separator: {part!r}")
+    return f"{tenant}{SCOPE_SEP}{chain_scope}" if chain_scope else tenant
+
+
+def tenant_of(scope: str) -> str:
+    """The *tenant* a journalled scope belongs to — a truncation on any of its chains is the
+    tenant's truncation."""
+    return scope.split(SCOPE_SEP, 1)[0]
+
+
 @dataclass(frozen=True)
 class HeadEntry:
-    """One recorded chain head. ``scope`` is the *tenant* (AD-43 chains per tenant)."""
+    """One recorded chain head. ``scope`` is the chain identity from :func:`journal_scope`: the
+    bare *tenant* for the *tenant* chain, or ``tenant␟matter`` for a *matter* chain."""
 
     scope: str
     seq: int

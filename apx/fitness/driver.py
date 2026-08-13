@@ -7,15 +7,19 @@ regression; it prints the PENDING stages and the model-degradation list from the
 same source of truth. **It never marks a PENDING stage green** — faking a stage
 would be the v1 "demo-shaped" failure in miniature.
 
-Today ASSERTED: the app boots, and the structural checks pass. Everything down-
-stream is PENDING against the story that builds it.
+A stage becomes ASSERTED in the story that builds it, and only for the half this
+frame can actually reach: the frame runs with no network and no database, so a
+capability whose proof needs either states which half it asserts and leaves the
+other to the adapter tests and the CI ``db`` job. Reading the enumeration below
+is the only way to know what is green today — this docstring deliberately does
+not keep a copy that could drift out of date.
 """
 
 from __future__ import annotations
 
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 ASSERTED = "ASSERTED"
 PENDING = "PENDING"
@@ -163,6 +167,89 @@ def _the_sentence_renders_offline() -> None:
     assert "0.0%" not in tiny, "a positive bound rendered as a zero percentage (FR-23/§0.2)"
 
 
+def _the_record_verifies_offline() -> None:
+    """The audit record's chain recomputes from the entries alone (story 5.5, FR-24/FR-53/AD-43).
+
+    This is the offline half, on the ``_schema_frozen`` precedent. WRITING an entry allocates its
+    sequence from a head row taken under ``SELECT … FOR UPDATE`` and needs a database, which this
+    frame does not have; that half is exercised by the adapter tests and the CI ``db`` job. What
+    is asserted here is the half the *bâtonnier* actually performs — recomputing a chain from the
+    bytes in front of them, holding ONE matter's entries and nothing else.
+
+    What is deliberately NOT claimed: a tail truncation. Dropping the last entries leaves a
+    shorter chain that recomputes perfectly, and no reader can tell from the export alone. That is
+    what the head journal outside the restorable store is for (AD-35) and what story 5.9 puts on
+    the export's face. Asserting it here would be this project's recurring defect — a comparison
+    whose right-hand side is not the same thing as its left, failing towards the flattering side.
+    """
+    from apx.core.domain import audit
+
+    # The catalogue is a mechanism, not a list: every FR-24 class has a writer, or a story that
+    # owns it. A class with neither is a hole that reads as coverage.
+    covered = audit.covered_classes()
+    orphan = [c for c in audit.FR24_CLASSES
+              if c not in covered and c not in audit.PENDING_CLASSES]
+    assert not orphan, f"FR-24 act classes with no writer and no owning story: {orphan}"
+    # No entry is ever attributable to nobody (AC-3): the one attribution the record must not carry
+    # is the countable, filterable, defensible-looking one.
+    for nobody in ("unknown", "system", ""):
+        try:
+            audit.check_actor(nobody)
+        except audit.UnknownActor:
+            continue
+        raise AssertionError(f"the record accepted {nobody!r} as an actor (FR-24)")
+
+    def _chain(scope: str, verbs: list[str], anchor: str = "") -> list[audit.VerifiableEntry]:
+        rows: list[audit.VerifiableEntry] = []
+        prev = anchor
+        for seq, verb in enumerate(verbs, start=1):
+            row = audit.VerifiableEntry(
+                tenant="cabinet", chain_scope=scope, seq=seq, matter=scope or None,
+                actor="Me Dupont", action=verb, detail=f"d{seq}",
+                timestamp=f"2026-08-13T10:0{seq}:00+00:00", chain="",
+                content_version=audit.CONTENT_V2, app_version="0.1.0", schema_version="1")
+            prev = audit.chain_value(prev, audit.chained_content(
+                version=row.content_version, seq=row.seq, tenant=row.tenant,
+                chain_scope=row.chain_scope, matter=row.matter, actor=row.actor,
+                action=row.action, detail=row.detail, timestamp=row.timestamp,
+                app_version=row.app_version or "", schema_version=row.schema_version or ""))
+            rows.append(replace(row, chain=prev))
+        return rows
+
+    verbs = [audit.ACT_INGEST, audit.ACT_PIECE_LABELLED, audit.ACT_LINE_PLACED]
+    export = _chain("affaire-a", verbs)
+
+    def _verdict(rows: list[audit.VerifiableEntry]) -> audit.ChainVerdict:
+        (only,) = audit.verify_chains(rows, {"affaire-a": ""})
+        return only
+
+    clean = _verdict(export)
+    assert clean.verified and clean.anchored, f"an untampered export failed at {clean.broken_at}"
+
+    # a rewritten field — the correction the record forbids, made in place
+    forged = replace(export[1], detail="corrected after the fact")
+    tampered = _verdict([export[0], forged, export[2]])
+    assert not tampered.verified and tampered.broken_at == 2, "a rewritten entry passed (FR-53)"
+
+    # a gap — one entry removed from the middle
+    gapped = _verdict([export[0], export[2]])
+    assert not gapped.verified and gapped.broken_at == 3, "a missing entry passed (FR-53)"
+
+    # a reordering — two acts swapped while their sequence numbers stay put
+    swapped = _verdict([
+        export[0], replace(export[1], action=export[2].action),
+        replace(export[2], action=export[1].action)])
+    assert not swapped.verified and swapped.broken_at == 2, "a reordering passed (FR-53)"
+
+    # AD-43's whole point: another matter's entries are neither needed nor consulted. The same
+    # export verifies identically beside a sibling chain and alone — which is what a per-TENANT
+    # chain could not do, reporting a gap wherever a sibling matter had written in between.
+    sibling = _chain("affaire-b", verbs, anchor="0" * 64)
+    both = audit.verify_chains(export + sibling, {"affaire-a": "", "affaire-b": "0" * 64})
+    assert [v.chain_scope for v in both] == ["affaire-a", "affaire-b"]
+    assert all(v.verified for v in both), "two chains of one tenant did not verify independently"
+
+
 # The pipeline. Order is the FR-55 sequence. `needs_model=True` marks a capability
 # that does NOT survive the model provider's absence (the degradation list, AC4).
 STAGES: list[Stage] = [
@@ -182,7 +269,14 @@ STAGES: list[Stage] = [
         check=_estimator_proven_sound,
         invariant="soundness, not reproducibility — and no network, no database",
     ),
-    Stage("produce an audit record", "5.5", PENDING),
+    Stage(
+        "produce an audit record",
+        "5.5",
+        ASSERTED,
+        check=_the_record_verifies_offline,
+        invariant="verifiable by a reader holding ONE matter's entries and nothing else; the "
+                  "write path needs a database and is not reached here",
+    ),
     Stage(
         "confidence bound as a sentence",
         "5.4",

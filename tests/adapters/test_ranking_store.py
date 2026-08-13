@@ -82,7 +82,9 @@ def _simple_order():  # noqa: ANN202
 def _actions(store: SqlStore) -> list[str]:
     with store._sf() as s:
         return list(s.scalars(
-            select(AuditRecord.action).where(AuditRecord.tenant == "t").order_by(AuditRecord.seq)))
+            select(AuditRecord.action)
+            .where(AuditRecord.tenant == "t", AuditRecord.chain_scope == "m")
+            .order_by(AuditRecord.seq)))
 
 
 def test_record_ranking_persists_version_entries_and_one_audit_atomically(store: SqlStore) -> None:

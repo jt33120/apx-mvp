@@ -33,6 +33,7 @@ def _seed_failure(store, matter: str, scope: str) -> None:  # noqa: ANN001
         IngestionResult(failures=[IngestedFailure(
             filename="a.pdf", submitted_path="/dossier/a.pdf", matter=matter, tenant="t",
             error_class=ErrorClass.PASSWORD_PROTECTED, detail="x", custodian="Me Martin")]),
+                actor="Me Dupont",
         scope=scope, matter=matter, tenant="t")
 
 

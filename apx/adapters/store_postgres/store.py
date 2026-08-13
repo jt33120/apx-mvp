@@ -32,6 +32,7 @@ from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.deterministic_query import exact_search_stmt
 from apx.adapters.store_postgres.models import (
     ArtefactStamp,
+    AuditChainHead,
     AuditRecord,
     BackupRecord,
     CaseTheoryVersion,
@@ -66,6 +67,7 @@ from apx.adapters.store_postgres.models import (
 )
 from apx.adapters.store_postgres.semantic_query import results_from_rows, semantic_search_stmt
 from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
+from apx.core.domain import audit as AUDIT
 from apx.core.domain.auth import hash_password, verify_and_upgrade, verify_password
 from apx.core.domain.cascade import INTRINSIC_SIGNALS
 from apx.core.domain.chunking import (
@@ -104,7 +106,13 @@ from apx.core.domain.freshness import (
     extraction_digest,
     population_digest,
 )
-from apx.core.domain.head_journal import HeadEntry, HeadJournal, Reconciliation
+from apx.core.domain.head_journal import (
+    HeadEntry,
+    HeadJournal,
+    Reconciliation,
+    journal_scope,
+    tenant_of,
+)
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.justification import (
     EvidenceExtract,
@@ -185,13 +193,24 @@ _log = logging.getLogger("apx.store")
 # same time whether or not the email exists (no user-enumeration by timing).
 _DUMMY_HASH = hash_password("timing-equalizer")
 
+#: Provisioning has no human author, so it names the component instead — FR-24: "system-initiated
+#: entries name the system component as actor rather than attributing them to a user".
+_PROVISIONING = AUDIT.system_actor("provisioning")
+
 _APP_VERSION = "0.1.0"           # the application version stamped on a head-journal entry (AD-35)
 _HEAD_SCHEMA_VERSION = "slice-a"  # the payload schema version (AD-40) stamped on the head
 # The tenant-owned tables a logical backup captures (each has a `tenant` column). `user_scope` is
 # keyed by user_id (tenant-bound via the user) and is handled specially in backup/restore.
 _BACKUP_TABLES = (
     "matter_scope", "user_account", "session", "tenant_setting",
-    "piece", "chunk", "failure", "noise_exclusion", "piece_label", "audit_record", "recall_review",
+    "piece", "chunk", "failure", "noise_exclusion", "piece_label", "audit_record",
+    # The chain heads travel WITH the record (Story 5.5, AD-43). Two things break without them:
+    # a restored matter chain has no anchor, so its first link is unprovable and the restore-time
+    # verification cannot pass; and the sequence authority is gone, so the next act after a restore
+    # allocates seq 1 again — colliding with the restored entries, or worse, silently forking the
+    # chain. A backup that omits the allocator restores a record it cannot continue.
+    "audit_chain_head",
+    "recall_review",
     "backup_record", "truncation_marker", "taxonomy_label_entry", "line_placement", "pin_entry",
     "piece_justification", "justification_rejection",
 )
@@ -337,10 +356,12 @@ class TruncationStatus:
 
     tenant: str
     active: bool
-    journal_seq: int
-    live_seq: int
+    journal_seq: int    # the WORST-hit chain: where its record was
+    live_seq: int       # ... and where it ends now
     detected_at: str | None
     cleared_at: str | None
+    chains: str = ""        # every truncated chain, "scope:was->now", comma-joined
+    entries_lost: int = 0   # the TOTAL across every chain, never one chain's share
 
 
 @dataclass(frozen=True)
@@ -498,12 +519,31 @@ class AuditEntry:
     detail: str
     chain: str
     timestamp: str
+    chain_scope: str = ""   # the chain this entry is counted on: the matter, or "" (tenant chain)
+
+
+@dataclass(frozen=True)
+class ChainSlice:
+    """One chain's contribution to a matter's trail, and what a reader can conclude about it.
+
+    A matter's history spans two chains after Story 5.5: its own, and — for anything written before
+    the migration — the *tenant* chain, where the record used to keep everything. The second slice
+    is **not verifiable in isolation**: its links run through entries belonging to other matters,
+    which the reader is not entitled to see (FR-24 scopes the read). Saying so is the point. One
+    boolean over both would assert a property of bytes the reader does not hold."""
+
+    chain_scope: str
+    entries: int
+    verified: bool
+    verifiable_in_isolation: bool
+    broken_at: int | None = None
 
 
 @dataclass(frozen=True)
 class AuditTrail:
     entries: list[AuditEntry]
-    verified: bool  # the chain recomputes cleanly (no gap, reorder or truncation)
+    verified: bool  # every slice recomputes cleanly (no gap, reorder or truncation)
+    slices: tuple[ChainSlice, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -796,13 +836,21 @@ def _as_utc(dt: datetime) -> datetime:
     return dt.replace(tzinfo=UTC) if dt.tzinfo is None else dt.astimezone(UTC)
 
 
-def _audit_content(seq: int, tenant: str, matter: str | None, actor: str, action: str,
-                   detail: str, ts: str) -> str:
-    return f"{seq}|{tenant}|{matter or ''}|{actor}|{action}|{detail}|{ts}"
+# The chained content and the chain value live in the Domain (apx.core.domain.audit) as of Story
+# 5.5: there is ONE recipe per content version and ONE verifier, and both are reachable from a
+# reader that holds an export and no adapter. The adapter-local copies they replaced are gone —
+# two implementations of a tamper-evidence rule is one implementation and one liability.
 
 
-def _audit_chain(prev_chain: str, content: str) -> str:
-    return hashlib.sha256(f"{prev_chain}\x00{content}".encode()).hexdigest()
+def _snapshot_isolation_sql(dialect: str) -> str | None:
+    """The statement that pins a backup's reads to ONE moment, or None where the engine already
+    gives that.
+
+    PostgreSQL defaults to READ COMMITTED, where every statement sees a different snapshot — so a
+    backup could read ``audit_chain_head`` after a commit that ``audit_record`` was read before,
+    capturing an allocator ahead of its own record (review, confirmed). SQLite serialises writers
+    against a reader, so it has the property already and rejects the SET."""
+    return "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ" if dialect == "postgresql" else None
 
 
 def _safe_decrypt(ciphertext: str | None, context: str) -> str | None:
@@ -838,7 +886,7 @@ class SqlStore:
 
     def _capture_heads(self, session: Session, _ctx: object, _instances: object) -> None:
         pending = [
-            (obj.tenant, obj.seq, obj.chain)
+            (journal_scope(obj.tenant, obj.chain_scope), obj.seq, obj.chain)
             for obj in session.new if isinstance(obj, AuditRecord)
         ]
         if pending:
@@ -850,48 +898,143 @@ class SqlStore:
         if not heads or self._journal is None:
             return
         highest: dict[str, tuple[int, str]] = {}
-        for tenant, seq, chain in heads:  # keep the highest seq per tenant from this commit
-            if tenant not in highest or seq > highest[tenant][0]:
-                highest[tenant] = (seq, chain)
+        # Keep the highest seq per CHAIN from this commit — never per tenant: one commit can append
+        # to a matter chain and the tenant chain at once (an anchoring), and their sequence numbers
+        # belong to different countings. Collapsing them would journal one chain's head under the
+        # other's name, and the reconciliation would then compare a seq against an unrelated one.
+        for scope, seq, chain in heads:
+            if scope not in highest or seq > highest[scope][0]:
+                highest[scope] = (seq, chain)
         now = _audit_ts(datetime.now(UTC))
-        for tenant, (seq, chain) in highest.items():
+        for scope, (seq, chain) in highest.items():
             try:
                 self._journal.record(HeadEntry(
-                    tenant, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
+                    scope, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
             except OSError as exc:
                 # Surfaced two ways, never silent (AC5): a WARNING log now, and the sticky
                 # `journal_degraded` flag the DR status reads. A head we could not record means a
                 # later restore-truncation to this point could go undetected — an operator alarm.
                 self.journal_degraded = True
                 _log.warning(
-                    "head journal write failed for tenant %s at seq %s: %s", tenant, seq, exc)
+                    "head journal write failed for scope %s at seq %s: %s", scope, seq, exc)
+
+    def _lock_chain_head(
+        self, session: Session, tenant: str, chain_scope: str
+    ) -> AuditChainHead | None:
+        """The chain's head row, locked for the rest of this transaction (AD-43), or None when the
+        chain has never been written to.
+
+        ``with_for_update`` is the whole point: the number is allocated from a locked row inside
+        the acting transaction, so a gap is impossible **by construction** rather than detectable
+        after the fact. On SQLite the lock is a no-op (the engine serialises whole writers, so the
+        invariant holds anyway); on PostgreSQL it serialises the two writers instead of killing the
+        loser on the unique constraint — which AD-22 would turn into a refused legitimate action."""
+        return session.execute(
+            select(AuditChainHead)
+            .where(AuditChainHead.tenant == tenant, AuditChainHead.chain_scope == chain_scope)
+            .with_for_update()
+        ).scalar_one_or_none()
 
     def _append_audit(self, session: Session, tenant: str, matter: str | None,
-                      actor: str, action: str, detail: str, ts: datetime) -> None:
-        """Append one entry inside the caller's transaction (atomic with the act,
-        FR-53). Monotonic per-tenant seq; chained over the previous entry."""
-        last = session.execute(
-            select(AuditRecord.seq, AuditRecord.chain)
-            .where(AuditRecord.tenant == tenant)
-            .order_by(AuditRecord.seq.desc())
-            .limit(1)
-        ).first()
-        prev_seq, prev_chain = (last[0], last[1]) if last else (0, "")
+                      actor: str, action: str, detail: str, ts: datetime) -> str:
+        """Append one entry inside the caller's transaction (atomic with the act, FR-53), and
+        return its chain value.
+
+        The verb must be catalogued and the actor must be somebody (:mod:`apx.core.domain.audit`):
+        an uncatalogued verb manufactures an act class no filter, count or export will ever
+        surface, and an entry attributed to ``"unknown"`` is worse than no entry at all, because it
+        is countable, filterable and looks defensible.
+
+        The chain the entry lands on is the **catalogue's**, never the caller's: a *tenant*-level
+        act (a scope grant, a configuration change) goes on the tenant chain even when a *matter*
+        is in hand, and a *matter*-level act with no *matter* is refused rather than quietly filed
+        under the tenant. The ``matter`` column still records what the act was *about*; the chain
+        records where it is *counted*."""
+        catalogued = AUDIT.act(action)          # UncataloguedAct on an unknown verb
+        AUDIT.check_actor(actor)                # UnknownActor on nobody
+        if catalogued.chain == AUDIT.CHAIN_TENANT:
+            chain_scope = AUDIT.TENANT_CHAIN
+        else:
+            if not matter:
+                raise ValueError(
+                    f"{action!r} is a matter-level act and cannot be recorded without a matter")
+            chain_scope = matter
+
+        head = self._lock_chain_head(session, tenant, chain_scope)
+        anchor = ""
+        if head is not None:
+            prev_seq, prev_chain = head.seq, head.chain
+        else:
+            anchor = self._open_chain(session, tenant, chain_scope, actor, ts)
+            # Opening took the TENANT head lock, which serialises openers. Re-read this chain's
+            # head under that lock: a concurrent transaction may have created it while we waited,
+            # and continuing from it is the difference between a wait and a refused act. Without
+            # this re-read the second opener inserts a duplicate head row and dies on the primary
+            # key — the "refused legitimate act" the lock exists to eliminate (review, confirmed).
+            head = self._lock_chain_head(session, tenant, chain_scope)
+            if head is not None:
+                prev_seq, prev_chain = head.seq, head.chain
+            else:
+                prev_seq, prev_chain = 0, anchor
+
         seq = prev_seq + 1
-        content = _audit_content(seq, tenant, matter, actor, action, detail, _audit_ts(ts))
-        chain = _audit_chain(prev_chain, content)
+        content = AUDIT.chained_content(
+            version=AUDIT.CONTENT_V2, seq=seq, tenant=tenant, chain_scope=chain_scope,
+            matter=matter, actor=actor, action=action, detail=detail, timestamp=_audit_ts(ts),
+            app_version=_APP_VERSION, schema_version=_HEAD_SCHEMA_VERSION)
+        chain = AUDIT.chain_value(prev_chain, content)
         session.add(
             AuditRecord(
-                id=chain, tenant=tenant, seq=seq, matter=matter, actor=actor,
-                action=action, detail=detail, chain=chain, timestamp=ts,
+                id=chain, tenant=tenant, chain_scope=chain_scope, seq=seq, matter=matter,
+                actor=actor, action=action, detail=detail, chain=chain, timestamp=ts,
+                content_version=AUDIT.CONTENT_V2,
+                app_version=_APP_VERSION, schema_version=_HEAD_SCHEMA_VERSION,
             )
         )
+        if head is not None:
+            # The head row is the only mutable thing here, and it is not the record: it is the
+            # allocator. The entries themselves are never updated (AC-1, asserted structurally).
+            head.seq, head.chain, head.updated_at = seq, chain, ts
+        else:
+            session.add(AuditChainHead(
+                tenant=tenant, chain_scope=chain_scope, seq=seq, chain=chain, anchor=anchor,
+                opened_at=ts, updated_at=ts))
+        return chain
+
+    def _open_chain(
+        self, session: Session, tenant: str, chain_scope: str, actor: str, ts: datetime
+    ) -> str:
+        """Open a chain and return the value its first entry chains onto (AD-43, D4).
+
+        A *matter* chain is **anchored**: a ``chain_opened`` entry is written on the *tenant* chain
+        first, and the *matter* chain's first entry chains onto it. What that buys, precisely: the
+        first link of a matter chain has a predecessor like every other link, and the tenant chain
+        carries a complete list of every chain ever opened, so an honest reader can tell a matter
+        that never wrote from a matter whose chain was removed wholesale.
+
+        **What it does not buy, and this was reviewed:** it is not a defence against an attacker
+        with write access to the database. The chain is an unkeyed SHA-256 and the anchor is a
+        plaintext column, so anyone who can rewrite the entries can re-chain them from the true
+        anchor and leave every internal check satisfied. Two skeptics reproduced exactly that.
+        Currency against such an attacker comes from the head journal (AD-35), which lives outside
+        the restorable store — not from anything inside it.
+
+        Taking the TENANT head lock here is also what serialises two concurrent openers of the same
+        chain (see the re-read in ``_append_audit``).
+
+        The *tenant* chain is the root and anchors onto nothing: it opens at the empty chain value,
+        which is also where every pre-5.5 record started."""
+        if chain_scope == AUDIT.TENANT_CHAIN:
+            return ""
+        return self._append_audit(
+            session, tenant, None, actor, AUDIT.ACT_CHAIN_OPENED,
+            f"chain={chain_scope}", ts)
 
     def save(
         self,
         result: IngestionResult,
         scope: str,
-        actor: str = "unknown",
+        actor: str,
         *,
         matter: str | None = None,
         tenant: str | None = None,
@@ -981,7 +1124,7 @@ class SqlStore:
                     f"already_present={pieces_already_present} "
                     f"open_register={inv.open_register_entries} noise={inv.excluded_as_noise}"
                 )
-                self._append_audit(session, tenant, matter, actor, "ingest", detail, now)
+                self._append_audit(session, tenant, matter, actor, AUDIT.ACT_INGEST, detail, now)
         return SaveOutcome(pieces_new, pieces_already_present, len(result.failures))
 
     def _insert_piece_if_absent(
@@ -1192,7 +1335,7 @@ class SqlStore:
             # release blocker, raised loudly (and rolls back this tx), never a job silently marked
             # done over a lost pièce. submitted_pieces == in_corpus + open_register_entries.
             self._durable_inventory(session, j.matter, j.tenant).require_consistent()
-            self._append_audit(session, j.tenant, j.matter, j.actor, "ingest", detail, now)
+            self._append_audit(session, j.tenant, j.matter, j.actor, AUDIT.ACT_INGEST, detail, now)
             j.state = "done"
             j.updated_at = now
 
@@ -1545,7 +1688,7 @@ class SqlStore:
                 self._durable_inventory(session, f.matter, f.tenant).require_consistent()
             state = f.resolution_state
             self._append_audit(
-                session, f.tenant, f.matter, actor, "retry",
+                session, f.tenant, f.matter, actor, AUDIT.ACT_RETRY,
                 f"entry={entry_id} outcome={outcome}", now)
         return RetryOutcome(entry_id, outcome, state)
 
@@ -1594,7 +1737,7 @@ class SqlStore:
             detail = (f"filter=class:{error_class or '*'},matter:{matter or '*'},"
                       f"custodian:{'set' if custodian else '*'} attempted={len(candidates)} "
                       f"resolved={resolved} still_open={still} skipped={skipped} errored={errored}")
-            self._append_audit(session, tenant, matter, actor, "bulk-retry", detail, now)
+            self._append_audit(session, tenant, matter, actor, AUDIT.ACT_BULK_RETRY, detail, now)
         return BulkRetryOutcome(len(candidates), resolved, still, skipped, errored)
 
     def export_register(
@@ -1606,7 +1749,7 @@ class SqlStore:
         entries = self.register_all(tenant, scopes, is_admin=is_admin)
         with self._sf() as session, session.begin():
             self._append_audit(
-                session, tenant, None, actor, "export-register",
+                session, tenant, None, actor, AUDIT.ACT_EXPORT_REGISTER,
                 f"lines={len(entries)} scopes={len(scopes)}", now or datetime.now(UTC))
         return RegisterExport(tuple(entries), len(scopes))
 
@@ -1621,11 +1764,12 @@ class SqlStore:
         writes nothing — the refusal is not an export."""
         with self._sf() as session, session.begin():
             self._append_audit(
-                session, tenant, matter, actor, "export-bound", detail, now or datetime.now(UTC))
+                session, tenant, matter, actor, AUDIT.ACT_EXPORT_BOUND, detail,
+                now or datetime.now(UTC))
 
     def audit_query(
         self, tenant: str, actor: str, *, term: str, engine: str, scopes: set[str],
-        denominator: Inventory | None = None, action: str = "search",
+        denominator: Inventory | None = None, action: str = AUDIT.ACT_SEARCH,
         now: datetime | None = None,
     ) -> None:
         """Record a search as an audited READ (AD-14/FR-15): ONE entry naming the term, the engine
@@ -1678,7 +1822,7 @@ class SqlStore:
         after a successful in-scope read, so a denied/out-of-scope attempt writes no disclosing
         entry."""
         with self._sf() as session, session.begin():
-            self._append_audit(session, tenant, matter, actor, "open-piece",
+            self._append_audit(session, tenant, matter, actor, AUDIT.ACT_OPEN_PIECE,
                                f"piece={piece_id}", now or datetime.now(UTC))
 
     def deduplicate(self, matter: str, tenant: str, scopes: set[str]) -> DedupSummary:
@@ -1760,7 +1904,7 @@ class SqlStore:
                 f"relevant={outcome.relevant} uncertain={outcome.uncertain} "
                 f"discard={outcome.discarded} judge={judge}"
             )
-            self._append_audit(session, tenant, matter, actor, "judge", detail, now)
+            self._append_audit(session, tenant, matter, actor, AUDIT.ACT_JUDGE, detail, now)
 
     def labels(self, matter: str, tenant: str, scopes: set[str]) -> LabelSummary:
         """The current triage labels for a matter — scope-checked. Counts plus each
@@ -1918,7 +2062,8 @@ class SqlStore:
         return ocr / in_corpus
 
     def create_user(self, tenant: str, email: str, password: str, display_name: str,
-                    scopes: set[str], *, is_admin: bool = False, actor: str = "system") -> str:
+                    scopes: set[str], *, is_admin: bool = False,
+                    actor: str = _PROVISIONING) -> str:
         """Create an owned user with an Argon2id-hashed password and their scope grants, on the
         authority of `actor` — an **audited** privileged act (it grants scopes and, possibly,
         the administrative authority, so it may not skip the record). The plaintext password is
@@ -1934,7 +2079,7 @@ class SqlStore:
             for scope in scopes:
                 session.add(UserScope(user_id=uid, scope=scope))
             self._append_audit(
-                session, tenant, None, actor, "create_user",
+                session, tenant, None, actor, AUDIT.ACT_CREATE_USER,
                 f"subject={uid} email={email.strip().lower()} scopes={sorted(scopes)} "
                 f"admin={is_admin}", now)
         return uid
@@ -2112,24 +2257,32 @@ class SqlStore:
     # ── the chain head, recorded outside the restorable store, and reconciled (AD-35) ──
 
     def _audit_heads(self, session: Session) -> dict[str, tuple[int, str]]:
-        """Each tenant's live chain head — (max seq, its chain value)."""
-        maxes = session.execute(
-            select(AuditRecord.tenant, func.max(AuditRecord.seq)).group_by(AuditRecord.tenant)
+        """Every live chain head, keyed by journal scope — (last seq, its chain value).
+
+        Keyed per CHAIN, not per tenant (AD-43): a tenant now runs several chains, each with its
+        own counting, and a max taken across them would compare one chain's sequence number
+        against another's on the next reconciliation. The *tenant* chain keeps the bare tenant as
+        its key, which is exactly what every head recorded before Story 5.5 carries — so the
+        journal needs no migration and no recorded line is reinterpreted.
+
+        Read from the head rows, which are the sequence authority. A ``MAX(seq)`` over the entries
+        would answer the same today and quietly disagree the moment a head row and its entries part
+        company — which is the condition a truncation check exists to notice."""
+        rows = session.execute(
+            select(AuditChainHead.tenant, AuditChainHead.chain_scope,
+                   AuditChainHead.seq, AuditChainHead.chain)
         ).all()
-        heads: dict[str, tuple[int, str]] = {}
-        for tenant, max_seq in maxes:
-            chain = session.scalar(
-                select(AuditRecord.chain).where(
-                    AuditRecord.tenant == tenant, AuditRecord.seq == max_seq))
-            heads[tenant] = (int(max_seq), chain or "")
-        return heads
+        return {
+            journal_scope(tenant, scope): (int(seq), chain or "")
+            for tenant, scope, seq, chain in rows
+        }
 
     def audit_heads(self) -> dict[str, tuple[int, str]]:
         with self._sf() as session:
             return self._audit_heads(session)
 
     def record_current_heads(self, journal: HeadJournal | None = None) -> int:
-        """Record every tenant's current live head to the journal (called at start-up, after the
+        """Record every live CHAIN head to the journal (called at start-up, after the
         boot reconcile). Returns how many heads were recorded. The journal is append-only and grows
         one line per advance; a long-lived run would want periodic compaction (retain the latest
         head per scope) — deferred, immaterial at the single-firm design target (AD-32)."""
@@ -2138,8 +2291,8 @@ class SqlStore:
             return 0
         now = _audit_ts(datetime.now(UTC))
         count = 0
-        for tenant, (seq, chain) in self.audit_heads().items():
-            j.record(HeadEntry(tenant, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
+        for scope, (seq, chain) in self.audit_heads().items():
+            j.record(HeadEntry(scope, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
             count += 1
         return count
 
@@ -2154,7 +2307,12 @@ class SqlStore:
         override (``post_clear_max``) — NOT the stale pre-truncation head the append-only journal
         still carries — so a second restore that falls below that reset baseline is a fresh
         truncation, not silently swallowed as 'the same acknowledged one'. The journal is parsed
-        ONCE into both views (all-latest, and the per-scope post-clear maxima)."""
+        ONCE into both views (all-latest, and the per-scope post-clear maxima).
+
+        The reset baseline exists because ``clear_truncation`` writes it — see
+        ``_journal_acknowledged_heads``. The ``default=0`` below therefore means what it says: a
+        chain that did not exist when the override was signed, not a chain nobody has heard from
+        since."""
         j = journal or self._journal
         if j is None:
             return []
@@ -2167,7 +2325,7 @@ class SqlStore:
         out: list[Reconciliation] = []
         for scope in sorted(set(heads) | set(journal_max)):
             live_seq = heads.get(scope, (0, ""))[0]
-            cleared_at = self._marker_cleared_at(scope)
+            cleared_at = self._marker_cleared_at(tenant_of(scope))
             if cleared_at is not None:
                 # A cleared marker: the baseline is the heads recorded AFTER the override, so a live
                 # head below THAT is a new truncation — not below the stale pre-truncation head the
@@ -2180,8 +2338,17 @@ class SqlStore:
                 reference = journal_max.get(scope, 0)
             rec = Reconciliation(scope, live_seq, reference, truncated=live_seq < reference)
             out.append(rec)
+        # ONE marker per tenant describing EVERY chain that fell, not one per chain overwriting the
+        # last. A restore rolls the whole database back, so several chains truncate together; the
+        # per-chain loop that wrote the marker recorded whichever scope sorted last, understating
+        # the loss and naming no matter (review, confirmed by execution: 20 entries lost, 1
+        # reported).
+        by_tenant: dict[str, list[Reconciliation]] = {}
+        for rec in out:
             if rec.truncated:
-                self._record_truncation(scope, rec)
+                by_tenant.setdefault(tenant_of(rec.scope), []).append(rec)
+        for tenant, recs in sorted(by_tenant.items()):
+            self._record_truncation(tenant, recs)
         return out
 
     def _marker_cleared_at(self, tenant: str) -> datetime | None:
@@ -2192,27 +2359,39 @@ class SqlStore:
             m = session.get(TruncationMarker, tenant)
             return m.cleared_at if m is not None else None
 
-    def _record_truncation(self, tenant: str, rec: Reconciliation) -> None:
-        """Upsert an ACTIVE truncation marker for the latest detection. The keep-cleared decision
-        lives in ``reconcile_heads`` (via the post-override baseline), so this ALWAYS records an
-        active marker — a re-detection after an override correctly reactivates it, never a silent
-        no-op that would leave a fresh data loss un-flagged."""
+    def _record_truncation(self, tenant: str, recs: list[Reconciliation]) -> None:
+        """Upsert ONE active truncation marker describing every chain that fell. The keep-cleared
+        decision lives in ``reconcile_heads`` (via the post-override baseline), so this ALWAYS
+        records an active marker — a re-detection after an override correctly reactivates it, never
+        a silent no-op that would leave a fresh data loss un-flagged.
+
+        ``journal_seq``/``live_seq`` keep their meaning for the WORST-hit chain (the one that lost
+        most), because a single pair cannot describe several chains and a reader shown the smallest
+        loss is being flattered. ``entries_lost`` is the total and ``chains`` names each one."""
+        if not recs:
+            return
+        worst = max(recs, key=lambda r: r.journal_seq - r.live_seq)
+        total = sum(r.journal_seq - r.live_seq for r in recs)
+        named = ", ".join(
+            f"{r.scope}:{r.journal_seq}->{r.live_seq}" for r in sorted(recs, key=lambda r: r.scope))
         now = datetime.now(UTC)
         with self._sf() as session, session.begin():
             session.merge(TruncationMarker(
-                tenant=tenant, detected_at=now, journal_seq=rec.journal_seq,
-                live_seq=rec.live_seq, cleared_by=None, reason=None, cleared_at=None))
+                tenant=tenant, detected_at=now, journal_seq=worst.journal_seq,
+                live_seq=worst.live_seq, chains=named, entries_lost=total,
+                cleared_by=None, reason=None, cleared_at=None))
 
     def truncation_status(self, tenant: str) -> TruncationStatus:
         """A tenant's truncation status — active while un-cleared (named on every export, AD-35)."""
         with self._sf() as session:
             m = session.get(TruncationMarker, tenant)
         if m is None:
-            return TruncationStatus(tenant, False, 0, 0, None, None)
+            return TruncationStatus(tenant, False, 0, 0, None, None, "", 0)
         return TruncationStatus(
             tenant, active=m.cleared_at is None, journal_seq=m.journal_seq, live_seq=m.live_seq,
             detected_at=m.detected_at.isoformat(),
-            cleared_at=m.cleared_at.isoformat() if m.cleared_at is not None else None)
+            cleared_at=m.cleared_at.isoformat() if m.cleared_at is not None else None,
+            chains=m.chains or "", entries_lost=m.entries_lost or 0)
 
     def clear_truncation(self, tenant: str, actor: str, reason: str) -> None:
         """Clear an active truncation by an audited OVERRIDE with a reason (AD-35/AD-25) — the only
@@ -2226,18 +2405,64 @@ class SqlStore:
                 raise ValueError("no active truncation to clear")
             m.cleared_by, m.reason, m.cleared_at = actor, reason, now
             self._append_audit(
-                session, tenant, None, actor, "truncation_override",
+                session, tenant, None, actor, AUDIT.ACT_TRUNCATION_OVERRIDE,
                 f"journal_seq={m.journal_seq} live_seq={m.live_seq}", now)
 
         self._audited_tx(_work)
+        self._journal_acknowledged_heads(tenant)
+
+    def _journal_acknowledged_heads(self, tenant: str) -> None:
+        """Write down, in the journal, the record the override has just accepted.
+
+        An override states one thing: *the record as it now stands is the record*. Until this
+        statement was written down, ``reconcile_heads`` had nothing to compare a QUIET chain
+        against afterwards — the post-clear baseline of a chain that had not written since the
+        override fell back to zero, and nothing is below zero, so that chain could then be emptied
+        wholesale, head row and all, and the reconciliation reported no loss at all. The tenant
+        chain escaped it only by accident: the override entry is itself written on it, so it always
+        had a post-clear head.
+
+        Found by execution rather than by reading, and it is this project's recurring defect once
+        more: a comparison whose right-hand side (what the journal holds AFTER the override) was
+        not the same thing as its left (what the override actually accepted), failing towards the
+        flattering side. Per-matter chains (AD-43) are what opened it — under one chain per tenant,
+        the override entry gave every reconciliation a baseline.
+        """
+        if self._journal is None:
+            return
+        now = _audit_ts(datetime.now(UTC))
+        for scope, (seq, chain) in self.audit_heads().items():
+            if tenant_of(scope) != tenant:
+                continue
+            try:
+                self._journal.record(HeadEntry(
+                    scope, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
+            except OSError as exc:
+                # Same surfacing as any other post-commit head write (AC5): never silent, because
+                # an unrecorded acknowledged head is exactly a later truncation nobody will see.
+                self.journal_degraded = True
+                _log.warning(
+                    "head journal write failed for the acknowledged head of scope %s at seq %s: %s",
+                    scope, seq, exc)
 
     # ── logical, tenant-boundary backup + an exercised restore (AD-32) ──
 
     def backup_tenant(self, tenant: str) -> TenantBackup:
         """A complete, tenant-boundary logical backup (AD-32). Rows are read RAW so content-bearing
-        columns stay ciphertext (encrypted at rest); the tenant's head-journal tail is copied on."""
+        columns stay ciphertext (encrypted at rest); the tenant's head-journal tail is copied on.
+
+        **Read in ONE snapshot.** Under READ COMMITTED each statement sees a different moment, so a
+        backup taken during an ingest could capture ``audit_chain_head`` after a commit that
+        ``audit_record`` was read before — an allocator ahead of its own record. Restoring that
+        hands out numbers past a hole the continuity check reports forever and AD-22 forbids
+        repairing. REPEATABLE READ makes the allocator and the entries the same moment. (SQLite
+        serialises writers, so it has the property already and rejects the SET; the guard is on the
+        dialect.)"""
         with self._sf() as session:
             conn = session.connection()
+            snapshot = _snapshot_isolation_sql(conn.dialect.name)
+            if snapshot is not None:
+                conn.execute(text(snapshot))
             tables: dict[str, list[dict]] = {}
             for tbl in _BACKUP_TABLES:
                 rows = conn.execute(
@@ -2264,35 +2489,82 @@ class SqlStore:
                 piece_links[tbl] = [dict(r) for r in rows]
         head_tail: list[dict] = []
         if self._journal is not None:
-            latest = self._journal.latest(tenant)
-            if latest is not None:
-                head_tail = [asdict(latest)]
+            # EVERY chain of this tenant, not just the tenant chain (AD-43 + AD-35). A backup that
+            # copied only the tenant chain's head would restore into a journal that has never heard
+            # of the matter chains — and a later truncation of one of them would be undetectable,
+            # which is the single failure AD-35 exists to prevent.
+            head_tail = [
+                asdict(entry) for scope, entry in sorted(self._journal.all_latest().items())
+                if tenant_of(scope) == tenant
+            ]
         return TenantBackup(
             tenant, _HEAD_SCHEMA_VERSION, tables, scopes, head_tail, piece_links=piece_links)
 
     def _chain_verifies(self, session: Session, tenant: str) -> bool:
-        """Recompute a tenant's audit chain end to end from the rows in ``session`` — the same
-        recomputation ``read_audit`` does — returning False on any gap, reorder, tamper, or
-        undecryptable field (fail closed). Used INSIDE ``restore_tenant`` so a corrupt or tampered
-        backup is rejected at restore time, not silently accepted and caught later on a read."""
+        """Recompute EVERY chain of a tenant end to end from the rows in ``session`` — the same
+        recomputation ``read_audit`` does, through the same verifier — returning False on any gap,
+        reorder, tamper, or undecryptable field (fail closed). Used INSIDE ``restore_tenant`` so a
+        corrupt or tampered backup is rejected at restore time, not silently accepted and caught
+        later on a read. Every chain must hold: a restore whose tenant chain verifies while one
+        matter's does not is a rejected restore."""
+        entries = self._verifiable_entries(session, tenant)
+        anchors = self._chain_anchors(session, tenant)
+        # ``verified`` only: every link must hold. A MISSING anchor is not evidence of tampering —
+        # a chain rebuilt from a pre-5.5 backup genuinely has none, and refusing the restore on
+        # that would make every backup the deployment holds today unrestorable. The loss of the
+        # anchor is reported to the reader instead (``verifiable_in_isolation``), which is what it
+        # actually is: something they cannot check for themselves, not something that is wrong.
+        return all(v.verified for v in AUDIT.verify_chains(entries, anchors))
+
+    def _verifiable_entries(
+        self, session: Session, tenant: str, chain_scopes: Sequence[str] | None = None
+    ) -> list[AUDIT.VerifiableEntry]:
+        """The tenant's entries as the verifier sees them — plaintext where it can be
+        authenticated, ``None`` where it cannot.
+
+        The encrypted actor/detail are read as RAW ciphertext (``cast(..., Text)`` uses Text's
+        identity result processor, bypassing ``EncryptedText``'s eager decryption), so ONE
+        undecryptable row — a tamper, a wrong key, a legacy plaintext value — degrades that chain
+        to unverified instead of raising and 500-ing the whole read."""
+        stmt = select(
+            AuditRecord.seq, AuditRecord.chain_scope, AuditRecord.matter,
+            cast(AuditRecord.actor, Text), AuditRecord.action, cast(AuditRecord.detail, Text),
+            AuditRecord.chain, AuditRecord.timestamp, AuditRecord.content_version,
+            AuditRecord.app_version, AuditRecord.schema_version,
+        ).where(AuditRecord.tenant == tenant)
+        if chain_scopes is not None:
+            stmt = stmt.where(AuditRecord.chain_scope.in_(list(chain_scopes)))
+        rows = session.execute(stmt.order_by(AuditRecord.chain_scope, AuditRecord.seq)).all()
+        return [
+            AUDIT.VerifiableEntry(
+                tenant=tenant, chain_scope=scope, seq=seq, matter=matter,
+                actor=_safe_decrypt(actor_ct, "audit_record.actor"), action=action,
+                detail=_safe_decrypt(detail_ct, "audit_record.detail"),
+                timestamp=_audit_ts(ts), chain=chain, content_version=version,
+                app_version=app_v, schema_version=schema_v)
+            for (seq, scope, matter, actor_ct, action, detail_ct, chain, ts, version,
+                 app_v, schema_v) in rows
+        ]
+
+    def _chain_anchors(self, session: Session, tenant: str) -> dict[str, str]:
+        """Each chain's starting value, from its head row — what makes a matter chain's FIRST link
+        provable rather than taken on trust.
+
+        An empty anchor means two different things and they must not be conflated: on the TENANT
+        chain it is the root (that chain starts at the empty value, and so did every pre-5.5
+        record), while on a MATTER chain it means *unknown* — the head row was rebuilt from the
+        entries at restore, and the anchoring value it never carried cannot be invented. An opened
+        matter chain always has a real anchor (a sha256 digest, never empty), so the distinction is
+        exact. An unknown anchor is OMITTED, which makes ``verify_chains`` report the chain as not
+        anchored rather than checking its first link against a value that is not its predecessor."""
         rows = session.execute(
-            select(
-                AuditRecord.seq, AuditRecord.tenant, AuditRecord.matter,
-                cast(AuditRecord.actor, Text), AuditRecord.action,
-                cast(AuditRecord.detail, Text), AuditRecord.chain, AuditRecord.timestamp,
-            ).where(AuditRecord.tenant == tenant).order_by(AuditRecord.seq)
+            select(AuditChainHead.chain_scope, AuditChainHead.anchor)
+            .where(AuditChainHead.tenant == tenant)
         ).all()
-        prev_chain = ""
-        for i, (seq, r_tenant, matter, actor_ct, action, detail_ct, chain, ts) in enumerate(rows):
-            actor = _safe_decrypt(actor_ct, "audit_record.actor")
-            detail = _safe_decrypt(detail_ct, "audit_record.detail")
-            if actor is None or detail is None:
-                return False  # an unreadable field cannot be authenticated
-            content = _audit_content(seq, r_tenant, matter, actor, action, detail, _audit_ts(ts))
-            if seq != i + 1 or _audit_chain(prev_chain, content) != chain:
-                return False
-            prev_chain = chain
-        return True
+        return {
+            scope: anchor for scope, anchor in rows
+            if scope == AUDIT.TENANT_CHAIN or anchor
+        }
 
     def restore_tenant(
         self, backup: TenantBackup, journal: HeadJournal | None = None
@@ -2330,12 +2602,73 @@ class SqlStore:
                     binds = ", ".join(f":{c}" for c in cols)
                     conn.execute(
                         text(f"INSERT INTO {tbl} ({collist}) VALUES ({binds})"), row)  # noqa: S608
+            # The allocator is reconciled FIRST: a pre-5.5 backup carries no head rows, and the
+            # verification below reads the anchors from them.
+            self._reconcile_allocator(session, backup.tenant)
             if not self._chain_verifies(session, backup.tenant):
                 raise ValueError(
                     f"restored audit chain for tenant {backup.tenant!r} does not verify — the "
                     "backup is corrupt or was tampered with (AD-35); restore refused")
         self._seed_journal_from_backup(backup, journal)
         return self.reconcile_heads(journal)
+
+    def _reconcile_allocator(self, session: Session, tenant: str) -> None:
+        """Make the restored allocator agree with the restored record, or refuse the restore.
+
+        Two failures the review confirmed, both of which end with the tenant unable to write:
+
+        **A backup with no head rows** — every backup taken before Story 5.5, which is every backup
+        the live deployment holds today. The entries come back and the allocator does not, so the
+        next audited act allocates seq 1, collides with the restored entry 1 on
+        ``(tenant, chain_scope, seq)``, and AD-22 turns that into a refused action — permanently,
+        for every act. The head is REBUILT from the entries here. That is not a rewrite of the
+        record: the allocator is derived from the entries by definition, and rebuilding it asserts
+        nothing the entries do not already say.
+
+        **A head that disagrees with its entries** — a head ahead of the record (a tampered backup,
+        or the read skew ``backup_tenant`` now prevents) would hand out numbers past a hole that
+        the continuity check reports forever and AD-22 forbids repairing. A head BEHIND its entries
+        would re-issue numbers already used. Either way the restore is refused rather than
+        accepted into a state that cannot be corrected afterwards.
+        """
+        last: dict[tuple[str, str], tuple[int, str]] = {}
+        rows = session.execute(
+            select(AuditRecord.chain_scope, AuditRecord.seq, AuditRecord.chain)
+            .where(AuditRecord.tenant == tenant)
+        ).all()
+        for scope, seq, chain in rows:
+            key = (tenant, scope)
+            if key not in last or seq > last[key][0]:
+                last[key] = (int(seq), chain)
+
+        heads = {
+            (h.tenant, h.chain_scope): h for h in session.scalars(
+                select(AuditChainHead).where(AuditChainHead.tenant == tenant)).all()
+        }
+        now = datetime.now(UTC)
+        for key, (seq, chain) in sorted(last.items()):
+            head = heads.get(key)
+            if head is None:
+                # Rebuilt, not invented: the anchor of a rebuilt matter chain is unknown, so it is
+                # left empty and the chain reports itself as NOT verifiable in isolation rather
+                # than claiming an anchor nobody recorded.
+                session.add(AuditChainHead(
+                    tenant=key[0], chain_scope=key[1], seq=seq, chain=chain, anchor="",
+                    opened_at=now, updated_at=now))
+                _log.warning(
+                    "restore: rebuilt the audit allocator for chain %r at seq %s (the backup "
+                    "carried no head row — a pre-5.5 backup)", key[1] or "<tenant>", seq)
+                continue
+            if (head.seq, head.chain) != (seq, chain):
+                raise ValueError(
+                    f"restored allocator for chain {key[1] or '<tenant>'!r} disagrees with the "
+                    f"restored record (head says seq {head.seq}, the entries end at {seq}); "
+                    "restore refused rather than accepted into a state AD-22 forbids repairing")
+        for key, head in sorted(heads.items()):
+            if key not in last and head.seq:
+                raise ValueError(
+                    f"restored allocator for chain {key[1] or '<tenant>'!r} claims seq {head.seq} "
+                    "with no entries behind it; restore refused")
 
     def _seed_journal_from_backup(
         self, backup: TenantBackup, journal: HeadJournal | None
@@ -2399,7 +2732,8 @@ class SqlStore:
                     count = rekey_all(session.connection())
                     for tenant in self._tenants(session):
                         self._append_audit(
-                            session, tenant, None, actor, "key_rotated", f"key={fingerprint}", now)
+                            session, tenant, None, actor, AUDIT.ACT_KEY_ROTATED,
+                            f"key={fingerprint}", now)
                     session.flush()  # surface a (tenant, seq) collision inside the try
                 return count
             except IntegrityError:
@@ -2460,7 +2794,7 @@ class SqlStore:
         else:
             row.value = dumps_value(after)
         self._append_audit(
-            session, tenant, None, actor, "config_changed",
+            session, tenant, None, actor, AUDIT.ACT_CONFIG_CHANGED,
             _config_change_detail(spec.name, before, after, spec.affects_retrieval),
             datetime.now(UTC))
 
@@ -2563,11 +2897,11 @@ class SqlStore:
                 for scope in sorted(wall_set):
                     session.add(UserScope(user_id=uid, scope=scope))
                 self._append_audit(
-                    session, tenant, None, actor, "tenant_provisioned",
+                    session, tenant, None, actor, AUDIT.ACT_TENANT_PROVISIONED,
                     f"admin={email} scopes={sorted(wall_set)} taxonomy={len(coerced_tax)}", now)
                 session.flush()
                 self._append_audit(
-                    session, tenant, None, actor, "create_user",
+                    session, tenant, None, actor, AUDIT.ACT_CREATE_USER,
                     f"subject={uid} email={email} scopes={sorted(wall_set)} admin=True", now)
                 session.flush()
                 if coerced_tax:  # seed the taxonomy as an audited value (empty is the default)
@@ -2665,7 +2999,7 @@ class SqlStore:
             if session.get(UserScope, {"user_id": user_id, "scope": scope}) is None:
                 session.add(UserScope(user_id=user_id, scope=scope))
                 self._append_audit(
-                    session, tenant, None, actor, "grant_scope",
+                    session, tenant, None, actor, AUDIT.ACT_GRANT_SCOPE,
                     f"subject={user_id} scope={scope}", now)
 
         self._audited_tx(_work)
@@ -2682,7 +3016,7 @@ class SqlStore:
             if row is not None:
                 session.delete(row)
                 self._append_audit(
-                    session, tenant, None, actor, "revoke_scope",
+                    session, tenant, None, actor, AUDIT.ACT_REVOKE_SCOPE,
                     f"subject={user_id} scope={scope}", now)
 
         self._audited_tx(_work)
@@ -2704,7 +3038,7 @@ class SqlStore:
             before = row.scope
             row.scope = new_scope
             self._append_audit(
-                session, tenant, matter, actor, "rescope_matter",
+                session, tenant, matter, actor, AUDIT.ACT_RESCOPE_MATTER,
                 f"subject={matter} scope={before}->{new_scope}", now)
 
         self._audited_tx(_work)
@@ -2728,7 +3062,8 @@ class SqlStore:
                 if (admins or 0) <= 1:
                     raise ValueError("cannot revoke the last administrator")
             user.is_admin = is_admin
-            action = "grant_admin" if is_admin else "revoke_admin"
+            action = (AUDIT.ACT_GRANT_ADMIN if is_admin
+                      else AUDIT.ACT_REVOKE_ADMIN)
             self._append_audit(session, tenant, None, actor, action, f"subject={subject_user}", now)
 
         self._audited_tx(_work)
@@ -2746,40 +3081,58 @@ class SqlStore:
             )
             if scope is None or scope not in scopes:
                 raise ScopeDenied(matter)
-            # Read the encrypted actor/detail as RAW ciphertext — cast(..., Text) uses Text's
-            # (identity) result processor, bypassing EncryptedText's eager decryption — so ONE
-            # undecryptable row (a tamper, a wrong key, a legacy plaintext value) degrades the
-            # trail to verified=False instead of raising and 500-ing the whole tenant read.
-            # Every other column keeps its native ORM type (timestamp stays a datetime).
-            rows = session.execute(
-                select(
-                    AuditRecord.seq, AuditRecord.matter,
-                    cast(AuditRecord.actor, Text), AuditRecord.action,
-                    cast(AuditRecord.detail, Text), AuditRecord.chain, AuditRecord.timestamp,
-                )
-                .where(AuditRecord.tenant == tenant)
-                .order_by(AuditRecord.seq)
-            ).all()
+            # Two chains carry one matter's history (AD-43): its own, and the tenant chain, which
+            # holds both the matterless acts and everything written before Story 5.5 migrated the
+            # record. Both are read; each is verified on its own terms.
+            all_entries = self._verifiable_entries(session, tenant)
+            anchors = self._chain_anchors(session, tenant)
+            timestamps = dict(session.execute(
+                select(AuditRecord.chain, AuditRecord.timestamp)
+                .where(AuditRecord.tenant == tenant)).all())
 
-        verified = True
-        prev_chain = ""
-        entries: list[AuditEntry] = []
-        for i, (seq, r_matter, actor_ct, action, detail_ct, chain, ts) in enumerate(rows):
-            actor = _safe_decrypt(actor_ct, "audit_record.actor")
-            detail = _safe_decrypt(detail_ct, "audit_record.detail")
-            if actor is None or detail is None:
-                verified = False  # an unreadable field cannot be authenticated
-            content = _audit_content(
-                seq, tenant, r_matter, actor or "", action, detail or "", _audit_ts(ts)
-            )
-            if seq != i + 1 or _audit_chain(prev_chain, content) != chain:
-                verified = False
-            prev_chain = chain
-            if r_matter == matter:
-                entries.append(AuditEntry(
-                    seq, actor if actor is not None else "«illisible»", action,
-                    detail if detail is not None else "«illisible»", chain, ts.isoformat()))
-        return AuditTrail(entries, verified)
+        verdicts = {v.chain_scope: v for v in AUDIT.verify_chains(all_entries, anchors)}
+        mine = [e for e in all_entries if e.chain_scope == matter]
+        legacy = [
+            e for e in all_entries
+            if e.chain_scope == AUDIT.TENANT_CHAIN and e.matter == matter
+        ]
+
+        slices: list[ChainSlice] = []
+        own = verdicts.get(matter)
+        if own is not None:
+            slices.append(ChainSlice(
+                chain_scope=matter, entries=own.entries, verified=own.verified,
+                # The matter's own chain is exactly what FR-53 asks for: a reader holding only
+                # these entries and the anchor recomputes every link.
+                verifiable_in_isolation=own.anchored, broken_at=own.broken_at))
+        # The tenant slice is reported whenever a TENANT CHAIN EXISTS, never only when this reader
+        # still holds entries on it. Conditioning it on `legacy` being non-empty made a wholesale
+        # removal of a matter's pre-5.5 history invisible: the slice simply disappeared and the
+        # trail read clean and shorter (review, confirmed). Its own verdict still covers the whole
+        # tenant chain, so a tamper anywhere on it is reported here even when this matter's share
+        # of it is now zero.
+        tenant_verdict = verdicts.get(AUDIT.TENANT_CHAIN)
+        if tenant_verdict is not None or legacy:
+            slices.append(ChainSlice(
+                chain_scope=AUDIT.TENANT_CHAIN, entries=len(legacy),
+                verified=tenant_verdict.verified if tenant_verdict else False,
+                # Verified here by recomputing the WHOLE tenant chain, which this reader cannot do
+                # from the export: the intervening links belong to matters outside their scope.
+                verifiable_in_isolation=False))
+
+        entries = [
+            AuditEntry(
+                e.seq, e.actor if e.actor is not None else "«illisible»", e.action,
+                e.detail if e.detail is not None else "«illisible»", e.chain,
+                timestamps[e.chain].isoformat(), e.chain_scope)
+            for e in sorted(mine + legacy, key=lambda e: (e.timestamp, e.chain_scope, e.seq))
+        ]
+        # `verified` requires something to have been verified. all([]) is True, so a matter whose
+        # every chain had been removed — head row and all — reported an intact record,
+        # indistinguishable from a matter that never acted (review, confirmed). A record with no
+        # chain is not a clean record; it is a record with nothing to check.
+        verified = bool(slices) and all(s.verified for s in slices)
+        return AuditTrail(entries, verified, tuple(slices))
 
     # ── Story 4.1: the optional case theory — versioned, audited, referenceable ────────────────
     def _version_view(self, row: CaseTheoryVersion) -> CaseTheoryVersionView:
@@ -2834,7 +3187,8 @@ class SqlStore:
                 text=normalized, actor=actor, created_at=now)
             session.add(row)
             ms.case_theory = normalized  # the denormalised current-value cache tracks the latest
-            action = "case_theory_written" if normalized is not None else "case_theory_withdrawn"
+            action = (AUDIT.ACT_CASE_THEORY_WRITTEN if normalized is not None
+                      else AUDIT.ACT_CASE_THEORY_WITHDRAWN)
             self._append_audit(session, tenant, matter, actor, action, f"version={version_no}", now)
             box.append(self._case_theory_state(row))
 
@@ -2960,7 +3314,7 @@ class SqlStore:
                         ",".join(s.value for s in row.confidence_signals)
                         if row.confidence_signals else None)))
             self._append_audit(
-                session, tenant, matter, actor, "ranking_recorded",
+                session, tenant, matter, actor, AUDIT.ACT_RANKING_RECORDED,
                 f"version={version_no} fingerprint={identity.fingerprint[:12]} "
                 f"ranked={len(order.rows)} unscored={len(order.unscored_rows)} "
                 f"stage3_share={order.stage3_share:.4f}", now)
@@ -3095,7 +3449,7 @@ class SqlStore:
             id=entry_id, tenant=tenant, matter=matter, piece_id=piece_id, seq=seq,
             label=label, source=source.value, set_by=actor, at=now))
         self._append_audit(
-            session, tenant, matter, actor, "piece_labelled",
+            session, tenant, matter, actor, AUDIT.ACT_PIECE_LABELLED,
             f"piece={piece_id[:12]} label={label} source={source.value} seq={seq} {note}", now)
         return seq
 
@@ -3368,7 +3722,7 @@ class SqlStore:
                 last_retained_piece_id=line.last_retained_piece_id, basis=basis, placed_by=actor,
                 at=now))
             self._append_audit(
-                session, tenant, matter, actor, "line_placed",
+                session, tenant, matter, actor, AUDIT.ACT_LINE_PLACED,
                 f"version={version.version_no} last_retained={line.last_retained_piece_id[:12]} "
                 f"basis={basis} seq={seq}", now)
             self._write_stamp(
@@ -3504,7 +3858,7 @@ class SqlStore:
                 last_retained_piece_id=last_retained_piece_id, basis=basis, placed_by=actor,
                 at=now))
             self._append_audit(
-                session, tenant, matter, actor, "line_moved",
+                session, tenant, matter, actor, AUDIT.ACT_LINE_MOVED,
                 f"version={version.version_no} old={(current_last or 'none')[:12]} "
                 f"new={last_retained_piece_id[:12]} method={PROJECTION_METHOD} "
                 f"priced={priced_statement}", now)
@@ -3577,7 +3931,7 @@ class SqlStore:
                 raise ScopeDenied(matter)
             box.append(self._append_pin_entry(
                 session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
-                action=PinAction(side.value), reason=reason, audit_action="pin_override",
+                action=PinAction(side.value), reason=reason, audit_action=AUDIT.ACT_PIN_OVERRIDE,
                 expected_seq=expected_seq))
 
         self._audited_tx(_work)
@@ -3602,7 +3956,7 @@ class SqlStore:
                 raise ValueError(f"no active pin to remove for pièce {piece_id}")
             box.append(self._append_pin_entry(
                 session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
-                action=PinAction.REMOVED, reason="", audit_action="pin_removed",
+                action=PinAction.REMOVED, reason="", audit_action=AUDIT.ACT_PIN_REMOVED,
                 expected_seq=expected_seq))
 
         self._audited_tx(_work)
@@ -3694,7 +4048,7 @@ class SqlStore:
                 case_theory_version_id=basis.case_theory_version_id, intrinsic_signals=intrinsic,
                 evidence_json=evidence_json, source_language=source_language, at=now))
             self._append_audit(
-                session, tenant, matter, actor, "justification_recorded",
+                session, tenant, matter, actor, AUDIT.ACT_JUSTIFICATION_RECORDED,
                 f"piece={piece_id[:12]} basis={basis.named[:40]} extracts={len(evidence)}", now)
 
         self._audited_tx(_work)
@@ -3807,7 +4161,7 @@ class SqlStore:
                 raise ValueError(f"the assessment for pièce {piece_id} is already rejected")
             box.append(self._append_justification_rejection(
                 session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
-                action="rejected", reason=reason, audit_action="justification_rejected",
+                action="rejected", reason=reason, audit_action=AUDIT.ACT_JUSTIFICATION_REJECTED,
                 expected_seq=expected_seq))
 
         self._audited_tx(_work)
@@ -3832,7 +4186,7 @@ class SqlStore:
                 raise ValueError(f"no rejected assessment to restore for pièce {piece_id}")
             box.append(self._append_justification_rejection(
                 session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
-                action="restored", reason=reason, audit_action="justification_restored",
+                action="restored", reason=reason, audit_action=AUDIT.ACT_JUSTIFICATION_RESTORED,
                 expected_seq=expected_seq))
 
         self._audited_tx(_work)
@@ -4626,7 +4980,8 @@ class SqlStore:
             detail = (
                 f"version={resolved_no} families={len(drawn)}/{len(families)} "
                 f"pieces={piece_count} census={census}")
-            self._append_audit(session, tenant, matter, actor, "sampling-run-start", detail, now)
+            self._append_audit(
+                session, tenant, matter, actor, AUDIT.ACT_SAMPLING_RUN_START, detail, now)
             self._write_stamp(
                 session, tenant=tenant, matter=matter, kind=KIND_SAMPLING_RUN,
                 artefact_id=run_id, version_no=resolved_no, now=now)
@@ -4716,7 +5071,7 @@ class SqlStore:
                 id=uuid4().hex, run_id=run_id, family_id=family_id, seq=last + 1,
                 relevant=relevant, actor=actor, at=now))
             self._append_audit(
-                session, tenant, matter, actor, "sampling-verdict",
+                session, tenant, matter, actor, AUDIT.ACT_SAMPLING_VERDICT,
                 f"run={run_id} family={family_id} relevant={relevant} seq={last + 1}", now)
             found.append(True)
 
@@ -4771,7 +5126,7 @@ class SqlStore:
             # bound instead of silently restating this one.
             run.estimator_method = ESTIMATOR_METHOD
             self._append_audit(
-                session, tenant, matter, actor, "sampling-run-complete",
+                session, tenant, matter, actor, AUDIT.ACT_SAMPLING_RUN_COMPLETE,
                 f"run={run_id} population={run.population_families} sample={run.sample_size} "
                 f"relevant={relevant_found} bound={bound.prevalence_upper:.4f}@{run.confidence}",
                 now)
@@ -4804,7 +5159,7 @@ class SqlStore:
             run.closed_by = actor
             verdicts = self._current_verdicts(session, run_id)
             self._append_audit(
-                session, tenant, matter, actor, "sampling-run-abandon",
+                session, tenant, matter, actor, AUDIT.ACT_SAMPLING_RUN_ABANDON,
                 f"run={run_id} verdicts_kept={len(verdicts)}", now)
             found.append(True)
 

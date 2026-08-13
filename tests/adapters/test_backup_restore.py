@@ -17,9 +17,13 @@ from sqlalchemy.orm import sessionmaker
 from apx.adapters.store_postgres.models import EMBEDDING_DIM, Base, Chunk
 from apx.adapters.store_postgres.store import _BACKUP_TABLES, SqlStore
 from apx.core.app.ingest import IngestedPiece, IngestionResult
-from apx.core.domain.head_journal import HeadJournal
+from apx.core.domain.head_journal import HeadJournal, journal_scope
 
 TENANT = "cabinet"
+MATTER = "m"
+#: Story 5.5 — the ingestion entries live on the MATTER chain now (AD-43); the tenant chain
+#: carries provisioning, configuration and the `chain_opened` anchor. A truncation is per chain.
+MATTER_CHAIN = journal_scope(TENANT, MATTER)
 
 
 def _store(tmp_path, name: str, journal: HeadJournal | None = None) -> SqlStore:  # noqa: ANN001
@@ -124,17 +128,17 @@ def test_a_restore_that_truncates_is_detected_named_and_cleared_only_by_override
     store = _store(tmp_path, "s", journal=journal)
     _seed(store)
     early = store.backup_tenant(TENANT)          # a backup at the EARLY head
-    early_head = store.audit_heads()[TENANT][0]
+    early_head = store.audit_heads()[MATTER_CHAIN][0]
     for i in range(3):                            # three MORE audited entries advance the head
         store.save(IngestionResult(pieces=[_piece(f"q{i}")]), "w", actor="admin")
-    late_head = store.audit_heads()[TENANT][0]
+    late_head = store.audit_heads()[MATTER_CHAIN][0]
     assert late_head > early_head                # the journal now records the later head
 
     # simulate a dump restore to the earlier point: replace the tenant's rows with the early backup
     _wipe(store)
     recs = store.restore_tenant(early)           # reconciles vs the journal (still at late_head)
 
-    truncated = [r for r in recs if r.scope == TENANT and r.truncated]
+    truncated = [r for r in recs if r.scope == MATTER_CHAIN and r.truncated]
     assert truncated and truncated[0].live_seq == early_head
     assert truncated[0].journal_seq == late_head
     # NAMED: the truncation status is active (an export consults this; exports are epics 6.1/6.2)
@@ -221,11 +225,152 @@ def test_restore_seeds_a_fresh_journal_from_the_backup_head_tail(tmp_path) -> No
     src = _store(tmp_path, "src", journal=j1)
     _seed(src)                                     # head → 7
     backup = src.backup_tenant(TENANT)
-    assert backup.head_tail and backup.head_tail[0]["seq"] == 7   # the tail rode along on it
+    # EVERY chain of the tenant rides along, not just the tenant chain (Story 5.5): a journal
+    # that has never heard of a matter chain cannot detect its truncation later.
+    tail = {h["scope"]: h["seq"] for h in backup.head_tail}
+    assert set(tail) == {TENANT, MATTER_CHAIN} and tail[MATTER_CHAIN] == 3
 
     j2 = HeadJournal(tmp_path / "recovered.journal")   # a fresh, empty journal (the old one's gone)
     j2.ensure_writable()
     dst = _store(tmp_path, "dst", journal=j2)
     dst.restore_tenant(backup)
-    seeded = j2.latest(TENANT)
-    assert seeded is not None and seeded.seq == 7   # seeded from the backup, not left empty
+    for scope, seq in tail.items():                 # seeded from the backup, not left empty
+        seeded = j2.latest(scope)
+        assert seeded is not None and seeded.seq == seq
+
+
+# ── the review's confirmed defects (Story 5.5) ────────────────────────────────────────────────
+
+def test_a_backup_with_no_allocator_restores_and_the_tenant_can_still_write(tmp_path) -> None:  # noqa: ANN001
+    """CONFIRMED BY REVIEW, and it is every backup the live deployment holds today. A pre-5.5
+    backup carries entries and no `audit_chain_head`; without a rebuild the next audited act
+    allocates seq 1 again, collides with the restored entry 1, and AD-22 turns that into a refused
+    action — permanently, for every act."""
+    src = _store(tmp_path, "src")
+    _seed(src)
+    backup = src.backup_tenant(TENANT)
+    backup.tables["audit_chain_head"] = []          # as a pre-5.5 backup arrives
+
+    dst = _store(tmp_path, "dst")
+    dst.restore_tenant(backup)
+
+    # the allocator was rebuilt from the entries — not invented, derived
+    heads = dst.audit_heads()
+    assert set(heads) == {TENANT, MATTER_CHAIN}
+    # ... and the tenant can write again, continuing each chain rather than colliding
+    dst.save(IngestionResult(pieces=[_piece("after")]), "w", actor="admin")
+    assert dst.audit_heads()[MATTER_CHAIN][0] == heads[MATTER_CHAIN][0] + 1
+
+
+def test_a_rebuilt_chain_does_not_claim_an_anchor_nobody_recorded(tmp_path) -> None:  # noqa: ANN001
+    """A rebuilt matter chain has no recorded anchor, so it reports itself as NOT verifiable in
+    isolation rather than claiming one."""
+    src = _store(tmp_path, "src")
+    _seed(src)
+    backup = src.backup_tenant(TENANT)
+    backup.tables["audit_chain_head"] = []
+    dst = _store(tmp_path, "dst")
+    dst.restore_tenant(backup)
+    trail = dst.read_audit(MATTER, TENANT, {"w"})
+    own = next(s for s in trail.slices if s.chain_scope == MATTER)
+    assert own.verified and own.verifiable_in_isolation is False
+
+
+def test_a_backup_whose_allocator_disagrees_with_its_entries_is_refused(tmp_path) -> None:  # noqa: ANN001
+    """CONFIRMED BY REVIEW. A head ahead of its record hands out numbers past a hole the continuity
+    check reports forever and AD-22 forbids repairing; a head behind it re-issues numbers already
+    used. Either way the restore is refused rather than accepted into a state nobody may correct."""
+    src = _store(tmp_path, "src")
+    _seed(src)
+    backup = src.backup_tenant(TENANT)
+    for row in backup.tables["audit_chain_head"]:
+        if row["chain_scope"] == MATTER:
+            row["seq"] = 100                        # a head far ahead of its entries
+    dst = _store(tmp_path, "dst")
+    with pytest.raises(ValueError, match="disagrees with the restored record"):
+        dst.restore_tenant(backup)
+    assert dst.audit_heads() == {}                  # atomic: nothing was committed
+
+
+def test_a_truncation_across_two_chains_names_both_and_totals_the_loss(tmp_path) -> None:  # noqa: ANN001
+    """CONFIRMED BY REVIEW, reproduced by a skeptic. The marker is one row per tenant, so the
+    per-chain loop recorded whichever scope sorted last: two matters truncated, and the firm was
+    told the smaller number and never told which matters were affected."""
+    journal = HeadJournal(tmp_path / "heads.journal")
+    journal.ensure_writable()
+    store = _store(tmp_path, "s", journal=journal)
+    store.provision_tenant(TENANT, "admin@x.fr", "pw12345678", "Admin", {"w"}, ["conclusions"])
+    for i in range(4):                              # four acts on the big matter
+        store.save(IngestionResult(pieces=[_piece(f"a{i}")]), "w", actor="admin",
+                   matter="aaa-grosse", tenant=TENANT)
+    store.save(IngestionResult(pieces=[_piece("z0")]), "w", actor="admin",
+               matter="zzz-petite", tenant=TENANT)   # one act on the small one
+    early = store.backup_tenant(TENANT)
+    for i in range(3):                              # three more on the big matter
+        store.save(IngestionResult(pieces=[_piece(f"b{i}")]), "w", actor="admin",
+                   matter="aaa-grosse", tenant=TENANT)
+    store.save(IngestionResult(pieces=[_piece("z1")]), "w", actor="admin",
+               matter="zzz-petite", tenant=TENANT)
+
+    _wipe(store)
+    store.restore_tenant(early)
+
+    status = store.truncation_status(TENANT)
+    assert status.active
+    assert status.entries_lost == 4                  # 3 on the big matter + 1 on the small one
+    assert "aaa-grosse" in status.chains and "zzz-petite" in status.chains
+    # the pair still describes the WORST-hit chain, never the smallest loss
+    assert status.journal_seq - status.live_seq == 3
+
+
+def test_a_quiet_chain_erased_after_an_override_is_still_a_truncation(tmp_path) -> None:  # noqa: ANN001
+    """FOUND BY EXECUTION, not by reading. An override resets the reconciliation baseline to the
+    heads recorded AFTER it. A chain that has not written since the override had no such head, so
+    its baseline was zero — and nothing is below zero. Its entries and its head row could then be
+    deleted WHOLESALE and the status stayed clean: the matter's entire history gone, no marker, no
+    alarm, on a record whose whole purpose is that this cannot happen quietly (AD-35).
+
+    Only per-matter chains (AD-43) opened it. Under one chain per tenant the override entry, being
+    written on that chain, always supplied the baseline itself — which is exactly why the tenant
+    chain still escapes here and the matter chains did not.
+    """
+    journal = HeadJournal(tmp_path / "heads.journal")
+    journal.ensure_writable()
+    store = _store(tmp_path, "s", journal=journal)
+    store.provision_tenant(TENANT, "admin@x.fr", "pw12345678", "Admin", {"w"}, ["conclusions"])
+    for i in range(3):
+        store.save(IngestionResult(pieces=[_piece(f"a{i}")]), "w", actor="admin",
+                   matter="active", tenant=TENANT)
+    for i in range(3):
+        store.save(IngestionResult(pieces=[_piece(f"q{i}")]), "w", actor="admin",
+                   matter="dormante", tenant=TENANT)
+    early = store.backup_tenant(TENANT)
+    for m in ("active", "dormante"):                 # both advance past the snapshot
+        store.save(IngestionResult(pieces=[_piece(f"{m}-later")]), "w", actor="admin",
+                   matter=m, tenant=TENANT)
+
+    _wipe(store)                                     # a restore truncates both chains …
+    store.restore_tenant(early)
+    assert store.truncation_status(TENANT).active
+    store.clear_truncation(TENANT, "patron", "restauration verifiee, perte acceptee")
+    assert not store.truncation_status(TENANT).active
+
+    # … life goes on for one matter; the other says nothing more, which is an ordinary state for a
+    # closed affair and must not be mistaken for having nothing to lose.
+    store.save(IngestionResult(pieces=[_piece("a9")]), "w", actor="admin",
+               matter="active", tenant=TENANT)
+    dormante = journal_scope(TENANT, "dormante")
+    assert store.audit_heads()[dormante][0] == 3     # three entries, standing since the override
+
+    with store._sf() as s, s.begin():                # the dormant matter's chain, erased entirely
+        s.execute(text("DELETE FROM audit_record WHERE tenant = 'cabinet' "
+                       "AND chain_scope = 'dormante'"))
+        s.execute(text("DELETE FROM audit_chain_head WHERE tenant = 'cabinet' "
+                       "AND chain_scope = 'dormante'"))
+
+    recs = store.reconcile_heads()
+    (gone,) = [r for r in recs if r.scope == dormante]
+    assert gone.truncated and gone.live_seq == 0 and gone.journal_seq == 3
+    status = store.truncation_status(TENANT)
+    assert status.active and status.entries_lost == 3
+    assert "dormante" in status.chains

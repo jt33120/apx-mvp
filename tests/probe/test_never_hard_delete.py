@@ -202,7 +202,7 @@ def _seed_failure(store: SqlStore, matter: str) -> None:
         IngestionResult(failures=[IngestedFailure(
             filename="scelle.pdf", submitted_path="/dossier/scelle.pdf", matter=matter,
             tenant=TENANT, error_class=ErrorClass.PASSWORD_PROTECTED, detail="mot de passe",
-            custodian="Me Martin")]),
+            custodian="Me Martin")]), actor="Me Dupont",
         scope=WALL, matter=matter, tenant=TENANT)
 
 
@@ -267,7 +267,7 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
         def _ingest_one() -> None:
             result = ingest_one_file(
                 single, "seule.txt", MATTER, TENANT, FileExtractor(), custodian="Me Durand")
-            store.save(result, scope=WALL, matter=MATTER, tenant=TENANT)
+            store.save(result, actor="Me Dupont", scope=WALL, matter=MATTER, tenant=TENANT)
 
         def _upload() -> None:
             resp = client.post(

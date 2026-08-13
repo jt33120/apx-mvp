@@ -40,7 +40,7 @@ def _ingest(root: Path, matter: str):
 
 def test_save_then_read_durable_inventory(tmp_path: Path, store: SqlStore) -> None:
     _matter(tmp_path)
-    out = store.save(_ingest(tmp_path, "m"), scope="wall-1")
+    out = store.save(_ingest(tmp_path, "m"), actor="Me Dupont", scope="wall-1")
     assert out.pieces_written == 2 and out.failures_written == 1
     inv = store.inventory("m", "t", {"wall-1"})
     assert inv.in_corpus == 2 and inv.open_register_entries == 1 and inv.is_consistent()
@@ -49,16 +49,16 @@ def test_save_then_read_durable_inventory(tmp_path: Path, store: SqlStore) -> No
 def test_re_ingesting_does_not_duplicate(tmp_path: Path, store: SqlStore) -> None:
     _matter(tmp_path)
     r = _ingest(tmp_path, "m")
-    store.save(r, scope="wall-1")
-    store.save(r, scope="wall-1")
+    store.save(r, actor="Me Dupont", scope="wall-1")
+    store.save(r, actor="Me Dupont", scope="wall-1")
     inv = store.inventory("m", "t", {"wall-1"})
     assert inv.in_corpus == 2 and inv.open_register_entries == 1  # not doubled (AD-40)
 
 
 def test_scope_prefilter_hides_matters_outside_the_wall(tmp_path: Path, store: SqlStore) -> None:
     _matter(tmp_path)
-    store.save(_ingest(tmp_path, "m-a"), scope="wall-A")
-    store.save(_ingest(tmp_path, "m-b"), scope="wall-B")
+    store.save(_ingest(tmp_path, "m-a"), actor="Me Dupont", scope="wall-A")
+    store.save(_ingest(tmp_path, "m-b"), actor="Me Dupont", scope="wall-B")
 
     # A user holding only wall-A sees m-a and NOT m-b.
     assert {m.matter for m in store.matters("t", {"wall-A"})} == {"m-a"}
@@ -70,7 +70,7 @@ def test_scope_prefilter_hides_matters_outside_the_wall(tmp_path: Path, store: S
 
 def test_reading_a_matter_outside_scope_is_refused(tmp_path: Path, store: SqlStore) -> None:
     _matter(tmp_path)
-    store.save(_ingest(tmp_path, "m-b"), scope="wall-B")
+    store.save(_ingest(tmp_path, "m-b"), actor="Me Dupont", scope="wall-B")
     with pytest.raises(ScopeDenied):
         store.inventory("m-b", "t", {"wall-A"})  # holds the wrong wall
     with pytest.raises(ScopeDenied):
@@ -83,7 +83,7 @@ def test_deduplicate_collapses_copies_modulo_formatting(tmp_path: Path, store: S
     (tmp_path / "a.txt").write_text("Le contrat est signé.", encoding="utf-8")
     (tmp_path / "b.txt").write_text("le   CONTRAT  est signé.", encoding="utf-8")
     (tmp_path / "c.txt").write_text("Autre pièce, distincte.", encoding="utf-8")
-    store.save(_ingest(tmp_path, "m"), scope="wall-1")
+    store.save(_ingest(tmp_path, "m"), actor="Me Dupont", scope="wall-1")
 
     d = store.deduplicate("m", "t", {"wall-1"})
     assert d.submitted == 3 and d.distinct == 2 and d.duplicates == 1
@@ -94,7 +94,7 @@ def test_deduplicate_collapses_copies_modulo_formatting(tmp_path: Path, store: S
 
 def test_deduplicate_is_scope_checked(tmp_path: Path, store: SqlStore) -> None:
     (tmp_path / "a.txt").write_text("pièce", encoding="utf-8")
-    store.save(_ingest(tmp_path, "m-b"), scope="wall-B")
+    store.save(_ingest(tmp_path, "m-b"), actor="Me Dupont", scope="wall-B")
     with pytest.raises(ScopeDenied):
         store.deduplicate("m-b", "t", {"wall-A"})  # the wall pre-filters triage too
 
@@ -102,7 +102,7 @@ def test_deduplicate_is_scope_checked(tmp_path: Path, store: SqlStore) -> None:
 def test_judge_persists_reversible_labels_and_audits(tmp_path: Path, store: SqlStore) -> None:
     (tmp_path / "bail.txt").write_text("Contrat de bail commercial signé.", encoding="utf-8")
     (tmp_path / "facture.txt").write_text("Facture EDF, 150 euros.", encoding="utf-8")
-    store.save(_ingest(tmp_path, "m"), scope="wall-1")
+    store.save(_ingest(tmp_path, "m"), actor="Me Dupont", scope="wall-1")
 
     reps = store.representatives("m", "t", {"wall-1"})
     assert len(reps) == 2  # two distinct pieces to judge
@@ -129,7 +129,7 @@ def test_judge_persists_reversible_labels_and_audits(tmp_path: Path, store: SqlS
 
 def test_labels_are_scope_checked(tmp_path: Path, store: SqlStore) -> None:
     (tmp_path / "a.txt").write_text("pièce", encoding="utf-8")
-    store.save(_ingest(tmp_path, "m-b"), scope="wall-B")
+    store.save(_ingest(tmp_path, "m-b"), actor="Me Dupont", scope="wall-B")
     with pytest.raises(ScopeDenied):
         store.representatives("m-b", "t", {"wall-A"})
     with pytest.raises(ScopeDenied):
@@ -139,7 +139,7 @@ def test_labels_are_scope_checked(tmp_path: Path, store: SqlStore) -> None:
 def test_search_finds_pieces_by_term_case_insensitively(tmp_path: Path, store: SqlStore) -> None:
     (tmp_path / "a.txt").write_text("Le contrat de bail commercial.", encoding="utf-8")
     (tmp_path / "b.txt").write_text("Facture EDF, 150 euros.", encoding="utf-8")
-    store.save(_ingest(tmp_path, "m"), scope="wall-1")
+    store.save(_ingest(tmp_path, "m"), actor="Me Dupont", scope="wall-1")
     res = store.search("t", {"wall-1"}, "BAIL")  # case-insensitive
     assert res.total == 1
     assert res.hits[0].provenance == "a.txt" and "bail" in res.hits[0].snippet.lower()
@@ -151,8 +151,8 @@ def test_search_is_scope_constrained_and_does_not_leak(tmp_path: Path, store: Sq
     db.mkdir()
     (da / "x.txt").write_text("un secret terme partage", encoding="utf-8")
     (db / "y.txt").write_text("un autre secret terme partage", encoding="utf-8")
-    store.save(_ingest(da, "m-a"), scope="wall-A")
-    store.save(_ingest(db, "m-b"), scope="wall-B")
+    store.save(_ingest(da, "m-a"), actor="Me Dupont", scope="wall-A")
+    store.save(_ingest(db, "m-b"), actor="Me Dupont", scope="wall-B")
 
     # Holding only wall-A: the shared term is found in m-a, never in m-b (the wall).
     res = store.search("t", {"wall-A"}, "partage")
@@ -164,7 +164,7 @@ def test_search_is_scope_constrained_and_does_not_leak(tmp_path: Path, store: Sq
 
 def test_search_empty_query_returns_nothing(tmp_path: Path, store: SqlStore) -> None:
     (tmp_path / "a.txt").write_text("un texte", encoding="utf-8")
-    store.save(_ingest(tmp_path, "m"), scope="wall-1")
+    store.save(_ingest(tmp_path, "m"), actor="Me Dupont", scope="wall-1")
     assert store.search("t", {"wall-1"}, "   ").total == 0
 
 
@@ -181,7 +181,7 @@ def test_save_fails_closed_on_an_empty_scope(tmp_path: Path, store: SqlStore) ->
     r = _ingest(tmp_path, "m")
     for bad in ("", "   "):
         with pytest.raises(UnauthorizedScope):
-            store.save(r, scope=bad, matter="m", tenant="t")
+            store.save(r, actor="Me Dupont", scope=bad, matter="m", tenant="t")
     with store._sf() as s:
         assert s.scalar(select(func.count()).select_from(Piece)) == 0
         assert s.scalar(select(func.count()).select_from(MatterScope)) == 0
@@ -191,7 +191,7 @@ def test_a_zero_piece_result_still_creates_a_durable_matter(store: SqlStore) -> 
     # AC5: an empty result + explicit matter/tenant creates the matter at a consistent 0/0
     # inventory (the folder of zero readable files — a completed job, never a silent no-op).
     from apx.core.app.ingest import IngestionResult
-    out = store.save(IngestionResult(), scope="wall-1", matter="m", tenant="t")
+    out = store.save(IngestionResult(), actor="Me Dupont", scope="wall-1", matter="m", tenant="t")
     assert out.pieces_written == 0 and out.failures_written == 0
     inv = store.inventory("m", "t", {"wall-1"})   # does not raise -> the matter is durable
     assert inv.submitted_pieces == 0 and inv.in_corpus == 0 and inv.open_register_entries == 0 \
@@ -209,18 +209,22 @@ def test_case_theory_is_persisted_and_a_skip_never_wipes_it(
     from apx.adapters.store_postgres.models import MatterScope
     _matter(tmp_path)
     r = _ingest(tmp_path, "m")
-    store.save(r, scope="wall-1", matter="m", tenant="t", case_theory="contestation licenciement")
+    store.save(r, actor="Me Dupont", scope="wall-1", matter="m", tenant="t",
+               case_theory="contestation licenciement")
     with store._sf() as s:
         assert s.get(MatterScope, {"tenant": "t", "matter": "m"}).case_theory \
             == "contestation licenciement"
-    store.save(r, scope="wall-1", matter="m", tenant="t")   # re-ingest, theory omitted (None)
+    # re-ingest, theory omitted (None)
+    store.save(r, actor="Me Dupont", scope="wall-1", matter="m", tenant="t")
     with store._sf() as s:
         assert s.get(MatterScope, {"tenant": "t", "matter": "m"}).case_theory \
             == "contestation licenciement"                  # not wiped by the skip
-    store.save(r, scope="wall-1", matter="m", tenant="t", case_theory="")  # empty == a skip too
+    # an empty theory is a skip too
+    store.save(r, actor="Me Dupont", scope="wall-1", matter="m", tenant="t", case_theory="")
     with store._sf() as s:
         assert s.get(MatterScope, {"tenant": "t", "matter": "m"}).case_theory \
             == "contestation licenciement"                  # "" normalized at the boundary, no wipe
-    store.save(r, scope="wall-1", matter="m2", tenant="t")  # a fresh matter, no theory
+    store.save(r,
+        actor="Me Dupont", scope="wall-1", matter="m2", tenant="t")  # a fresh matter, no theory
     with store._sf() as s:
         assert s.get(MatterScope, {"tenant": "t", "matter": "m2"}).case_theory is None
