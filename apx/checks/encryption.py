@@ -95,6 +95,19 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     # less honest record of what was actually weighed. The marker's genuinely content-bearing
     # columns (``cleared_by``, the human-written ``reason``) are EncryptedText.
     ("TruncationMarker", "chains"),
+    # Story 5.8 — the validation act's non-content columns (FR-45). ``batch_id`` is a sha256 over
+    # the batch's own inputs, the same kind of machine identity as ``ranking_version_id``; it exists
+    # so a reader can group one gesture's entries and holds nothing about the documents. The three
+    # ``accepted_*`` columns are the tool's OWN categorical output as the surface showed it — the
+    # derived side (retained/discarded/unscored), the cascade band, and a taxonomy member drawn from
+    # the tenant's configured list — each already plaintext in the table it came from
+    # (``ranked_entry.band``, ``taxonomy_label_entry.label``). Encrypting the copy while the
+    # original sits in the clear one table over would protect nothing. The act's genuinely
+    # PII-bearing column, ``actor``, is EncryptedText.
+    ("ValidationActEntry", "batch_id"),
+    ("ValidationActEntry", "accepted_side"),
+    ("ValidationActEntry", "accepted_band"),
+    ("ValidationActEntry", "accepted_label"),
     # Story 4.3 — the ranking version's structural metadata, kept plaintext by conscious decision.
     # ``basis`` is a categorical enum (case-theory | intrinsic). ``identity_json`` is the AD-23
     # ranking-version identity (model/embedder/chunking/schema/prompt/config identities + hashes) —

@@ -16,11 +16,13 @@ verdict **per chain** (AD-43 — only the *matter*'s own chain is recomputable b
 this document alone, and saying so is the point), an unacknowledged truncation (AD-35), and
 **degraded** with its count where a retained extract no longer resolves (FR-11).
 
-**A section whose act does not exist yet says so.** The *validation acts* and the accepted-as-is
-half of the modified-versus-accepted breakdown are Story 5.8's. They print a sentence naming the
-story, never an empty table and never a zero — zero is a finding about the firm, *not built* is a
-finding about the build, and a reader given the first would draw a conclusion the second does not
-support.
+**A section whose act does not exist yet says so.** It prints a sentence naming the story, never an
+empty table and never a zero — zero is a finding about the firm, *not built* is a finding about the
+build, and a reader given the first would draw a conclusion the second does not support.
+:data:`PENDING_SECTIONS` is **empty as of Story 5.8**: the *validation acts* and the accepted-as-is
+half of the breakdown were the last two, and both acts now exist. Their blocks are not *replaced by
+a zero* — they are retired because the thing they protected against is gone, and a **0** in §7 is
+now a finding about the firm, which is precisely what it was not the day before.
 
 Pure core: stdlib only, no adapter import, no I/O.
 """
@@ -54,12 +56,25 @@ class Tier(StrEnum):
         return "Chiffres seuls" if self is Tier.NUMBERS_ONLY else "Dossier complet"
 
 
+#: Which catalogued act fills each section that once had none. The map is the **referent** of the
+#: pending declaration below: a section is pending exactly when its act does not exist, and
+#: ``a_pending_section_is_not_a_zero`` asserts the biconditional in both directions. Without it,
+#: "pending" was a hand-maintained claim that could drift from the catalogue in either direction —
+#: a section still printing *not built* after its act shipped, or a section printing a zero before.
+SECTION_ACTS: dict[str, str] = {
+    "validation_acts": "validate_piece",
+    "accepted_as_is": "values_accepted",
+}
+
 #: The story that owns each section the record cannot fill yet. A section here prints its heading
 #: and a sentence naming the story — never an empty table, never a zero.
-PENDING_SECTIONS: dict[str, str] = {
-    "validation_acts": "5.8",
-    "accepted_as_is": "5.8",
-}
+#:
+#: **Empty as of Story 5.8.** Both entries were this story's, and both acts now exist. The blocks
+#: are not *replaced by a zero* — they are retired because the thing they protected against no
+#: longer exists, and a **0** in §7 is now a finding about the firm, which is exactly what it was
+#: not yesterday. Kept as a declared empty mapping: the next section to arrive ahead of its act
+#: belongs here, and a rule with nowhere to be declared is one that gets skipped.
+PENDING_SECTIONS: dict[str, str] = {}
 
 
 def pending_sentence_fr(section: str) -> str:
@@ -212,6 +227,57 @@ class OverrideLine:
 
 
 @dataclass(frozen=True)
+class ValidationLine:
+    """§7 — one entry of the validation ledger (FR-45). **All** entries, including withdrawn ones:
+    a validation performed and then withdrawn is a decision that was taken, and dropping it because
+    it is no longer in force would let a reader conclude it never happened (the pin precedent).
+
+    ``provenance`` is FR-45's load-bearing field — *read* or *from-the-list* — and ``opened_at`` is
+    the timestamp behind it, carried so the reader can judge the distance between the reading and
+    the act. ``batch_id`` present means the act was one gesture over ``batch_size`` *pièces*.
+
+    Both tiers carry every field: an accepted band, side, label and confidence are the tool's own
+    categorical output, not client content."""
+
+    piece_id: str
+    seq: int
+    action: str
+    actor: str
+    at: str
+    provenance: str
+    ranking_version_id: str
+    opened_at: str | None = None
+    batch_id: str | None = None
+    batch_size: int | None = None
+    accepted_side: str | None = None
+    accepted_label: str | None = None
+    accepted_band: str | None = None
+    accepted_confidence: float | None = None
+
+
+@dataclass(frozen=True)
+class ValidationSummary:
+    """§7's counts, split by register and **never pooled** (FR-45(d), §13 q.5).
+
+    A reader of this document must always be able to tell individual judgements from one gesture
+    over many, and reading from accepting-from-the-list. A single *validated* total would make both
+    impossible while looking complete — which is the shape of every compliance number that has ever
+    been reported instead of measured."""
+
+    read: int
+    from_the_list: int
+    individually: int
+    in_bulk: int
+    batches: int
+    withdrawn: int
+    never_validated: int
+
+    @property
+    def in_force(self) -> int:
+        return self.read + self.from_the_list
+
+
+@dataclass(frozen=True)
 class PendingSection:
     """A section whose act does not exist yet (FR-26 + the project's standing rule)."""
 
@@ -239,7 +305,17 @@ class MatterRecord:
     #: FR-25: counted over the WHOLE record, never the length of ``overrides`` (a tier or a filter
     #: could shorten the list; neither changes how many overrides the matter holds).
     overrides_total: int = 0
+    #: §7 (FR-45) — every entry of the validation ledger, and the counts split by register.
+    validations: tuple[ValidationLine, ...] = ()
+    validation_summary: ValidationSummary | None = None
+    #: §8 — the modified-versus-accepted breakdown. ``accepted_values`` counts the **pièces** whose
+    #: values stand accepted as-is — one per validation act in force, not one per field it covered —
+    #: and it is derived from the validation ledger and from **nothing else**: FR-45 is explicit
+    #: that no default, elapsed time, scroll position or screen visit produces one. ``modified_
+    #: values`` counts the recorded acts of modification beside it, which is the asymmetry FR-24
+    #: §614 draws: a modification is an edit, an acceptance needs a gesture behind it.
     modified_values: int = 0
+    accepted_values: int = 0
     pending: tuple[PendingSection, ...] = field(default_factory=tuple)
 
     @property
@@ -259,7 +335,9 @@ _DENOMINATOR_FR: tuple[tuple[str, str], ...] = (
     ("unknown_cardinality_entries", "Archives non ouvertes, contenu inconnu"),
 )
 
-_PENDING_HEADINGS_FR: dict[str, str] = {
+#: The heading each section prints, whether it is built or pending. One registry, so a section that
+#: retires its pending block keeps the name a reader has already seen.
+SECTION_HEADINGS_FR: dict[str, str] = {
     "validation_acts": "Les actes de validation",
     "accepted_as_is": "Accepté en l'état",
 }
@@ -268,7 +346,7 @@ _PENDING_HEADINGS_FR: dict[str, str] = {
 def _pending_sections() -> tuple[PendingSection, ...]:
     return tuple(
         PendingSection(
-            key=key, heading_fr=_PENDING_HEADINGS_FR[key], story=story,
+            key=key, heading_fr=SECTION_HEADINGS_FR[key], story=story,
             sentence_fr=pending_sentence_fr(key))
         for key, story in PENDING_SECTIONS.items())
 
@@ -283,7 +361,10 @@ def assemble(
     sampling_runs: tuple[SamplingRunLine, ...] = (),
     overrides: tuple[OverrideLine, ...] = (),
     overrides_total: int = 0,
+    validations: tuple[ValidationLine, ...] = (),
+    validation_summary: ValidationSummary | None = None,
     modified_values: int = 0,
+    accepted_values: int = 0,
 ) -> MatterRecord:
     """Build the document for ``cover.tier``.
 
@@ -323,6 +404,9 @@ def assemble(
                 reason=None if numbers_only else o.reason)
             for o in overrides),
         overrides_total=overrides_total,
+        validations=validations,
+        validation_summary=validation_summary,
         modified_values=modified_values,
+        accepted_values=accepted_values,
         pending=_pending_sections(),
     )

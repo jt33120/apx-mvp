@@ -10,6 +10,7 @@ the per-*pièce* monotonic ``seq`` for a reject/restore, and appends atomically 
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Protocol
 
 from apx.core.domain.justification import (
@@ -64,4 +65,15 @@ class JustificationStore(Protocol):
         """Whether the caller may see this *matter* at all (AD-13). A read that must fail closed on
         its own asks this rather than inferring scope from another read's ``None`` — which conflates
         "out of scope" with "nothing recorded" and leaks the difference (Story 5.7)."""
+        ...
+
+    def last_open_by(
+        self, *, tenant: str, matter: str, piece_id: str, actor: str, scopes: set[str],
+    ) -> datetime | None:
+        """When **this actor** last opened this *pièce* in the viewer, or ``None`` (FR-45/FR-44).
+
+        A timestamp rather than a flag, because the drawer must state the consequence of the act
+        before it is committed and *"opened"* alone is equally true of an open six months and three
+        rankings ago. Scope-checked in its own right (Story 5.8) — ``None`` when the *matter*
+        is not held, which is the same answer as an unopened *pièce* and discloses nothing."""
         ...

@@ -26,7 +26,7 @@ from pathlib import Path
 from apx.checks.import_contracts import CheckResult
 from apx.checks.isolation_harness import _trees, _where
 from apx.checks.payload_schema import _fail_closed
-from apx.core.domain import matter_record
+from apx.core.domain import audit, matter_record
 
 #: The parameter that decides whether client content leaves the building.
 _TIER = "tier"
@@ -85,8 +85,25 @@ def a_pending_section_is_not_a_zero(roots: Iterable[Path] | None = None) -> Chec
     name, fr = "a pending section names its story and is never a zero", "FR-26"
     violations: list[str] = []
 
-    if not matter_record.PENDING_SECTIONS:
-        violations.append("no section is declared pending — Story 5.8's two are still not built")
+    # The biconditional (Story 5.8). "Pending" was a hand-maintained claim, and the first version of
+    # this check pinned it with a one-shot tripwire — *at least one section must be pending* — which
+    # was true until Story 5.8 built both and then failed **on success**. The durable rule is the
+    # one the audit catalogue already uses for its classes: a section is declared pending **exactly
+    # when** its act is uncatalogued. That fails in both directions — a section still printing "not
+    # built" after its act shipped, and a section printing a count before it did.
+    for section, verb in matter_record.SECTION_ACTS.items():
+        catalogued = verb in audit.ACTS
+        pending = section in matter_record.PENDING_SECTIONS
+        if catalogued and pending:
+            violations.append(
+                f"{section!r} is declared pending, but {verb!r} is catalogued — the section has an "
+                "act and must print what happened, not a sentence saying nothing did")
+        if not catalogued and not pending:
+            violations.append(
+                f"{section!r} is not declared pending and {verb!r} does not exist — the section "
+                "would print a zero for an act nobody can perform, which reads as a finding about "
+                "the firm")
+
     for section, story in matter_record.PENDING_SECTIONS.items():
         if not story or not story[0].isdigit():
             violations.append(f"{section!r} declares {story!r}, which is not a story number")
@@ -122,9 +139,11 @@ def a_pending_section_is_not_a_zero(roots: Iterable[Path] | None = None) -> Chec
 
     if violations:
         return CheckResult(name, fr, False, "; ".join(violations))
+    built = sum(1 for v in matter_record.SECTION_ACTS.values() if v in audit.ACTS)
     return CheckResult(
         name, fr, True,
-        f"{len(matter_record.PENDING_SECTIONS)} pending section(s), each naming its story in words")
+        f"{len(matter_record.PENDING_SECTIONS)} pending section(s), each naming its story in "
+        f"words; {built} of {len(matter_record.SECTION_ACTS)} section act(s) catalogued")
 
 
 def run() -> list[CheckResult]:

@@ -53,15 +53,18 @@ def test_the_catalogue_leg_is_independent_of_the_scanned_tree() -> None:
     with no writer and no owning story fails even when every call site is clean."""
     clean = audit_catalogue_is_complete(_fixture("clean"))
     assert clean.ok, clean.detail
-    original = dict(audit.PENDING_CLASSES)
+    # Every FR-24 class has a writer as of Story 5.8, so the "no writer, no owner" leg is exercised
+    # by introducing a class nothing writes rather than by un-declaring a pending one. That is also
+    # the shape the leg exists to catch: a requirement gains a class, and nobody notices it has no
+    # writer until an export prints a section that can only ever be empty.
+    original = audit.FR24_CLASSES
     try:
-        audit.PENDING_CLASSES.pop(audit.CLASS_VALIDATION)
+        audit.FR24_CLASSES = (*original, "a_class_nothing_writes")
         broken = audit_catalogue_is_complete(_fixture("clean"))
         assert not broken.ok
         assert "no writer and no story that owns it" in broken.detail
     finally:
-        audit.PENDING_CLASSES.clear()
-        audit.PENDING_CLASSES.update(original)
+        audit.FR24_CLASSES = original
 
 
 def test_a_pending_class_that_something_writes_fails_the_build() -> None:

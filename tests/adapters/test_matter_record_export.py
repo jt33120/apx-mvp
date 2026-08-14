@@ -110,7 +110,10 @@ def test_the_document_carries_every_section_fr26_enumerates(store: SqlStore) -> 
     assert [h.seq for h in r.line_history] == [1, 2]      # the HISTORY, not the current position
     assert [(p.piece_id, p.action) for p in r.pins] == [("d", "retain")]
     assert r.overrides_total == 2                         # the pin + the register override
-    assert {p.key for p in r.pending} == {"validation_acts", "accepted_as_is"}
+    # §7 and §8 are real sections as of Story 5.8, so nothing is declared pending and both print
+    # counts. Their emptiness here is the FIRM's — nobody validated anything on this matter.
+    assert r.pending == ()
+    assert r.validation_summary is not None and r.validation_summary.in_force == 0
 
 
 def test_the_line_history_carries_its_author_and_the_price_it_was_shown(store: SqlStore) -> None:
@@ -128,15 +131,21 @@ def test_the_override_count_is_over_the_record_not_the_printed_list(store: SqlSt
     assert all(o.action_fr != o.action for o in r.overrides)   # said in the lawyer's language
 
 
-def test_a_pending_section_names_its_story_and_never_prints_a_zero(store: SqlStore) -> None:
-    # zero is a finding about the FIRM; "not built" is a finding about the BUILD, and a bâtonnier
-    # reading a 0 in the validation section would draw the first from the second
+def test_nothing_is_pending_and_the_validation_section_prints_real_counts(
+    store: SqlStore,
+) -> None:
+    """Story 5.8 built both sections that named it, so nothing is declared pending.
+
+    The rule they enforced still holds and is now enforced from the other side: while an act did
+    not exist, §7 said so in words; now that it does, §7 prints a **0** — and that 0 finally means
+    what a *bâtonnier* would take it to mean, a finding about the **firm**. The invariant is
+    checked structurally in both directions by ``a_pending_section_is_not_a_zero``."""
     r = _export(store)
-    validation = next(p for p in r.pending if p.key == "validation_acts")
-    assert validation.story == "5.8"
-    assert "n'existe pas encore" in validation.sentence_fr
-    assert "5.8" in validation.sentence_fr
-    assert "0" not in validation.sentence_fr
+    assert r.pending == ()
+    assert r.validation_summary is not None
+    assert r.validation_summary.in_force == 0
+    assert r.validation_summary.never_validated == len(_PAIRS)
+    assert r.accepted_values == 0
 
 
 # ── AC-6: the tier, applied by omission ───────────────────────────────────────────────────────

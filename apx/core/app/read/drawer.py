@@ -18,8 +18,15 @@ something the export would call degraded.
 
 **The proposed entries come from the catalogue** (:mod:`apx.core.domain.proposed_entry`), so the
 panel that says where an entry will land and the writer that files it there cannot disagree. An act
-the record has no way to file — the *validation act*, Story 5.8's — cannot be proposed at all, and
-that refusal is exactly why the surface renders its control disabled.
+the record has no way to file cannot be proposed at all, and that refusal — not a convention
+somebody has to remember — is what kept the *validation act*'s control disabled until Story 5.8
+catalogued its verb.
+
+**The validation provenance is read, not asserted** (5.8, FR-45/FR-44). The drawer carries *when
+this caller last opened this pièce*, so the panel states what a *validation act* would record
+**before** she commits it rather than letting her discover it afterwards. Another lawyer's open is
+not her reading, which is why the read is per-actor, and the value is a timestamp rather than a flag
+because *"opened"* alone is equally true of an open six months and three rankings ago.
 
 Imports Ports and Domain only (AD-4), touches no store.
 """
@@ -27,6 +34,7 @@ Imports Ports and Domain only (AD-4), touches no store.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime
 
 from apx.core.domain import audit as AUDIT
 from apx.core.domain.justification import VerifiedJustification
@@ -34,6 +42,12 @@ from apx.core.domain.proposed_entry import (
     ProposedEntry,
     ProposedEntryUnavailable,
     propose,
+)
+from apx.core.domain.validation import (
+    REVERSAL_FR as VALIDATION_REVERSAL_FR,
+)
+from apx.core.domain.validation import (
+    Provenance,
 )
 from apx.core.ports.justification import JustificationStore
 
@@ -51,15 +65,20 @@ OFFERED_ACTS: tuple[tuple[str, str], ...] = (
      "retirez l'épingle — la pose et le retrait restent tous deux inscrits"),
     (AUDIT.ACT_PIN_REMOVED,
      "épinglez à nouveau ; le registre garde chaque épingle et chaque retrait"),
+    (AUDIT.ACT_VALIDATE_PIECE, VALIDATION_REVERSAL_FR),
+    (AUDIT.ACT_VALIDATION_WITHDRAWN,
+     "validez à nouveau ; chaque validation et chaque retrait restent inscrits"),
 )
 
 #: An act the drawer names but cannot offer, and the story that owns it. Rendered **disabled with
 #: its reason** rather than hidden: a hidden control cannot be asked about, and a disabled one that
 #: says why tells the truth about the build to the only person either could mislead.
-PENDING_ACTS: dict[str, tuple[str, str]] = {
-    "validation_act": (
-        "5.8", "J'ai lu cette pièce et j'accepte l'appréciation de l'outil"),
-}
+#:
+#: **Empty as of Story 5.8**, whose act was the only entry. :func:`_pending` raises the moment a
+#: listed verb becomes catalogued — deliberately, so a control cannot stay disabled after its act
+#: ships. That tripwire fired on this story and was answered by removing the row, never by
+#: weakening the assertion.
+PENDING_ACTS: dict[str, tuple[str, str]] = {}
 
 
 @dataclass(frozen=True)
@@ -105,6 +124,16 @@ class Drawer:
     justification: VerifiedJustification | None
     actions: tuple[OfferedAction, ...]
     pending_actions: tuple[PendingAction, ...]
+    #: When THIS caller last opened this *pièce* in the viewer, or ``None`` (FR-45/FR-44). The
+    #: drawer carries the timestamp rather than a flag so the surface can print the date: the
+    #: consequence of the act is stated **before** it is committed, and *"opened"* alone is equally
+    #: true of an open six months and three rankings ago.
+    opened_at: datetime | None = None
+
+    @property
+    def validation_provenance(self) -> Provenance:
+        """What a *validation act* performed now would record (FR-45) — derived, never asserted."""
+        return Provenance.of(self.opened_at)
 
     @property
     def is_unverified(self) -> bool:
@@ -169,4 +198,8 @@ def read_drawer(
         justification=shown,
         actions=_offered(matter, actor),
         pending_actions=_pending(),
+        # FR-45/FR-44 — read for THIS actor, so the panel states what a validation act would record
+        # rather than letting her discover it afterwards. Another lawyer's open is not her reading.
+        opened_at=store.last_open_by(
+            tenant=tenant, matter=matter, piece_id=piece_id, actor=actor, scopes=scopes),
     )

@@ -163,10 +163,10 @@ CLASS_SECURITY_EVENT = "security_event"
 #: a stage is ASSERTED with a check or PENDING with nothing, and never faked in between. A class
 #: here fails the build if a verb claims it (it is not pending if something writes it) and fails
 #: the build if its story number is absent.
-PENDING_CLASSES: dict[str, str] = {
-    CLASS_VALIDATION: "5.8",     # the validation act
-    CLASS_VALUE_ACCEPTED: "5.8",  # "accepted as-is" exists only where a validation act occurred
-}
+#: Empty as of Story 5.8: ``validation_act`` and ``value_accepted`` were the last two, and each now
+#: has a writer. Kept as a declared empty mapping rather than deleted — the next class to arrive
+#: without a writer belongs here, and a rule with nowhere to be declared is one that gets skipped.
+PENDING_CLASSES: dict[str, str] = {}
 
 
 # ── the catalogue ─────────────────────────────────────────────────────────────────────────────
@@ -220,6 +220,19 @@ ACT_PIECE_LABELLED = "piece_labelled"
 ACT_JUSTIFICATION_RECORDED = "justification_recorded"
 ACT_JUSTIFICATION_REJECTED = "justification_rejected"
 ACT_JUSTIFICATION_RESTORED = "justification_restored"
+
+# The validation act and its consequence (FR-45, Story 5.8). THREE verbs and TWO classes, because
+# FR-24 §611 enumerates two separate recorded things: *"who validated what and when"* (the gesture)
+# and *"which values were modified versus accepted as-is"* (its effect on the values). One entry
+# folding both would make the acceptance a property of the gesture rather than a fact with its own
+# provenance — and the acceptance is the one FR-24 §614 constrains: a value the user never touched
+# is recorded as accepted ONLY where a validation act occurred over it.
+ACT_VALIDATE_PIECE = "validate_piece"
+ACT_VALIDATION_WITHDRAWN = "validation_withdrawn"
+#: Written ONLY inside the validation use case, atomically with :data:`ACT_VALIDATE_PIECE` —
+#: asserted by ``only_the_validation_act_accepts``. A second writer is how "accepted as-is"
+#: acquires the default FR-45 forbids.
+ACT_VALUES_ACCEPTED = "values_accepted"
 
 # The case theory (FR-37).
 ACT_CASE_THEORY_WRITTEN = "case_theory_written"
@@ -293,6 +306,10 @@ _CATALOGUE: tuple[RecordableAct, ...] = (
     _act(ACT_JUSTIFICATION_RECORDED, CLASS_VALUE_MODIFIED, CHAIN_MATTER),
     _act(ACT_JUSTIFICATION_REJECTED, CLASS_VALUE_MODIFIED, CHAIN_MATTER),
     _act(ACT_JUSTIFICATION_RESTORED, CLASS_VALUE_MODIFIED, CHAIN_MATTER),
+
+    _act(ACT_VALIDATE_PIECE, CLASS_VALIDATION, CHAIN_MATTER),
+    _act(ACT_VALIDATION_WITHDRAWN, CLASS_VALIDATION, CHAIN_MATTER),
+    _act(ACT_VALUES_ACCEPTED, CLASS_VALUE_ACCEPTED, CHAIN_MATTER),
 
     _act(ACT_CASE_THEORY_WRITTEN, CLASS_CASE_THEORY, CHAIN_MATTER),
     _act(ACT_CASE_THEORY_WITHDRAWN, CLASS_CASE_THEORY, CHAIN_MATTER),

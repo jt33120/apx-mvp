@@ -78,6 +78,7 @@ from apx.checks import (
     truth_status,
     truth_status_surface,
     user_actions,
+    validation,
 )
 from apx.checks.import_contracts import CheckResult
 
@@ -651,8 +652,23 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "that can move client content out of the firm does not choose for the caller (FR-26 §11)"),
     _p("pending-section-is-not-a-zero", "FR-26", "AD-33", "a pending section is a sentence",
        matter_export.a_pending_section_is_not_a_zero,
-       "core/domain/matter_record.py's declared pending sections + any len()/sum() over them "
-       "across apx/** — zero is a finding about the FIRM, not built is a finding about the BUILD"),
+       "core/domain/matter_record.py's declared pending sections against the act catalogue "
+       "(pending IFF uncatalogued) + any len()/sum() over them across apx/** — zero is a finding "
+       "about the FIRM, not built is a finding about the BUILD"),
+    _p("validation-act-sole-acceptor", "FR-45", "AD-33", "only the validation act accepts",
+       validation.only_the_validation_act_accepts,
+       "the FR-24 value_accepted class + every function across apx/** appending it — one verb, "
+       "one writer, and never without the validation act it must accompany (FR-24 §614)"),
+    _p("validation-provenance-never-a-literal", "FR-45", "AD-33",
+       "the opened fact is read, never asserted",
+       validation.the_opened_fact_is_never_a_literal,
+       "every `opened_at=` call site across apx/** — a constant is the blanket stamp over a batch "
+       "that FR-45(c) exists to forbid ('not opened, unless it was')"),
+    _p("acceptance-is-never-manufactured", "FR-45", "AD-33",
+       "no acceptance from time, scroll or presence",
+       validation.acceptance_is_never_manufactured,
+       "every name and French string literal across apx/** — no dwell/scroll/visit path to an "
+       "acceptance, and ONE home for the sentence the record attributes to the lawyer"),
     _p("override-ground-named", "FR-25", "AD-33", "an override names its FR-25 ground",
        override.override_names_its_ground,
        "the act catalogue (every override names one of FR-25's three grounds; the override class "

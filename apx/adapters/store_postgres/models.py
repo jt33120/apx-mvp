@@ -1145,3 +1145,115 @@ class SamplingVerdict(Base):
     # the reviewer's display name (PII), never a SQL predicate → application-encrypted (AD-31)
     actor: Mapped[str] = mapped_column(EncryptedText("sampling_verdict.actor"), nullable=False)
     at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class PieceOpen(Base):
+    """One opening of a *pièce*'s content in the viewer (FR-44, Story 3.5 — made **readable** by
+    Story 5.8).
+
+    This is the fact FR-45 turns on: *whether the pièce was opened in the viewer before the act* is
+    what distinguishes a *validation act* performed **after reading** from one performed from the
+    list. Story 3.5 recorded the open faithfully as an *audit entry* whose detail reads
+    ``piece=<id>`` — but that detail is application-encrypted prose, so answering *"did this lawyer
+    open this pièce"* meant loading every ``retrieval``-class entry of the *matter*, decrypting each
+    and string-parsing a fragment. **A record whose reading depends on parsing prose is not a
+    record** (the rule Story 5.7 established for the priced statement). This table is the readable
+    half; the audit entry is unchanged and still authoritative for the chain.
+
+    **APPEND-ONLY.** An open is an event, never a state: a second open is a second row. Written in
+    the SAME transaction as its audit entry, so the ledger and the chain cannot disagree.
+
+    ``actor`` is PII → application-encrypted (AD-31) and is **never a SQL predicate**. The
+    *"did YOU open it"* question is answered by loading the *pièce*'s opens and comparing in the
+    application: opens per *pièce* are human gestures behind a session, so the set is small, and a
+    deterministic digest column would buy an index while adding no protection an attacker holding
+    the dump does not already have from ``user_account.display_name``.
+
+    No cascade FK (AD-7): a *matter* is retired, never hard-deleted out from under its opens."""
+
+    __tablename__ = "piece_open"
+    __table_args__ = (
+        Index("ix_piece_open_piece", "tenant", "matter", "piece_id", "at"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(pid \0 actor \0 at)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    piece_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # the lawyer who opened it (PII), never a SQL predicate → application-encrypted (AD-31).
+    actor: Mapped[str] = mapped_column(EncryptedText("piece_open.actor"), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class ValidationActEntry(Base):
+    """One entry in a *pièce*'s **validation** ledger (FR-45, Story 5.8) — *"I have read this pièce
+    and I accept the tool's assessment of it."*
+
+    **APPEND-ONLY** and **version-INDEPENDENT** in storage, exactly as the *pin* is (AD-7/AD-39): a
+    validation or its withdrawal is a NEW row, never an overwrite, and the in-force state is the
+    max-``seq`` **view**. A withdrawal does not erase the validation — FR-45 requires the reversal
+    to be an entry — so both stay readable and the record shows a mind changed.
+
+    **``opened_at`` is a timestamp, not a boolean, and that is load-bearing.** FR-45 asks whether
+    the *pièce* was opened in the viewer **before the act**; ``NULL`` means the acting lawyer had
+    not opened it, and a value is *when she did*. A boolean would be a lossy projection: *"opened"*
+    alone is equally true of an open six months and three rankings before the act, and the reader
+    of the export — and the lawyer herself — needs the distance. Resolved inside the use case from
+    :class:`PieceOpen`, for **the acting actor**, from opens **strictly before** the act: another
+    lawyer's open is not this lawyer's reading.
+
+    **``batch_id``/``batch_size`` are the FR-45 bulk markers.** ``NULL`` is an individual act. A
+    bulk act writes one row **per pièce**, each carrying the shared identifier and the size, and
+    each carrying **its own** ``opened_at`` — never a blanket "not opened" stamped over the batch,
+    because a *pièce* in the batch that she had opened was opened.
+
+    The ``accepted_*`` columns are *the values accepted* (FR-45): the tool's assessment as the
+    surface showed it, under ``ranking_version_id`` (AD-23 — no unqualified reference to a ranked
+    figure). Categorical and numeric, plaintext, matching ``ranked_entry.band`` and
+    ``taxonomy_label_entry.label``; ``NULL`` on a withdrawal, which accepts nothing.
+
+    ``seq`` is the per-*pièce* monotonic order (AD-49). ``actor`` is PII → application-encrypted
+    (AD-31). No cascade FK (AD-7)."""
+
+    __tablename__ = "validation_act"
+    __table_args__ = (
+        # per-pièce monotonic seq; a concurrent double-write collides here and fails loudly (AD-37
+        # conditional commit), never a silent overwrite.
+        UniqueConstraint("tenant", "matter", "piece_id", "seq", name="uq_validation_act_seq"),
+        Index("ix_validation_act_piece", "tenant", "matter", "piece_id", "seq"),
+        Index("ix_validation_act_batch", "tenant", "matter", "batch_id"),
+        CheckConstraint(
+            "action IN ('validated', 'withdrawn')", name="ck_validation_act_action"),
+        # a batch is identified and sized together, or neither: a size with no identifier cannot be
+        # grouped, and an identifier with no size cannot answer "one gesture over how many".
+        CheckConstraint(
+            "(batch_id IS NULL) = (batch_size IS NULL)", name="ck_validation_act_batch_paired"),
+        # the matter identity is composite (tenant, matter) (AD-12); no ondelete (AD-7 RESTRICT).
+        ForeignKeyConstraint(
+            ["tenant", "matter"], ["matter_scope.tenant", "matter_scope.matter"]),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)  # sha256(pid \0 seq, tenant-qual)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    piece_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)  # per-pièce monotonic (AD-49)
+    action: Mapped[str] = mapped_column(String, nullable=False)  # validated | withdrawn
+    # the ranking version whose assessment was accepted (AD-23). Present on a withdrawal too: it
+    # says which acceptance was withdrawn.
+    ranking_version_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    # NULL = the acting lawyer had not opened it; a value = when she did (FR-45/FR-44).
+    opened_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    batch_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    batch_size: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # the values accepted (FR-45) — NULL on a withdrawal.
+    accepted_side: Mapped[str | None] = mapped_column(String, nullable=True)
+    accepted_band: Mapped[str | None] = mapped_column(String, nullable=True)
+    accepted_confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    accepted_label: Mapped[str | None] = mapped_column(String, nullable=True)
+    # the lawyer who acted (PII), never a SQL predicate → application-encrypted (AD-31).
+    actor: Mapped[str] = mapped_column(EncryptedText("validation_act.actor"), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

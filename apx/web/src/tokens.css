@@ -503,6 +503,51 @@ button:focus-visible { box-shadow: var(--apx-ring); }
 .apx-act .apx-hint { display: block; }
 /* Shown, DISABLED, naming its story — never hidden: a hidden control cannot be asked about. */
 .apx-act--disabled { opacity: .55; }
+/* ── Story 5.8: the VALIDATION ACT (FR-45) ──────────────────────────────────────────────────────
+   The control's own text IS the assertion the record will attribute to her. It is styled as a full
+   sentence rather than a verb chip on purpose: a button she can press without reading it would
+   write a claim she never made in the words that were recorded. */
+.apx-validate {
+  display: block; width: 100%; text-align: left; background: var(--apx-surface);
+  border: 1px solid var(--apx-ink); border-radius: var(--apx-radius-sm);
+  padding: .7rem .9rem; color: var(--apx-ink); font: inherit; cursor: pointer;
+}
+.apx-validate:hover:not(:disabled) { background: var(--apx-surface-2); }
+.apx-validate:disabled { opacity: .6; cursor: default; }
+.apx-validate-sentence { display: block; }
+.apx-validate-version {
+  display: block; font-size: .88rem; color: var(--apx-muted); margin-top: .15rem;
+}
+/* The CONSEQUENCE, stated before the act and announced with the control (aria-describedby).
+   Neither state blocks it — the friction is one sentence naming what the record will say. */
+.apx-provenance {
+  margin: .5rem 0 0; padding: .55rem .8rem; border-radius: var(--apx-radius-sm); font-size: .88rem;
+}
+.apx-provenance--read {
+  color: var(--apx-kept); background: var(--apx-kept-bg); border: 1px solid rgba(47, 111, 79, .32);
+}
+.apx-provenance--list {
+  color: var(--apx-review); background: var(--apx-review-bg);
+  border: 1px solid rgba(154, 90, 18, .32);
+}
+/* FOUR facts, never one tick: who, when, lue / depuis la liste, and the ranking version. */
+.apx-badge {
+  display: inline-flex; align-items: center; gap: .35rem; border-radius: 999px;
+  padding: .15rem .7rem; font-size: .82rem;
+}
+.apx-badge--kept { color: var(--apx-kept); background: var(--apx-kept-bg); }
+.apx-badge--review { color: var(--apx-review); background: var(--apx-review-bg); }
+/* The bulk confirmation — states the count AND the split, and does not focus its confirming verb. */
+.apx-scrim {
+  position: fixed; inset: 0; z-index: 40; display: grid; place-items: center;
+  background: rgba(11, 31, 58, .34); padding: 1.5rem;
+}
+.apx-confirm {
+  max-width: 34rem; width: 100%; background: var(--apx-surface);
+  border: 1px solid var(--apx-review); border-radius: var(--apx-radius);
+  box-shadow: var(--apx-shadow); padding: 1.3rem 1.4rem;
+}
+.apx-confirm-actions { display: flex; gap: .6rem; justify-content: flex-end; margin-top: 1.1rem; }
 .apx-why {
   margin-left: .5rem; border: 0; background: transparent; color: var(--apx-gold);
   font-size: .78rem; padding: 0; text-decoration: underline; text-underline-offset: 2px;

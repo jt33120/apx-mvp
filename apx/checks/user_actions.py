@@ -264,6 +264,39 @@ USER_ACTIONS: tuple[UserAction, ...] = (
     _http("POST", "/api/matters/{matter}/record/export", "export-matter-record",
           "produces the matter's record as a document at the chosen tier and writes ONE "
           "`export-matter-record` audit entry naming tier, actor, matter and scope (FR-26/FR-53)"),
+    # Story 5.8 — the VALIDATION ACT (FR-45). None of these is deletion-shaped: every one of them
+    # APPENDS, including the withdrawal. FR-45 requires the reversal of a validation to be an entry
+    # rather than an erasure, so `withdraw` grows the ledger exactly as `validate` does and the two
+    # entries stay readable side by side — "never validated" and "validated then withdrawn" are
+    # different facts and the record keeps both.
+    _read("/api/matters/{matter}/validations", "read-validations",
+          "every entry of the matter's validation ledger, withdrawn ones included, with the "
+          "current ranking version so a caller can tell a stale acceptance from a current one "
+          "(FR-45/AD-23); a pure read"),
+    _http("POST", "/api/matters/{matter}/pieces/{piece_id}/validate", "validate-piece",
+          "appends one validation ledger entry plus its `validate_piece` and `values_accepted` "
+          "audit entries in one transaction, the opened-in-the-viewer fact resolved by the store "
+          "for THIS actor from opens strictly before the act (FR-45/FR-44)",
+          reversal="POST /api/matters/{matter}/pieces/{piece_id}/validation/withdraw"),
+    _http("POST", "/api/matters/{matter}/validate-batch", "validate-pieces-in-batch",
+          "a bulk validation act: refuses unless the confirmation names the count being acted on, "
+          "then appends ONE ledger entry PER PIÈCE, each carrying the shared batch identifier, the "
+          "size, and its OWN opened-or-not fact — never a blanket stamp over the batch (FR-45)",
+          reversal="POST /api/matters/{matter}/pieces/{piece_id}/validation/withdraw"),
+    _http("POST", "/api/matters/{matter}/validate-batch/preview", "preview-validation-batch",
+          "the count AND the split the bulk confirmation must state before anything is written "
+          "(FR-45(a)); a pure read that writes nothing", changes_state=False),
+    # Declared deletion-SHAPED on purpose. To a lawyer, "retirer ma validation" reads like taking
+    # something away, and FR-21's rule is about what a user could read, not what the code does. It
+    # removes nothing: the validation entry stays in the ledger, stays in §7 of the export, and the
+    # withdrawal is appended after it. Declaring it here is what makes the probe assert that.
+    _http("POST", "/api/matters/{matter}/pieces/{piece_id}/validation/withdraw",
+          "withdraw-validation",
+          "appends a `withdrawn` ledger entry and its `validation_withdrawn` audit entry — the "
+          "validation stays in the ledger and in the export, and the in-force view stops reporting "
+          "it (FR-45/AD-7)",
+          reads_as_deletion=True,
+          reversal="POST /api/matters/{matter}/pieces/{piece_id}/validate"),
     _read("/api/matters/{matter}/register", "read-matter-register", "the failure register; a read"),
     _read("/api/register", "read-register", "the failure register across matters; a read"),
     _read("/api/register/export", "export-register",

@@ -51,10 +51,18 @@ def test_a_pending_class_names_a_real_story_number() -> None:
 def test_modified_and_accepted_are_two_classes_never_one() -> None:
     """FR-24 §614 makes them asymmetric: 'accepted' exists ONLY where a validation act occurred —
     not by default, not by elapsed time, not by having been on screen. Folded into one class,
-    'accepted' silently acquires every value the user merely left alone."""
+    'accepted' silently acquires every value the user merely left alone.
+
+    Both are covered as of Story 5.8, and the asymmetry is now enforced rather than deferred: the
+    accepted class has exactly ONE verb, which is what makes "only where a validation act occurred"
+    a property of the catalogue instead of a promise about call sites."""
     assert audit.CLASS_VALUE_MODIFIED in audit.covered_classes()
-    assert audit.CLASS_VALUE_ACCEPTED not in audit.covered_classes()
-    assert audit.PENDING_CLASSES[audit.CLASS_VALUE_ACCEPTED] == "5.8"
+    assert audit.CLASS_VALUE_ACCEPTED in audit.covered_classes()
+    assert audit.PENDING_CLASSES == {}, "Story 5.8 was the last pending class"
+    assert list(audit.verbs_for(audit.CLASS_VALUE_ACCEPTED)) == [audit.ACT_VALUES_ACCEPTED]
+    assert len(audit.verbs_for(audit.CLASS_VALUE_MODIFIED)) > 1, (
+        "a modification has many shapes; an acceptance has exactly one, and that asymmetry is "
+        "the requirement rather than an accident of the catalogue")
 
 
 def test_every_catalogued_verb_has_a_class_a_chain_and_is_uniquely_keyed() -> None:

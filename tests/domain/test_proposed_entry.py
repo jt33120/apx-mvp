@@ -21,6 +21,7 @@ from apx.core.domain.proposed_entry import (
     propose,
     untranslated_acts,
 )
+from apx.core.domain.validation import ASSERTION_FR
 
 
 def test_the_chain_comes_from_the_catalogue_never_from_the_caller() -> None:
@@ -84,13 +85,32 @@ def test_an_entry_attributed_to_nobody_is_refused_here_as_at_the_write() -> None
             propose(audit.ACT_PIN_REMOVED, actor=nobody, matter="m")
 
 
-def test_the_validation_act_cannot_be_proposed_because_it_does_not_exist() -> None:
-    # the contract renders that control DISABLED with its reason. This is why it can be: Story 5.8
-    # has catalogued no verb for it, so no row can be proposed — the refusal is the mechanism, not
-    # a convention a surface has to remember.
-    assert audit.CLASS_VALIDATION in audit.PENDING_CLASSES
+def test_the_validation_act_is_proposable_now_and_carries_its_own_sentence() -> None:
+    """Story 5.8 catalogued the verb, so the drawer's control is offered rather than disabled.
+
+    Its ``action_fr`` is the **assertion itself**, not a verb phrase like every other offered act.
+    That difference is the requirement: FR-45 makes the control's own text the claim the record
+    will attribute to her, and a label reading « Valider » would let her assert it unread."""
+    proposed = propose(audit.ACT_VALIDATE_PIECE, actor="claire", matter="m")
+    assert proposed.action_fr == ASSERTION_FR
+    assert proposed.chain_scope == "m"          # the matter's own chain (AD-43)
+    assert not proposed.reason_required         # a validation is not an FR-25 override
+
+
+def test_the_class_name_is_not_a_verb_and_still_cannot_be_proposed() -> None:
+    """``validation_act`` is an FR-24 **class**, and no verb is spelled that way. Proposing it must
+    still fail: the surface names acts, and a class that happened to be proposable would file
+    entries nothing counts."""
     with pytest.raises(ProposedEntryUnavailable):
         propose("validation_act", actor="claire", matter="m")
+
+
+def test_the_acceptance_is_never_offered_as_a_gesture() -> None:
+    """``values_accepted`` is the consequence the validation act writes over the values, never
+    something a lawyer proposes. It is deliberately absent from ACT_FR, so a surface that tried to
+    offer it would render the bare verb — visible, and obviously wrong."""
+    assert audit.ACT_VALUES_ACCEPTED in audit.ACTS
+    assert audit.ACT_VALUES_ACCEPTED in untranslated_acts()
 
 
 def test_every_act_the_drawer_offers_says_itself_in_french() -> None:

@@ -188,7 +188,11 @@ def test_decrypt_bytes_fails_closed_on_tamper_truncation_wrong_key_and_plaintext
     with pytest.raises(DecryptionError):
         c.decrypt_bytes(token[:-1], aad="a")                    # a truncated tag
     with pytest.raises(DecryptionError):
-        c.decrypt_bytes(token[:12] + b"\x00" + token[13:], aad="a")  # a flipped byte
+        # XOR, never an overwrite: assigning b"\x00" leaves the token IDENTICAL whenever that byte
+        # is already zero, so this leg passed 255 runs in 256 and silently asserted nothing on the
+        # 256th. A flip that is not guaranteed to flip is not a tamper test.
+        c.decrypt_bytes(
+            token[:12] + bytes([token[12] ^ 0xFF]) + token[13:], aad="a")  # a flipped byte
     with pytest.raises(DecryptionError):
         Cipher(_key()).decrypt_bytes(token, aad="a")            # a wrong key
     with pytest.raises(DecryptionError):

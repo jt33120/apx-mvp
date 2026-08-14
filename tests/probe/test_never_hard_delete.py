@@ -437,6 +437,13 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             # Story 5.7 — the audit drawer: a pure read that proposes rows and commits nothing
             _Step(("read-piece-drawer",),
                   lambda: _get(f"/api/matters/{MATTER}/pieces/{pieces[0]}/drawer")),
+            # Story 5.8 — the validation ledger's read, and the bulk confirmation's own content.
+            # The preview is a POST because it carries a selection, and it writes NOTHING: it is
+            # what the dialog says, not a step of the act.
+            _Step(("read-validations",), lambda: _get(f"/api/matters/{MATTER}/validations")),
+            _Step(("preview-validation-batch",), lambda: _post(
+                f"/api/matters/{MATTER}/validate-batch/preview",
+                {"piece_ids": list(pieces[:2]), "confirmed_count": 2})),
             _Step(("read-inventory",), lambda: _get(f"/api/matters/{MATTER}/inventory")),
             # Story 5.1 — the sampling run's reads. Pure: they render the DERIVED
             # invalidated-in-flight verdict and write nothing.
@@ -581,6 +588,18 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             # that producing a document destroys nothing.
             _Step(("export-matter-record",), lambda: _post(
                 f"/api/matters/{MATTER}/record/export?tier=numbers-only")),
+            # Story 5.8 — the validation act, its bulk form and its reversal. All three APPEND:
+            # `withdraw` is declared deletion-SHAPED in the registry because "retirer ma
+            # validation" reads like taking something away to the only person it could mislead, and
+            # this is where that reading is proven false — the ledger grows by one row, the
+            # validation entry it withdraws is still there, and no evidential count falls.
+            _Step(("validate-piece",), lambda: _post(
+                f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate")),
+            _Step(("withdraw-validation",), lambda: _post(
+                f"/api/matters/{MATTER}/pieces/{pieces[0]}/validation/withdraw")),
+            _Step(("validate-pieces-in-batch",), lambda: _post(
+                f"/api/matters/{MATTER}/validate-batch",
+                {"piece_ids": list(pieces[:2]), "confirmed_count": 2})),
             _Step(("clear-truncation",), _clear_truncation),
         ]
 

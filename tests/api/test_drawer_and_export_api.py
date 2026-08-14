@@ -118,21 +118,26 @@ def test_the_pin_is_proposed_as_an_override_owing_a_reason(
     assert not lift["proposed"]["reason_required"]     # lifting owes nothing
 
 
-def test_the_validation_act_is_disabled_with_its_story_never_hidden(
+def test_the_disabled_row_is_retired_now_that_its_act_exists(
     tmp_path: Path, monkeypatch,  # noqa: ANN001
 ) -> None:
-    # a hidden control cannot be asked about; a disabled one that says why tells the truth about
-    # the build to the only person either could mislead
+    """Story 5.7 rendered the validation act **disabled with its reason** rather than hidden — a
+    hidden control cannot be asked about. Story 5.8 catalogued its verb, so the row is retired and
+    the act is offered.
+
+    The retirement was not optional: ``drawer._pending()`` raises the moment a listed verb becomes
+    catalogued, so the disabled control could not survive its own act shipping. What this pins is
+    that it was answered by removing the row rather than by weakening the assertion."""
     store = _prepare(tmp_path, monkeypatch)
     store.create_user("t", "me@x.fr", "pw", "Me Durand", {WALL})
     _seed(store)
     with TestClient(app) as c:
         _login(c, "me@x.fr")
         body = c.get(f"/api/matters/{MATTER}/pieces/a/drawer").json()
-    pending = body["pending_actions"]
-    assert len(pending) == 1
-    assert pending[0]["story"] == "5.8" and "5.8" in pending[0]["disabled_reason_fr"]
-    assert "lu cette pièce" in pending[0]["label_fr"]
+    assert body["pending_actions"] == []
+    offered = next(a for a in body["actions"] if a["action"] == AUDIT.ACT_VALIDATE_PIECE)
+    assert "lu cette pièce" in offered["action_fr"]
+    assert offered["reversal_fr"]                 # and it names its own reversal, like its peers
 
 
 def test_a_piece_with_no_justification_says_so_rather_than_showing_an_empty_band(
@@ -192,7 +197,12 @@ def test_producing_the_document_is_recorded_and_the_cover_states_its_limits(
     assert cover["scope"] == WALL and cover["tier"] == "numbers-only"
     assert cover["produced_by"] == "Me Durand" and cover["produced_at"]
     assert len(doc["denominator"]) == 7
-    assert [p["story"] for p in doc["pending"]] == ["5.8", "5.8"]
+    # Story 5.8 built both of the sections that named it. The list is empty because nothing is
+    # pending, and §7 now prints a real zero — which, unlike the sentence it replaced, is a finding
+    # about the FIRM.
+    assert doc["pending"] == []
+    assert doc["validation_summary"]["read"] == 0
+    assert doc["accepted_values"] == 0
     assert any(e["action"] == AUDIT.ACT_EXPORT_MATTER_RECORD for e in trail["entries"])
 
 

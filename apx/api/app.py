@@ -106,6 +106,7 @@ from apx.core.domain.override import MissingOverrideReason, ground_label_fr
 from apx.core.domain.sampling import KIND_BOUND, KIND_CENSUS
 from apx.core.domain.taxonomy_label import OutOfTaxonomyLabel
 from apx.core.domain.triage_table import ChangeLogEntry
+from apx.core.domain.validation import ASSERTION_FR, is_stale, provenance_sentence_fr
 from apx.core.ports.embedding import Embedder
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
@@ -441,6 +442,53 @@ class DrawerOut(BaseModel):
     extracts: list[DrawerExtractOut] = []
     actions: list[DrawerActionOut] = []
     pending_actions: list[DrawerPendingActionOut] = []
+    #: FR-45/FR-44 — what a *validation act* performed now would record, stated BEFORE the act.
+    #: `opened_at` is null when THIS caller has not opened the pièce; the sentence says so in her
+    #: language and neither state blocks the act.
+    validation_provenance: str = "from-the-list"
+    validation_opened_at: str | None = None
+    validation_provenance_fr: str = ""
+    validation_assertion_fr: str = ""
+
+
+class ValidationBatchIn(BaseModel):
+    """A bulk *validation act* (FR-45). Both fields are required and neither has a default: the
+    confirmation must **name the count** it is about to act on, and a body that omits either is a
+    422 at the edge, before anything is written."""
+
+    piece_ids: list[str]
+    confirmed_count: int
+
+
+class ValidationEntryOut(BaseModel):
+    piece_id: str
+    seq: int
+    action: str
+    actor: str
+    at: str
+    provenance: str
+    provenance_fr: str
+    ranking_version_id: str
+    opened_at: str | None = None
+    batch_id: str | None = None
+    batch_size: int | None = None
+    stale: bool = False
+
+
+class ValidationSplitOut(BaseModel):
+    """What the bulk confirmation states before anything is written (FR-45(a)) — the count **and**
+    the split. A confirmation naming only the total obtains consent while telling the lawyer nothing
+    she did not already know."""
+
+    total: int
+    opened: int
+    not_opened: int
+    sentence_fr: str
+
+
+class ValidationLogOut(BaseModel):
+    entries: list[ValidationEntryOut] = []
+    current_ranking_version_id: str | None = None
 
 
 class MatterRecordOut(BaseModel):
@@ -455,7 +503,10 @@ class MatterRecordOut(BaseModel):
     sampling_runs: list[dict]
     overrides: list[dict]
     overrides_total: int          # over the WHOLE record, never the length of the list above
+    validations: list[dict]       # §7 — EVERY entry, including withdrawn ones
+    validation_summary: dict | None = None   # §7's counts, split by register and never pooled
     modified_values: int
+    accepted_values: int          # §8 — only where a validation act occurred (FR-45)
     pending: list[dict]
 
 
@@ -1912,6 +1963,15 @@ def case_theory_history(
     return CaseTheoryHistoryOut(matter=matter, versions=[_version_out(v) for v in versions])
 
 
+def _fr_datetime(when: datetime | None) -> str | None:
+    """A moment the provenance sentence can carry, in a form that needs no locale table.
+
+    Numeric and unambiguous in French. Month names, ordering and the locale-aware forms are
+    Story 6.4's (FR-35); inventing a month table here would put a second, differently-worded date
+    formatter in the product ahead of the story that owns the first."""
+    return None if when is None else when.strftime("%d/%m/%Y à %H:%M")
+
+
 def _register_out(e: object) -> RegisterEntryOut:
     return RegisterEntryOut(
         id=e.id, matter=e.matter, filename=e.filename, path=e.submitted_path,
@@ -2038,7 +2098,133 @@ def read_piece_drawer(
                 label_fr=p.label_fr, story=p.story, disabled_reason_fr=p.disabled_reason_fr)
             for p in drawer.pending_actions
         ],
+        validation_provenance=drawer.validation_provenance.value,
+        validation_opened_at=(
+            drawer.opened_at.isoformat() if drawer.opened_at is not None else None),
+        validation_provenance_fr=provenance_sentence_fr(_fr_datetime(drawer.opened_at)),
+        validation_assertion_fr=ASSERTION_FR,
     )
+
+
+@app.get(
+    "/api/matters/{matter}/validations", response_model=ValidationLogOut)
+def read_validations(
+    matter: str, piece_id: str | None = None, ident: Identity = Depends(current_identity),
+) -> ValidationLogOut:
+    """Every entry of the *matter*'s validation ledger (FR-45), with the current *ranking version*
+    so a caller can tell a **stale** acceptance from a current one (AD-23).
+
+    Withdrawn entries are included: a validation performed and then withdrawn is a decision that was
+    taken, and omitting it would let a reader conclude it never happened. 404 out of scope or absent
+    — the same answer for both (non-disclosing)."""
+    store = _require_store()
+    entries = store.read_validation_log(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, piece_id=piece_id)
+    if entries is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    current = store.read_ranking(tenant=ident.tenant, matter=matter, scopes=ident.scopes)
+    current_id = current.version_id if current is not None else None
+    return ValidationLogOut(
+        current_ranking_version_id=current_id,
+        entries=[
+            ValidationEntryOut(
+                piece_id=e.piece_id, seq=e.seq, action=e.action, actor=e.actor,
+                at=e.at.isoformat(), provenance=e.provenance.value,
+                provenance_fr=e.provenance.label_fr,
+                ranking_version_id=e.ranking_version_id,
+                opened_at=e.opened_at.isoformat() if e.opened_at is not None else None,
+                batch_id=e.batch_id, batch_size=e.batch_size,
+                stale=is_stale(e, current_id))
+            for e in entries
+        ])
+
+
+@app.post("/api/matters/{matter}/pieces/{piece_id}/validate", response_model=ValidationLogOut)
+def validate_piece(
+    matter: str, piece_id: str, version_no: int | None = None,
+    ident: Identity = Depends(current_identity),
+) -> ValidationLogOut:
+    """Perform a *validation act* over one *pièce* (FR-45) — *"I have read this pièce and I accept
+    the tool's assessment of it."*
+
+    Whether the *pièce* was opened in the viewer before the act is resolved by the store, for **this
+    caller**, from opens strictly before the act. The edge cannot supply it and does not try: a
+    boundary that accepted the provenance from a request would let a client assert that a document
+    was read. 403 outside the caller's scope, 400 when the *pièce* is not in the ranking."""
+    store = _require_store()
+    try:
+        store.validate_pieces(
+            tenant=ident.tenant, matter=matter, actor=ident.actor, piece_ids=[piece_id],
+            scopes=ident.scopes, version_no=version_no)
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return read_validations(matter, piece_id, ident)
+
+
+@app.post("/api/matters/{matter}/validate-batch", response_model=ValidationLogOut)
+def validate_pieces_in_batch(
+    matter: str, req: ValidationBatchIn, version_no: int | None = None,
+    ident: Identity = Depends(current_identity),
+) -> ValidationLogOut:
+    """A **bulk** *validation act* (FR-45) — permitted, and never undetectable.
+
+    ``confirmed_count`` is required and must match the selection: FR-45(a) asks for *"an explicit
+    confirmation naming the count"*, and a selection that changed between the dialog and the commit
+    is not the act the lawyer confirmed (400). Each *pièce* gets **its own** entry carrying the
+    shared batch identifier, the size, and **its own** opened-or-not fact — a *pièce* in the batch
+    that she had opened is recorded as opened, because it was."""
+    store = _require_store()
+    try:
+        store.validate_pieces(
+            tenant=ident.tenant, matter=matter, actor=ident.actor, piece_ids=req.piece_ids,
+            scopes=ident.scopes, confirmed_count=req.confirmed_count, version_no=version_no)
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return read_validations(matter, None, ident)
+
+
+@app.post("/api/matters/{matter}/validate-batch/preview", response_model=ValidationSplitOut)
+def preview_validation_batch(
+    matter: str, req: ValidationBatchIn, ident: Identity = Depends(current_identity),
+) -> ValidationSplitOut:
+    """What the bulk confirmation must state before anything is written (FR-45(a)).
+
+    A pure read that writes nothing: the count **and** the split — how many of the selection this
+    caller has opened, and therefore how many entries will read *accepted from the list* rather than
+    *read*. 404 out of scope or absent."""
+    store = _require_store()
+    split = store.batch_split(
+        tenant=ident.tenant, matter=matter, actor=ident.actor, piece_ids=req.piece_ids,
+        scopes=ident.scopes)
+    if split is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return ValidationSplitOut(
+        total=split.total, opened=split.opened, not_opened=split.not_opened,
+        sentence_fr=split.sentence_fr())
+
+
+@app.post(
+    "/api/matters/{matter}/pieces/{piece_id}/validation/withdraw", response_model=ValidationLogOut)
+def withdraw_piece_validation(
+    matter: str, piece_id: str, ident: Identity = Depends(current_identity),
+) -> ValidationLogOut:
+    """Withdraw a *pièce*'s validation (FR-45) — **an entry, never an erasure**. The validation
+    stays in the ledger and in the export; the withdrawal is appended after it. 403 outside the
+    caller's scope, 400 when nothing is in force to withdraw."""
+    store = _require_store()
+    try:
+        store.withdraw_validation(
+            tenant=ident.tenant, matter=matter, actor=ident.actor, piece_id=piece_id,
+            scopes=ident.scopes)
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=403, detail="outside your scope") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return read_validations(matter, piece_id, ident)
 
 
 @app.post("/api/register/{entry_id}/override", response_model=RegisterOverrideOut)

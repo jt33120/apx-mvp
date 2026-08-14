@@ -62,6 +62,7 @@ from apx.checks import (
     truth_status,
     truth_status_surface,
     user_actions,
+    validation,
 )
 from apx.checks.import_contracts import CheckResult
 
@@ -209,6 +210,11 @@ CHECKS: list[Callable[[], CheckResult]] = [
     # act does not exist yet is a sentence naming its story, never a zero (FR-26).
     matter_export.export_tier_is_never_defaulted,
     matter_export.a_pending_section_is_not_a_zero,
+    # Story 5.8 — the VALIDATION ACT: an acceptance has one origin and it is a human gesture, the
+    # opened fact is read rather than asserted, and nothing manufactures either (FR-45/FR-44).
+    validation.only_the_validation_act_accepts,
+    validation.the_opened_fact_is_never_a_literal,
+    validation.acceptance_is_never_manufactured,
     statement.the_sentence_has_one_composer,
     statement.the_sentence_is_composed_offline,
     statement.unfitness_offers_no_line_move,

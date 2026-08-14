@@ -66,6 +66,14 @@ ENCRYPTED_COLUMNS = [
     # single-PK (`id`), so key rotation addresses both directly.
     ("pin_entry", "id", "reason", "pin_entry.reason"),
     ("pin_entry", "id", "set_by", "pin_entry.set_by"),
+    # Story 5.8 — the validation act (FR-45). Both are the acting lawyer's name: the one on
+    # `piece_open` is what a validation act reads to answer "did YOU open this", and the one on
+    # `validation_act` is the person the record attributes the assertion to. Omitted from this list
+    # they would survive a key rotation encrypted under the retired key and then fail closed on
+    # read — which for `piece_open` means every later act silently records *not opened*, the
+    # flattering answer, with nothing anywhere saying why.
+    ("piece_open", "id", "actor", "piece_open.actor"),
+    ("validation_act", "id", "actor", "validation_act.actor"),
     # Story 5.6: the register-override ledger — the mandatory one-line reason (content) AND the
     # actor (PII) are encrypted; single-PK (`id`), so key rotation addresses both directly.
     ("register_override", "id", "actor", "register_override.actor"),

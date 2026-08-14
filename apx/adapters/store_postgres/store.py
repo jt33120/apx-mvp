@@ -48,6 +48,7 @@ from apx.adapters.store_postgres.models import (
     Piece,
     PieceCustodian,
     PieceJustification,
+    PieceOpen,
     PieceProvenance,
     PinEntry,
     RankedEntry,
@@ -62,6 +63,7 @@ from apx.adapters.store_postgres.models import (
     TruncationMarker,
     User,
     UserScope,
+    ValidationActEntry,
 )
 from apx.adapters.store_postgres.models import (
     RankingVersion as RankingVersionRow,
@@ -146,6 +148,8 @@ from apx.core.domain.matter_record import (
     PinLine,
     SamplingRunLine,
     Tier,
+    ValidationLine,
+    ValidationSummary,
     assemble,
 )
 from apx.core.domain.normalization import normalize
@@ -207,6 +211,17 @@ from apx.core.domain.triage_table import (
     TriageRow,
     TriageTable,
     pair_change_log,
+)
+from apx.core.domain.validation import (
+    ACTION_VALIDATED,
+    ACTION_WITHDRAWN,
+    AcceptedValues,
+    BatchSplit,
+    Provenance,
+    ValidationCounts,
+    ValidationEntry,
+    check_confirmed_count,
+    in_force,
 )
 from apx.core.ports.read import ExactSearch, PieceView
 from apx.core.ports.sampling import InvalidatedRun, RunAlreadyClosed
@@ -1955,6 +1970,13 @@ class SqlStore:
         history = self.read_line_history(tenant=tenant, matter=matter, scopes=scopes) or ()
         pin_log = self.read_pin_log(tenant=tenant, matter=matter, scopes=scopes) or ()
         runs = self.list_sampling_runs(tenant=tenant, matter=matter, scopes=scopes) or ()
+        validations = self.read_validation_log(
+            tenant=tenant, matter=matter, scopes=scopes) or ()
+        # The denominator of "never validated" is the RANKED set, not the corpus: a pièce the
+        # ranking never saw was never offered for validation, and counting it as unvalidated would
+        # report a finding about the firm that is really a fact about an import (FR-58/AD-19).
+        ranked = self.read_ranked_order(tenant=tenant, matter=matter, scopes=scopes) or ()
+        counts = self._validation_counts(validations, frozenset(r.piece_id for r in ranked))
 
         return assemble(
             cover=cover,
@@ -1994,9 +2016,29 @@ class SqlStore:
                 for e in overrides.entries),
             # FR-25: over the WHOLE record, never the length of the list printed beneath it
             overrides_total=trail.overrides,
+            validations=tuple(
+                ValidationLine(
+                    piece_id=e.piece_id, seq=e.seq, action=e.action, actor=e.actor,
+                    at=e.at.isoformat(), provenance=e.provenance.value,
+                    ranking_version_id=e.ranking_version_id,
+                    opened_at=e.opened_at.isoformat() if e.opened_at is not None else None,
+                    batch_id=e.batch_id, batch_size=e.batch_size,
+                    accepted_side=e.accepted.side if e.accepted else None,
+                    accepted_label=e.accepted.label if e.accepted else None,
+                    accepted_band=e.accepted.band if e.accepted else None,
+                    accepted_confidence=e.accepted.confidence if e.accepted else None)
+                for e in validations),
+            validation_summary=ValidationSummary(
+                read=counts.read, from_the_list=counts.from_the_list,
+                individually=counts.individually, in_bulk=counts.in_bulk, batches=counts.batches,
+                withdrawn=counts.withdrawn, never_validated=counts.never_validated),
             modified_values=sum(
                 1 for e in trail.entries
                 if AUDIT.ACTS[e.action].act_class == AUDIT.CLASS_VALUE_MODIFIED),
+            # §8 — FR-45: an acceptance exists ONLY where a validation act occurred. Derived from
+            # the validation ledger and from nothing else; no default, no elapsed time, no scroll
+            # position and no screen visit reaches this number.
+            accepted_values=counts.in_force,
         )
 
     def export_matter_record(
@@ -2102,10 +2144,29 @@ class SqlStore:
         *validation act* performed AFTER reading from one performed from the list. ONE entry on the
         (tenant, matter) chain (AD-43), like a query audit (Story 3.4). The edge calls this only
         after a successful in-scope read, so a denied/out-of-scope attempt writes no disclosing
-        entry."""
+        entry.
+
+        **Two writes, one transaction (Story 5.8).** The audit entry is unchanged and stays
+        authoritative for the chain; the ``piece_open`` row is the *readable* half. Until this story
+        the open existed only as ``piece=<id>`` inside an application-encrypted detail string, so
+        FR-45's question — *did this lawyer open this pièce before her validation act* — could be
+        answered only by decrypting every ``retrieval``-class entry of the *matter* and
+        string-parsing a fragment. A record whose reading depends on parsing prose is not a record
+        (the rule Story 5.7 established for the priced statement).
+
+        **Opens recorded before migration 0036 are not backfilled**, and a *validation act* over
+        such a *pièce* therefore records *not opened*. That is the honest answer from what is
+        readable; reconstructing it would manufacture rows indistinguishable from ones this ledger
+        recorded itself, out of a detail format that was never a contract."""
+        ts = now or datetime.now(UTC)
         with self._sf() as session, session.begin():
             self._append_audit(session, tenant, matter, actor, AUDIT.ACT_OPEN_PIECE,
-                               f"piece={piece_id}", now or datetime.now(UTC))
+                               f"piece={piece_id}", ts)
+            session.add(PieceOpen(
+                id=hashlib.sha256(
+                    f"{tenant}\x00{matter}\x00{piece_id}\x00{actor}\x00{ts.isoformat()}"
+                    .encode()).hexdigest(),
+                tenant=tenant, matter=matter, piece_id=piece_id, actor=actor, at=ts))
 
     def deduplicate(self, matter: str, tenant: str, scopes: set[str]) -> DedupSummary:
         """The deterministic tier of the judgment cascade for a matter — scope-checked.
@@ -4384,6 +4445,324 @@ class SqlStore:
                 PinChangeEntry(
                     seq=r.seq, action=r.action, reason=r.reason, set_by=r.set_by, at=r.at)
                 for r in rows]
+
+    # ── Story 5.8: the validation act (FR-45/FR-44) ───────────────────────────────────────────────
+    def _opens_before(
+        self, session: Session, *, tenant: str, matter: str, piece_ids: Sequence[str], actor: str,
+        before: datetime,
+    ) -> dict[str, datetime | None]:
+        """For each *pièce*, when **this actor** last opened it strictly **before** ``before``.
+
+        FR-45's load-bearing field, and it is a nest of nearly-right referents — each of which
+        fails toward the flattering answer:
+
+        - **by whom.** Another lawyer's open is not this lawyer's reading. The whole assertion is
+          personal (*"I have read this pièce"*), so an entry inheriting a colleague's diligence
+          would be false about the person it names.
+        - **when.** Strictly before the act. An open recorded in the same second as the act — the
+          shape of a surface that opens the *pièce* in order to validate it — is not reading it
+          first.
+        - **which.** Per *pièce*, never a fact about the batch (FR-45(c)).
+
+        ``actor`` is application-encrypted and never a SQL predicate (AD-31), so the match happens
+        here rather than in SQL: opens per *pièce* are human gestures behind a session, so the set
+        loaded is small. Pièces with no readable open answer ``None`` — including *pièces* opened
+        before migration 0036, whose opens exist only as encrypted prose and are deliberately not
+        reconstructed."""
+        if not piece_ids:
+            return {}
+        rows = session.execute(
+            select(PieceOpen.piece_id, PieceOpen.actor, PieceOpen.at).where(
+                PieceOpen.tenant == tenant, PieceOpen.matter == matter,
+                PieceOpen.piece_id.in_(list(piece_ids)), PieceOpen.at < before)).all()
+        latest: dict[str, datetime | None] = dict.fromkeys(piece_ids)
+        for piece_id, opener, at in rows:
+            if opener != actor:                      # decrypted on access; compared here (AD-31)
+                continue
+            seen = latest.get(piece_id)
+            at = _as_utc(at)
+            if seen is None or at > seen:
+                latest[piece_id] = at
+        return latest
+
+    def _accepted_values(
+        self, table: TriageTable, piece_id: str,
+    ) -> AcceptedValues | None:
+        """The tool's assessment of one *pièce*, as the surface showed it (FR-45).
+
+        Taken from the triage table the lawyer was looking at, deliberately: what the record must
+        carry is **what she accepted**, not what happened to be true at commit time. A label
+        changed by a colleague between her reading the row and her pressing the control does not
+        retroactively change what she agreed with."""
+        row = next((r for r in table.rows if r.piece_id == piece_id), None)
+        if row is None:
+            return None
+        return AcceptedValues(
+            ranking_version_id=table.version_id, side=row.side, label=row.label,
+            band=row.band, confidence=row.confidence)
+
+    def _append_validation(
+        self, session: Session, now: datetime, *, tenant: str, matter: str, actor: str,
+        piece_id: str, action: str, ranking_version_id: str, opened_at: datetime | None,
+        accepted: AcceptedValues | None, batch_id: str | None, batch_size: int | None,
+    ) -> int:
+        """Append ONE validation ledger entry and its TWO audit entries inside the caller's tx.
+
+        **Two entries, because FR-24 §611 enumerates two recorded things**: *"who validated what and
+        when"* (``validate_piece`` / ``validation_withdrawn``, class ``validation_act``) and *"which
+        values were modified versus accepted as-is"* (``values_accepted``, class
+        ``value_accepted``). The acceptance is the one FR-24 §614 constrains — *a value the user
+        never touched is recorded as accepted ONLY where a validation act occurred over it* — so it
+        is written here, atomically with the gesture, and nowhere else in the runtime
+        (``only_the_validation_act_accepts``).
+
+        Mints the per-*pièce* monotonic ``seq`` (AD-49); the unique constraint makes a concurrent
+        double-write fail loudly rather than overwrite (AD-37). Never updates — always an INSERT
+        (AD-7): a withdrawal is an entry, and both stay readable."""
+        current_max = session.scalar(
+            select(func.max(ValidationActEntry.seq)).where(
+                ValidationActEntry.tenant == tenant, ValidationActEntry.matter == matter,
+                ValidationActEntry.piece_id == piece_id)) or 0
+        seq = current_max + 1
+        session.add(ValidationActEntry(
+            id=hashlib.sha256(
+                f"{tenant}\x00{matter}\x00{piece_id}\x00{seq}".encode()).hexdigest(),
+            tenant=tenant, matter=matter, piece_id=piece_id, seq=seq, action=action,
+            ranking_version_id=ranking_version_id, opened_at=opened_at, batch_id=batch_id,
+            batch_size=batch_size,
+            accepted_side=accepted.side if accepted else None,
+            accepted_band=accepted.band if accepted else None,
+            accepted_confidence=accepted.confidence if accepted else None,
+            accepted_label=accepted.label if accepted else None,
+            actor=actor, at=now))
+
+        provenance = Provenance.of(opened_at)
+        fields = [f"piece={piece_id[:12]}", f"seq={seq}", f"version={ranking_version_id[:12]}",
+                  f"provenance={provenance.value}"]
+        if batch_id is not None:
+            fields += [f"bulk={batch_id[:12]}", f"batch_size={batch_size}"]
+        if action == ACTION_VALIDATED:
+            self._append_audit(
+                session, tenant, matter, actor, AUDIT.ACT_VALIDATE_PIECE, " ".join(fields), now)
+            if accepted is not None:
+                self._append_audit(
+                    session, tenant, matter, actor, AUDIT.ACT_VALUES_ACCEPTED,
+                    " ".join([*fields, f"side={accepted.side}", f"label={accepted.label}",
+                              f"band={accepted.band}", f"confidence={accepted.confidence}"]), now)
+        else:
+            self._append_audit(
+                session, tenant, matter, actor, AUDIT.ACT_VALIDATION_WITHDRAWN,
+                " ".join(fields), now)
+        return seq
+
+    def last_open_by(
+        self, *, tenant: str, matter: str, piece_id: str, actor: str, scopes: set[str],
+    ) -> datetime | None:
+        """When **this actor** last opened this *pièce* in the viewer, or ``None`` (FR-45/FR-44).
+
+        What the drawer states *before* the act, so the lawyer knows what the entry will say rather
+        than discovering it afterwards. Unbounded in time on purpose: the surface prints the date
+        and lets the reader judge the distance, which a boolean could not.
+
+        **Scope-checked here rather than by contract with the caller.** The answer is only ever
+        about the caller's own opens, so the leak would be small — but "the caller has already
+        checked" is the kind of guarantee that survives exactly as long as the one call site that
+        holds it, and this method is on the public store surface."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            return self._opens_before(
+                session, tenant=tenant, matter=matter, piece_ids=[piece_id], actor=actor,
+                before=datetime.now(UTC)).get(piece_id)
+
+    def batch_split(
+        self, *, tenant: str, matter: str, actor: str, piece_ids: Sequence[str], scopes: set[str],
+    ) -> BatchSplit | None:
+        """What the bulk confirmation must state before anything is written (FR-45(a)).
+
+        The count **and** the split: how many of the selection this lawyer has opened, and
+        therefore how many entries will read *accepted from the list* rather than *read*. A
+        confirmation naming only the total is friction that obtains consent while telling her
+        nothing she did not already know. A pure read; ``None`` when out of scope or absent."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            opens = self._opens_before(
+                session, tenant=tenant, matter=matter, piece_ids=piece_ids, actor=actor,
+                before=datetime.now(UTC))
+        return BatchSplit(
+            total=len(piece_ids), opened=sum(1 for v in opens.values() if v is not None))
+
+    def validate_pieces(
+        self, *, tenant: str, matter: str, actor: str, piece_ids: Sequence[str], scopes: set[str],
+        confirmed_count: int | None = None, version_no: int | None = None,
+    ) -> tuple[str, ...]:
+        """Perform a *validation act* over one or more *pièces* — the ONE owning use case (AD-37).
+
+        *"I have read this pièce and I accept the tool's assessment of it."* One ledger entry and
+        its audit entries **per pièce**, all in one transaction.
+
+        **Individual versus bulk is decided by the caller's confirmation, not by the count.**
+        ``confirmed_count=None`` is an individual act over a single *pièce*. A value marks a bulk
+        act: FR-45(a) requires *"an explicit confirmation naming the count"*, so the number the
+        lawyer confirmed is checked against the set actually being acted on
+        (:class:`BatchCountMismatch`) — a selection that changed between the dialog and the commit
+        is not the act she confirmed. Every entry then carries a **shared batch identifier** and the
+        size (FR-45(b)).
+
+        **The provenance is resolved here, per pièce, for this actor** (FR-45(c)) — never supplied
+        by the caller and never stamped over the batch: a *pièce* in the batch that she *had* opened
+        is recorded as opened, because it was.
+
+        Scope-checked (``ScopeDenied``). Raises ``ValueError`` when the *matter* has no such ranking
+        version or a named *pièce* is not in it. Returns the batch identifier per *pièce* position
+        — empty strings for an individual act."""
+        if not piece_ids:
+            raise ValueError("a validation act is per-pièce; no pièce was named")
+        if confirmed_count is None and len(piece_ids) != 1:
+            raise ValueError(
+                "a bulk validation act requires an explicit confirmation naming the count (FR-45)")
+        if confirmed_count is not None:
+            check_confirmed_count(len(piece_ids), confirmed_count)
+
+        table = self.read_triage_table(
+            tenant=tenant, matter=matter, scopes=scopes, version_no=version_no)
+        if table is None:
+            raise ScopeDenied(matter)
+        accepted = {pid: self._accepted_values(table, pid) for pid in piece_ids}
+        missing = sorted(pid for pid, v in accepted.items() if v is None)
+        if missing:
+            raise ValueError(
+                f"not in ranking version {table.version_no}: {', '.join(missing)} — a validation "
+                "act accepts a named version's assessment, and there is none to accept")
+
+        box: list[str] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            # The batch identifier answers §13's question 5 — "one gesture over how many" — so it
+            # must identify THE GESTURE, not the selection. Hashing only (actor, version, pièces)
+            # gave the same id to the same set validated twice, and the export would then count one
+            # batch where a lawyer had made two separate decisions. The moment of the act is what
+            # distinguishes them, so the moment is in the hash.
+            batch_id = "" if confirmed_count is None else hashlib.sha256(
+                f"{tenant}\x00{matter}\x00{actor}\x00{table.version_id}\x00{now.isoformat()}"
+                f"\x00{','.join(sorted(piece_ids))}".encode()).hexdigest()
+            box.append(batch_id)
+            opens = self._opens_before(
+                session, tenant=tenant, matter=matter, piece_ids=piece_ids, actor=actor,
+                before=now)
+            for piece_id in piece_ids:
+                self._append_validation(
+                    session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
+                    action=ACTION_VALIDATED, ranking_version_id=table.version_id,
+                    opened_at=opens.get(piece_id), accepted=accepted[piece_id],
+                    batch_id=batch_id or None,
+                    batch_size=len(piece_ids) if batch_id else None)
+
+        self._audited_tx(_work)
+        return tuple(box[-1] for _ in piece_ids)
+
+    def withdraw_validation(
+        self, *, tenant: str, matter: str, actor: str, piece_id: str, scopes: set[str],
+    ) -> int:
+        """Withdraw a *pièce*'s validation (FR-45) — **an entry, never an erasure**.
+
+        The validation stays in the ledger and in the export; the withdrawal is appended after it
+        and the in-force view (the max-``seq`` row) no longer reports a validation. *"Never
+        validated"* and *"validated then withdrawn"* are different facts and the record keeps both.
+        Raises ``ValueError`` when nothing is in force to withdraw. Scope-checked."""
+        box: list[int] = []
+
+        def _work(session: Session, now: datetime) -> None:
+            if not self._matter_held(session, tenant, matter, scopes):
+                raise ScopeDenied(matter)
+            current = session.execute(
+                select(ValidationActEntry.action, ValidationActEntry.ranking_version_id).where(
+                    ValidationActEntry.tenant == tenant, ValidationActEntry.matter == matter,
+                    ValidationActEntry.piece_id == piece_id)
+                .order_by(ValidationActEntry.seq.desc()).limit(1)).first()
+            if current is None or current[0] != ACTION_VALIDATED:
+                raise ValueError(f"no validation in force to withdraw for pièce {piece_id}")
+            box.append(self._append_validation(
+                session, now, tenant=tenant, matter=matter, actor=actor, piece_id=piece_id,
+                action=ACTION_WITHDRAWN, ranking_version_id=current[1], opened_at=None,
+                accepted=None, batch_id=None, batch_size=None))
+
+        self._audited_tx(_work)
+        return box[-1]
+
+    def read_validation_log(
+        self, *, tenant: str, matter: str, scopes: set[str], piece_id: str | None = None,
+    ) -> tuple[ValidationEntry, ...] | None:
+        """**Every** entry of the *matter*'s validation ledger, ordered by *pièce* then ``seq``.
+
+        Not the in-force view: FR-26 asks for the *validation acts*, and one that was performed and
+        withdrawn is a decision that was taken — dropping it because it is no longer in force would
+        let a reader conclude it never happened (the ``read_pin_log`` precedent). Scope
+        pre-filtered; ``None`` when out of scope or absent. Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            pinned = (
+                [ValidationActEntry.piece_id == piece_id] if piece_id is not None else [])
+            rows = session.scalars(
+                select(ValidationActEntry)
+                .where(
+                    ValidationActEntry.tenant == tenant, ValidationActEntry.matter == matter,
+                    *pinned)
+                .order_by(ValidationActEntry.piece_id, ValidationActEntry.seq)).all()
+            return tuple(
+                ValidationEntry(
+                    piece_id=r.piece_id, seq=r.seq, action=r.action, actor=r.actor,
+                    at=_as_utc(r.at), ranking_version_id=r.ranking_version_id,
+                    opened_at=_as_utc(r.opened_at) if r.opened_at is not None else None,
+                    batch_id=r.batch_id, batch_size=r.batch_size,
+                    accepted=None if r.action != ACTION_VALIDATED else AcceptedValues(
+                        ranking_version_id=r.ranking_version_id, side=r.accepted_side or "",
+                        label=r.accepted_label or "", band=r.accepted_band,
+                        confidence=r.accepted_confidence))
+                for r in rows)
+
+    def _validation_counts(
+        self, entries: tuple[ValidationEntry, ...], ranked_piece_ids: frozenset[str],
+    ) -> ValidationCounts:
+        """§7 of the export, from the ledger alone (FR-45(d), FR-26, §13 q.5).
+
+        Computed from the **in-force view per pièce** for the counts that describe the *matter*'s
+        current state, and from the whole ledger for the withdrawals — which is why a withdrawal is
+        not simply subtracted: it is its own fact and the export names it. The two registers, read
+        and from-the-list, are counted apart and **never pooled**: a reader must always be able to
+        tell individual judgements from one gesture over many, and a single "validated" total would
+        make that impossible while looking complete."""
+        by_piece: dict[str, list[ValidationEntry]] = {}
+        for entry in entries:
+            by_piece.setdefault(entry.piece_id, []).append(entry)
+        read = from_list = bulk = 0
+        batches: set[str] = set()
+        validated_pieces: set[str] = set()
+        for piece_id, piece_entries in by_piece.items():
+            current = in_force(tuple(piece_entries))
+            if current is None:
+                continue
+            validated_pieces.add(piece_id)
+            if current.provenance.is_read:
+                read += 1
+            else:
+                from_list += 1
+            if current.batch_id is not None:
+                bulk += 1
+                batches.add(current.batch_id)
+        return ValidationCounts(
+            read=read, from_the_list=from_list, in_bulk=bulk, batches=len(batches),
+            withdrawn=sum(1 for e in entries if e.action == ACTION_WITHDRAWN),
+            # A SET DIFFERENCE, never a subtraction. The two populations are not the same: the
+            # ledger is version-independent and holds acts over *pièces* that a later ranking may
+            # no longer carry, while the denominator is the CURRENT ranked set. Subtracting one
+            # count from the other silently under-reports what nobody has looked at — and it can go
+            # negative, which the clamp that was here would have hidden as a flattering zero.
+            never_validated=len(ranked_piece_ids - validated_pieces))
 
     # ── Story 4.6: the per-pièce justification derived from named evidence ────────────────────────
     def _target_version_id(

@@ -27,6 +27,7 @@ import json
 import os
 import subprocess
 import sys
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -36,7 +37,7 @@ from sqlalchemy.pool import StaticPool
 
 from apx.adapters.store_postgres.models import Base
 from apx.adapters.store_postgres.store import SqlStore
-from apx.core.app.ingest import IngestedFailure, IngestionResult
+from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
 from apx.core.domain.cascade import Band, CascadeResult, PieceJudgement, Stage
 from apx.core.domain.config import CascadeConfig
 from apx.core.domain.failures import ErrorClass
@@ -82,6 +83,19 @@ else:                                            # pragma: no cover — the guar
     raise SystemExit(1)
 
 # ── recompute, from the document alone ────────────────────────────────────────────────────────
+def _recompute(entries):
+    """[read, from-the-list] over the IN-FORCE validation per pièce — the max-seq row, and only
+    when it is a validation. A withdrawal lifts it exactly as a pin removal lifts a pin."""
+    latest = {}
+    for e in entries:
+        seen = latest.get(e["piece_id"])
+        if seen is None or e["seq"] > seen["seq"]:
+            latest[e["piece_id"]] = e
+    live = [e for e in latest.values() if e["action"] == "validated"]
+    return [sum(1 for e in live if e["provenance"] == "read"),
+            sum(1 for e in live if e["provenance"] == "from-the-list")]
+
+
 doc = json.loads(sys.stdin.read())
 cover, denom = doc["cover"], {d["key"]: d["count"] for d in doc["denominator"]}
 
@@ -105,6 +119,15 @@ out = {
     "tier": cover["tier"],
     "degraded": cover["degraded_extracts"] > 0,
     "pending_sections": sorted(p["key"] for p in doc["pending"]),
+    # §7 (Story 5.8): the reader RECOMPUTES the two registers from the entries, by the same
+    # max-seq-per-pièce view the store uses, and compares them to the summary the document
+    # printed. A section whose counts cannot be re-derived from its own rows is a section a
+    # bâtonnier has to take on trust, which is the one thing this document exists not to ask.
+    "validations_listed": len(doc["validations"]),
+    "recomputed": _recompute(doc["validations"]),
+    "printed": [doc["validation_summary"]["read"],
+                doc["validation_summary"]["from_the_list"]] if doc["validation_summary"] else None,
+    "accepted_values": doc["accepted_values"],
 }
 print(json.dumps(out))
 '''
@@ -134,6 +157,16 @@ def _order():  # noqa: ANN202
     return rank_cascade(result, _CFG)
 
 
+def _piece(piece_id: str) -> IngestedPiece:
+    """One ingested *pièce*, carrying the id the ranking names it by."""
+    return IngestedPiece(
+        id=piece_id, matter=MATTER, tenant=TENANT, content_hash=f"hash-{piece_id}",
+        text_key=f"key-{piece_id}", provenance_path=f"/dossier/{piece_id}.pdf",
+        custodian=CUSTODIAN, extraction_method="native", extractor_version="1",
+        schema_version="slice-a", ingestion_timestamp=datetime(2026, 8, 1, tzinfo=UTC),
+        full_text=f"texte de la pièce {piece_id}", text_version="1")
+
+
 @pytest.fixture
 def store() -> SqlStore:
     engine = create_engine(
@@ -141,10 +174,18 @@ def store() -> SqlStore:
     Base.metadata.create_all(engine)
     s = SqlStore(sessionmaker(bind=engine, future=True))
     s.save(
-        IngestionResult(failures=[IngestedFailure(
-            filename=FILENAME, submitted_path=f"/dossier/{FILENAME}", matter=MATTER,
-            tenant=TENANT, error_class=ErrorClass.PASSWORD_PROTECTED, detail="x",
-            custodian=CUSTODIAN)]),
+        IngestionResult(
+            # The four pièces the ranking below is over. They were implicit until Story 5.8: the
+            # ranking named ids nothing had ingested, which every read tolerated except the triage
+            # table, whose FR-58 assertion refuses a dossier smaller than its own ranking. A
+            # validation act reads that table — deliberately, so that what the record says she
+            # accepted is what the surface showed her — and the fixture is now a matter that could
+            # actually exist.
+            pieces=[_piece(pid) for pid, _band, _score in _PAIRS],
+            failures=[IngestedFailure(
+                filename=FILENAME, submitted_path=f"/dossier/{FILENAME}", matter=MATTER,
+                tenant=TENANT, error_class=ErrorClass.PASSWORD_PROTECTED, detail="x",
+                custodian=CUSTODIAN)]),
         actor="Me Dupont", scope=WALL, matter=MATTER, tenant=TENANT)
     s.record_ranking(
         tenant=TENANT, matter=MATTER, actor="Claire Fontaine", identity=_identity(),
@@ -208,9 +249,37 @@ def test_the_reader_is_told_which_chain_this_document_alone_proves(store: SqlSto
     assert read["recomputable_chains"] == [MATTER]
 
 
-def test_the_reader_is_told_what_is_not_built_rather_than_a_zero(store: SqlStore) -> None:
+def test_nothing_is_pending_now_and_the_zero_means_what_it_says(store: SqlStore) -> None:
+    """Both sections that named Story 5.8 were built by it, so the document declares nothing
+    pending. The counts it prints instead are real: a **0** in §7 is now a finding about the firm,
+    which is precisely what the sentence it replaced existed to prevent it being read as."""
     read = _read_without_a_store(_serialise(_document(store, Tier.NUMBERS_ONLY)))
-    assert read["pending_sections"] == ["accepted_as_is", "validation_acts"]
+    assert read["pending_sections"] == []
+    assert read["printed"] == [0, 0]
+    assert read["accepted_values"] == 0
+
+
+def test_the_validation_counts_are_recomputable_from_the_document_alone(store: SqlStore) -> None:
+    """AC-8 applied to §7: a reader holding only this file re-derives the two registers from the
+    entries, by the same in-force view the store uses, and gets the numbers the cover printed.
+
+    Both registers are exercised — one *pièce* validated after being opened, one accepted from the
+    list, and one validated then withdrawn — because a recomputation that only ever sees zeros
+    proves nothing, and a withdrawal is exactly the entry a naive count would get wrong."""
+    who = "Claire Fontaine"
+    pieces = [p for p, _ in store.representatives(MATTER, TENANT, {WALL})][:3]
+    store.audit_piece_open(tenant=TENANT, matter=MATTER, actor=who, piece_id=pieces[0])
+    for piece_id in pieces:
+        store.validate_pieces(
+            tenant=TENANT, matter=MATTER, actor=who, piece_ids=[piece_id], scopes={WALL})
+    store.withdraw_validation(
+        tenant=TENANT, matter=MATTER, actor=who, piece_id=pieces[2], scopes={WALL})
+
+    read = _read_without_a_store(_serialise(_document(store, Tier.NUMBERS_ONLY)))
+    assert read["validations_listed"] == 4          # 3 acts + 1 withdrawal, all printed
+    assert read["recomputed"] == [1, 1]             # one read, one from the list, one lifted
+    assert read["recomputed"] == read["printed"]    # and the document's own summary agrees
+    assert read["accepted_values"] == 2
 
 
 # ── AC-6: the reader gets nothing but the file, and numbers-only carries no content ────────────

@@ -38,6 +38,7 @@ from apx.core.domain.audit import (
     check_actor,
 )
 from apx.core.domain.override import ground_label_fr
+from apx.core.domain.validation import ASSERTION_FR
 
 #: How a catalogued verb says itself to a lawyer. A verb absent here renders as the verb — visible,
 #: readable, and obviously unfinished, which is what an untranslated act should look like. Silently
@@ -52,11 +53,16 @@ ACT_FR: dict[str, str] = {
     "line_moved": "Déplacer la ligne",
     "register_override": "Sortir l'entrée du registre",
     "truncation_override": "Acquitter une troncature du journal",
+    # Story 5.8. The validation act's sentence is NOT a verb phrase like its neighbours, and that
+    # is the point: FR-45 requires the control's own text to be the assertion the record will
+    # attribute to her. A label reading « Valider » would let her assert it without reading it, and
+    # the entry would then be a claim she never made in the words that were recorded.
+    "validate_piece": ASSERTION_FR,
+    "validation_withdrawn": "Retirer ma validation",
 }
-# The *validation act* is deliberately absent: Story 5.8 has not catalogued a verb for it, so
-# :func:`propose` REFUSES it — which is exactly why the drawer renders that control disabled. The
-# panel cannot show a row for an act the record has no way to file, and the refusal is the
-# mechanism rather than a convention somebody has to remember.
+# Every offered act now has its sentence. ``values_accepted`` deliberately has none: it is the
+# consequence the validation act writes over the values, never a gesture a lawyer proposes, and
+# giving it a French label would put a second, differently-worded control in reach of the surface.
 
 
 class ProposedEntryUnavailable(ValueError):

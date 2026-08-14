@@ -612,6 +612,14 @@ export type Drawer = {
   source_language: string | null; rejected: boolean;
   is_unverified: boolean; unresolved_extracts: number;
   extracts: DrawerExtract[]; actions: DrawerAction[]; pending_actions: DrawerPendingAction[];
+  // FR-45/FR-44 — what a validation act performed NOW would record, stated before the act. The
+  // server sends a timestamp rather than a flag: "ouverte" alone is equally true of an open six
+  // months and three rankings ago, and the surface prints the date so the lawyer judges the
+  // distance herself.
+  validation_provenance: "read" | "from-the-list";
+  validation_opened_at: string | null;
+  validation_provenance_fr: string;
+  validation_assertion_fr: string;
 };
 
 export async function readDrawer(matter: string, pieceId: string): Promise<Drawer | null> {
@@ -634,9 +642,96 @@ export type MatterRecordDoc = {
   sampling_runs: Record<string, unknown>[];
   overrides: Record<string, unknown>[];
   overrides_total: number;
+  validations: Record<string, unknown>[];
+  validation_summary: ValidationSummary | null;
   modified_values: number;
+  accepted_values: number;
   pending: { key: string; heading_fr: string; story: string; sentence_fr: string }[];
 };
+
+/* ── Story 5.8: the VALIDATION ACT (FR-45) ─────────────────────────────────────────────────────
+   "I have read this pièce and I accept the tool's assessment of it." The two registers below are
+   never pooled: a reader of the export must always be able to tell 12 individual judgements from
+   one gesture over 168. */
+export type ValidationSummary = {
+  read: number; from_the_list: number; individually: number;
+  in_bulk: number; batches: number; withdrawn: number; never_validated: number;
+};
+export type ValidationEntry = {
+  piece_id: string; seq: number; action: "validated" | "withdrawn"; actor: string; at: string;
+  provenance: "read" | "from-the-list"; provenance_fr: string;
+  ranking_version_id: string; opened_at: string | null;
+  batch_id: string | null; batch_size: number | null;
+  // the acceptance refers to a ranking version that is no longer the one shown (AD-23). NOT an
+  // invalidation: the act happened and nothing erases it.
+  stale: boolean;
+};
+export type ValidationLog = {
+  entries: ValidationEntry[]; current_ranking_version_id: string | null;
+};
+export type ValidationSplit = {
+  total: number; opened: number; not_opened: number; sentence_fr: string;
+};
+
+export async function readValidations(
+  matter: string, pieceId?: string,
+): Promise<ValidationLog | null> {
+  const q = pieceId ? `?piece_id=${encodeURIComponent(pieceId)}` : "";
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/validations${q}`);
+  if (res.status === 404) return null;   // out of scope and absent answer identically
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+export async function validatePiece(
+  matter: string, pieceId: string,
+): Promise<ValidationLog> {
+  const res = await fetch(
+    `/api/matters/${encodeURIComponent(matter)}/pieces/${encodeURIComponent(pieceId)}/validate`,
+    { method: "POST" });
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+export async function withdrawValidation(
+  matter: string, pieceId: string,
+): Promise<ValidationLog> {
+  const res = await fetch(
+    `/api/matters/${encodeURIComponent(matter)}/pieces/${encodeURIComponent(pieceId)}`
+    + "/validation/withdraw",
+    { method: "POST" });
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+// The confirmation's own content (FR-45(a)) — the count AND the split. Writes nothing: a dialog
+// naming only the total obtains consent while telling her nothing she did not already know.
+export async function previewValidationBatch(
+  matter: string, pieceIds: string[],
+): Promise<ValidationSplit | null> {
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/validate-batch/preview`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ piece_ids: pieceIds, confirmed_count: pieceIds.length }),
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
+
+// `confirmedCount` is what the lawyer was SHOWN, not `pieceIds.length` re-derived here: the server
+// refuses a mismatch, which is what catches a selection that changed under the dialog.
+export async function validateBatch(
+  matter: string, pieceIds: string[], confirmedCount: number,
+): Promise<ValidationLog> {
+  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/validate-batch`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ piece_ids: pieceIds, confirmed_count: confirmedCount }),
+  });
+  if (!res.ok) throw new Error(await detail(res));
+  return res.json();
+}
 
 export async function exportMatterRecord(
   matter: string, tier: ExportTier,
