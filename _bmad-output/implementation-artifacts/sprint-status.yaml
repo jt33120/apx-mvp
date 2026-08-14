@@ -25,7 +25,7 @@
 # - 2-12 (gold-set merge gate) precedes all ranking-quality work in epic 4
 
 generated: 2026-07-22
-last_updated: 2026-08-14  # EPIC 5 OPEN; A1 + A7 discharged; 5-1..5-9 DONE (the estimator is proven, says it in one sentence, the record behind it is evidence a bâtonnier can verify from the export alone, a deliberate exception costs one written sentence, the whole record leaves the building as a document read without the system, and "a human read this" is finally a mechanism rather than a phrase; and the record can no longer be shortened without saying so — EPIC 5 COMPLETE)
+last_updated: 2026-08-14  # EPIC 5 CLOSED, retrospective done (A1-A8 audited: 5 done, A4 partial, A8 carried, A5 REGRESSED — the key is public; 9 new items B1-B9, B1 urgent and B5/B6 blocking a real install). 5-1..5-9 DONE (the estimator is proven, says it in one sentence, the record behind it is evidence a bâtonnier can verify from the export alone, a deliberate exception costs one written sentence, the whole record leaves the building as a document read without the system, and "a human read this" is finally a mechanism rather than a phrase; and the record can no longer be shortened without saying so — EPIC 5 COMPLETE)
 project: APX MVP
 project_key: NOKEY
 tracking_system: file-system
@@ -93,7 +93,7 @@ development_status:
   4-12-never-hard-delete-proven-by-a-bounded-probe: done  # never hard-delete, PROVEN by a bounded runtime probe (FR-21/FR-56/AD-7): an enumerated registry of 70 user-reachable actions (45 HTTP routes, every verb — 8 audited GETs write evidential rows — + 25 Ports-taking core/app seams), complete both ways and fail-closed on any routing/import shape the check cannot read; the probe EXECUTES 57 of them against a real seeded matter and fails on ANY DELETE of an evidential table (statement-level, not a net count) — evidential = every mapped table minus a written transient allow-list, so a new table is protected by default; changes_state is verified by execution, never trusted; each deletion-shaped act is shown to APPEND; 2 structural checks (Julian, 2026-08-06)
   4-13-freshness-and-staleness-of-derived-artefacts: done  # freshness/staleness (FR-58/AD-23/AD-40/FR-23): staleness is a DERIVED COMPARISON of the input stamp an artefact was produced under against the current observables — never a stored flag a writer could forget to set. NINE exact observables, one per enumerated trigger (AD-23's eight + FR-23's population-the-bound-was-drawn-from), each artefact kind depending only on the inputs it actually has; the stamp written INSIDE the producing transaction (AD-22) into an append-only evidential ledger. A stale bound is refused as current (409) and cannot be copied without its staleness; the unranked count is stated wherever the sets are counted; a superseded artefact keeps its verdict but is not work, so the offer discharges. 4 HTTP routes, 3 seams, 3 structural checks (74→77), 1 migration (Julian, 2026-08-07)
   epic-4-retrospective: done
-  epic-5: in-progress
+  epic-5: done
   5-1-random-draw-from-the-discarded-set-population-frozen: done  # the sampling run over the DERIVED discarded set (decision A1): families as the unit of the draw (FR-38), the freeze by explicit identifier list (a seed is insufficient), invalidated-in-flight = the 4.13 stamp comparison, the legacy recall pair SUPERSEDED (rows readable, no new writer); 3 structural checks (77→80); review 8 confirmed / 18 refuted, 2 skeptics lost (Julian, 2026-08-07)
   5-2-the-hypergeometric-estimator-and-the-census-crossover: done  # OQ-4's five hard inputs answered in the story file BEFORE implementation (action item A7): the unit is the family and the pièce figure is a WORST CASE over the frozen sizes (never prevalence x pièces); the census crossover is n == N exactly, two disjoint registers; runs never pool and the current bound is chosen by recency, with the ordinal keyed on the discard_population digest and counting abandoned runs; the estimator's inputs are the freeze; the FR-19 projection is not calibratable against TREC and ships as counts only. 5 structural checks (80 -> 85). Review: 9 confirmed + 2 unadjudicated, all fixed; the seams lens and 2 skeptics lost to a usage limit (Julian, 2026-08-11)
   5-3-the-simulation-gate-the-estimator-ships-only-if-proven: done  # the estimator is PROVEN: 17 scenarios x 8000 draws through the product's own bound_for_run, two coverage claims (families, and the piece worst case where duplicate structure actually bites), judged on a one-sided Wilson LOWER bound because a deterministic observation is not evidence; anti-vacuity by an exact assertion on the piece figure; counts-only is a fourth disjoint register consulted at the one place a bound is born; estimator-simulation-gate makes 'proven' un-writable without the proof running (85 -> 86). Review: 4/4 lenses, 27 findings, 8 confirmed, all fixed, 0 skeptics lost (Julian, 2026-08-11)
@@ -103,7 +103,7 @@ development_status:
   5-7-the-audit-drawer-and-its-export: done  # FR-26. UX gate discharged first (EXPERIENCE-EPIC5-DRAWER.md + mockup + 7 DESIGN.md components), then built. Two reads did not exist — the line's POSITION HISTORY and the whole PIN LOG — and the priced statement lived only inside an audit detail string, so migration 0035 put it on the ledger (nullable: NULL means "not a move", which an empty string would have conflated with "a move whose price nobody showed"). The document is PURE domain data, which is what makes AC-8 real: self-containment is proven in a SUBPROCESS with no DATABASE_URL that cannot import apx.adapters, recomputing SM-3's identity and every count from the file — and the same process proves the numbers-only bytes contain no theory, no reason, no custodian, no filename. The tier is applied by OMISSION, never by stripping. 95 -> 97 checks (export-tier-never-defaulted, pending-section-is-not-a-zero: a digit in a pending section reads as a count, and zero is a finding about the FIRM while not-built is a finding about the BUILD). Found by the tests: the drawer inferred scope from a read whose None means two things and answered 200 across a wall — now an explicit matter_is_held gate. 1 968 tests.
   5-8-the-validation-act: done  # FR-45. The last gesture, and the one that could undo twelve stories: a record that cannot be forged is worth nothing if "a human read this" can be produced by a click-through — v1 sold that claim on a phrase, *validation act*, that no requirement created. FR-24 §611's two recorded things turned out to be the two pending export sections turned out to be TWO VERBS: `validate_piece` (class validation_act) and `values_accepted` (class value_accepted), written together in one transaction, the second with exactly one writer forever (only-the-validation-act-accepts) — because a second writer is not a duplicate but the DEFAULT FR-45 forbids by name. FR-45's load-bearing fact was recorded only as PROSE: every viewer open since 3.5 lived as `piece=<id>` inside an encrypted audit detail, so "did this lawyer open this pièce" meant decrypting every retrieval entry of the matter and parsing a fragment — migration 0036 gives it a ledger, with NO backfill (reconstructing it would manufacture rows out of a format that was never a contract, so a validation over a pre-0036 open honestly records `not opened`). opened_at is a TIMESTAMP, not a boolean: "ouverte" alone is equally true of an open six months and three rankings ago, and `Provenance` has no constructor taking a boolean so no call site can assert what it did not read. Four nearly-right referents, each with a test — opened by WHOM (another lawyer's open is not this lawyer's reading), WHEN (strictly before the act), WHICH (per pièce, never blanket over a batch — FR-45(c)), and accepted WHAT (a named version, so a re-rank makes it stale and invalidates nothing). Bulk permitted and impossible to hide: the confirmation states the count AND THE SPLIT, the verb names the count and is not initially focused. 97 → 100 checks; the 5.7 tripwires fired and were answered by REMOVAL, never by weakening — `a_pending_section_is_not_a_zero`'s "at least one pending" leg would have failed ON SUCCESS and is now a BICONDITIONAL (pending iff its act is uncatalogued). Review (inline, the agent fleet being disabled this session): 3 confirmed, all fixed — a batch id that was not unique per gesture (two decisions counted as one), `never_validated` as a subtraction across two different populations (clamped negative would have read as a flattering zero), and an unscoped `last_open_by`. §7 now prints a 0 that finally means what a bâtonnier would take it to mean.
   5-9-audit-record-continuity: done  # FR-53. Every story before this one proved the record cannot be ALTERED; this one had to prove it cannot be SHORTENED — and no verifier can, at any length: a truncation to an earlier consistent point recomputes perfectly, because the entries do not know how many of them there should be. Completeness is decidable only against a value recorded where the thing being checked cannot reach. That value had been collected since Story 1.11 and read by NOBODY: `HeadEntry.chain` was journalled on every head advance, outside the restorable store, while `Reconciliation` compared sequence numbers — so a backup rewritten and re-chained FROM THE TRUE ANCHOR to the same length passed `_chain_verifies`, passed `_reconcile_allocator` and passed reconciliation, three checks whose left and right sides both lived inside the store 5.5 had already recorded two skeptics forging. Reading it back is the story. The comparison is taken at EVERY witnessed point, not the newest (review: one ordinary commit after a forgery, the next check compared it against a line the forgery had produced), and a MISSING value counts too (the guard skipped it saying "that is reported as a truncation" — the truncation test reads the head ROW's sequence, which deleting from the middle does not move: the recurring defect, inside the code written to close the recurring defect). `recomputable_from_this_document` was a FALSE CLAIM on a court document — it asserted a property of the reader's bytes and was computed from whether a row in the server's DATABASE had an anchor, so it printed true on a numbers-only export carrying no entries at all; derived in `assemble()` now, from what the document holds, with a check refusing the keyword anywhere else. §9 therefore carries the entries, with the timestamp in the rendering the chain was ACTUALLY taken over, FULL tier only. The witness is read BEFORE the entries (afterwards, a concurrent act made a healthy document accuse itself of truncation) and only for the matter's own chain. FR-53's first consequence had never been tested in any story: the harness makes the audit store read-only IN THE DATABASE and asserts the NEGATIVE half over the six named acts — the business row ABSENT. `AuditUnwritable` → one 503 handler for every route, reads still answering; contention deliberately excluded (AD-22's named trap). One door onto the store: the worker and both manage commands wrote the bulk of the record unjournalled, and `manage restore` skipped the continuity check in silence. 100 → 103 checks; the fitness frame stopped disclaiming the tail truncation and now asserts it with no store. Review: 6 lenses × 2 skeptics, 35 candidates, 26 refuted, 9 confirmed, 9 fixed — ONE LENS ERRORED and its coverage loss is stated in the story (retro A2).
-  epic-5-retrospective: optional
+  epic-5-retrospective: done  # epic-5-retro-2026-08-14.md — A1-A8 audited (5 done, 1 partial, 1 carried, A5 REGRESSED: the key is now public); the epic's dominant finding is that a decision recorded and never implemented reads exactly like one that was (AD-43, the head journal read by nobody since 1.11, audit_chain_head outside the backup, the English-only banned-phrasing check) — and the same shape one layer out: the live Railway instance is a 2026-07-23 snapshot in us-west2, built by Railpack so the fail-closed pre-flights never run, with no encryption key and no head journal. 9 action items B1-B9
   epic-6: backlog
   6-1-export-of-the-retained-set: backlog
   6-2-the-client-pushed-diagnostic-export: backlog
@@ -124,23 +124,28 @@ action_items:
   - epic: 4
     action: "A2 — the adversarial review workflow must report any lens or skeptic that errored or stalled, and the story's review section must state the coverage lost; a silent lens currently looks identical to a clean one"
     owner: "Dev"
-    status: open
+    status: done
+    resolution: "every epic-5 review carries a coverage table (lenses run/planned, verdicts returned, agents lost). It caught the flattering error live: 5.5's first adjudication script classified a verdict-less finding as REFUTED and the recovery script had to add an explicit `unadjudicated` status. 5.1 and 5.2 went further and FIXED their unadjudicated findings rather than leaving them on an absent verdict. Losses declared: 2 skeptics (5.1), the seams lens + 2 skeptics (5.2), 25 agents to an outage (5.5, recovered), 1 lens (5.9)"
   - epic: 4
     action: "A3 — add a 'wrong referent' lens to the review prompt set: for every comparison in the diff, is the right-hand side the same thing as the left? Four of ~21 confirmed defects in Epic 4 were this, always failing toward falsely-fresh"
     owner: "Dev"
-    status: open
+    status: done
+    resolution: "ran as a named lens in 5.1, 5.2, 5.3 and found in each. The defect family did NOT shrink — it appeared in seven of nine stories (superseded version, ordinal on proxies, unfitness denominator, post-override baseline, never_validated across two populations, recomputable_from_this_document, the fork guard deferring to a test that reads a different table). Now permanent, see B7"
   - epic: 4
     action: "A4 — weight reviews toward the seams between layers (HTTP<->seam, client<->server, check legs); stories 4.10 and 4.12 produced 42% of all findings there while the engines were clean"
     owner: "Dev"
-    status: open
+    status: in-progress
+    resolution: "PARTIAL — ran in 5.1; DIED on a provider usage limit in 5.2 leaving that dimension unreviewed; ran in 5.3 and produced 3 of the 8 confirmed defects there. Not run as a named lens in the three inline reviews (5.6-5.8). Carried into epic 6 by B7"
   - epic: 4
     action: "A5 — decide the fate of the secret-shaped string in tests/api/test_log_redaction.py and tests/_fixtures/secret_violations/hardcoded_key/settings.py (committed in 1.8, 8b35467, identical to the live Mistral key): confirm it is genuinely fake, or rotate the key and purge it from history"
     owner: "Julian"
     status: open
+    resolution: "DECIDED 2026-08-14 (Julian: push as-is, rotate afterwards) and the exposure GOT WORSE: the repo is public at github.com/jt33120/apx-mvp, GitHub push protection did NOT block it, and the value is in the tree AND in history. Rotation outstanding — escalated as B1"
   - epic: 4
     action: "A6 — run a retrospective at the close of every epic, and audit the previous one's action items at the start of the next"
     owner: "Dev"
-    status: open
+    status: done
+    resolution: "epic-5-retro-2026-08-14.md, which opens with the A1-A8 audit"
   - epic: 4
     action: "A7 — answer the estimator's five hard inputs (OQ-4) in the story 5-2 file before implementation: near-duplicate family structure, census-vs-sample crossover, repeated sampling over one population, population freezing, projection at an unsampled position. Epic 4 already supplies the first via ranked_entry.family_id + is_representative"
     owner: "Dev"
@@ -149,4 +154,44 @@ action_items:
   - epic: 5
     action: "A8 — FRENCH ORTHOTYPOGRAPHY in the confidence-bound sentence, for Story 6.4. Every figure renders Anglophone: `95%` not `95 %`, `1.4%` not `1,4 %`, `1400` not `1 400`. Raised by the Story 5.4 review, reproduced by two skeptics and REFUTED by both as not a defect OF that change — the format specifiers predate it (git show 9f44f48:core/app/read/freshness.py) and nothing they produce is untrue. But `unfitness_statement_fr` is a NEW string that repeats it twice, so the inconsistency will grow if nobody owns it, and the decimal separator is a LOCALE decision that no_hardcoded_locale (FR-35/AD-24) and FR-36 own. Fix it once, across every register, when the locale mechanism lands"
     owner: "Dev (story 6.4)"
+    status: open
+    resolution: "carried unchanged into the epic-5 retrospective as B8"
+
+# Action items committed at the Epic 5 retrospective (2026-08-14).
+# Full context: implementation-artifacts/epic-5-retro-2026-08-14.md
+  - epic: 5
+    action: "B1 URGENT — rotate the Mistral key and purge the value from history. Continues A5 at a higher severity: the repository is PUBLIC and GitHub push protection did not stop the push, so the value is exposed in the tree and in history (8b35467). Success: a new key in the Railway env only, the old one revoked in the Mistral console, and either git filter-repo + force-push or a written decision to accept the historical value as burned"
+    owner: "Julian"
+    status: open
+  - epic: 5
+    action: "B2 — re-review stories 5.6, 5.7 and 5.8 with the adversarial fleet now that orchestration is available. They were reviewed INLINE by one reader and they are the stories that produce what leaves the building (the matter record a batonnier reads, and the claim 'a human read this'). The inline pass on 5.7 confirmed ONE finding; 5.9's fleet found NINE in code whose tests were green. Same lenses as 5.9 plus A3 and A4"
+    owner: "Dev"
+    status: open
+  - epic: 5
+    action: "B3 — build the decision-implementation audit, the epic's dominant finding: every [ADOPTED] AD in ARCHITECTURE-SPINE.md is either implemented at a named site or deferred with an owner written down, ideally as a structural check so the build fails when an adopted decision has neither. Epic 5 hit this four times on load-bearing decisions — AD-43 decided before anything was built and implemented only in 5.5 (until then every batonnier export reported tampering on an untampered record), HeadEntry.chain journalled since 1.11 and read by nobody until 5.9, audit_chain_head outside _BACKUP_TABLES since 1.11 (it touched every backup the deployment holds), and the banned-phrasing check English-only and green for eleven stories over an all-French product"
+    owner: "Dev"
+    status: open
+  - epic: 5
+    action: "B4 — the same sweep for the FRs, clause by clause. FR-23 has four clauses; three were built across earlier stories and the fourth (the worklist line) was claimed by no story at all, found by three lenses in 5.4. A requirement two-thirds implemented reads from the outside exactly like one that is finished"
+    owner: "Dev"
+    status: open
+  - epic: 5
+    action: "B5 — give AD-46, AD-49 and AD-44 an owner: a story in epic 6 or a new epic 7 for deployment and operations. All three are named as deferred inside story files and owned by NO story in epics.md (AD-46 lives in cross-cutting prose at epics.md:395-396, outside every epic). AD-46 first: upgrade.sh + the verified pg_dump before every Alembic migration + the recorded audit head — a migration is the second operation that can destroy the record and it is currently ungated"
+    owner: "Julian + Dev"
+    status: open
+  - epic: 5
+    action: "B6 — decide what the live deployment is for. apx-production.up.railway.app is a 2026-07-23 snapshot (~45 stories and 7 migrations behind master), builder RAILPACK so docker/entrypoint.sh and its fail-closed pre-flights never run, APX_ENCRYPTION_KEY and APX_VOLUME_ENCRYPTED unset (AD-31), APX_HEAD_JOURNAL unset with no volume mount (AD-35 — a correctly built container would now REFUSE to start there), and region us-west2 against the project's first non-negotiable, EU-only. Either bring it to master on an EU region built from the Dockerfile with a persistent volume, or take it down"
+    owner: "Julian"
+    status: open
+  - epic: 5
+    action: "B7 — keep the A3 (wrong referent) and A4 (seams) lenses permanently in every review, and add a third: which decision or requirement does this diff claim to implement, and is every clause of it actually reachable?"
+    owner: "Dev"
+    status: open
+  - epic: 5
+    action: "B8 — A8 carried: French orthotypography across every register (95 %, 1,4 %, 1 400), fixed once when the locale mechanism lands in story 6.4"
+    owner: "Dev (story 6.4)"
+    status: open
+  - epic: 5
+    action: "B9 — measure story 5.8's 1 700-piece batch (one transaction, one IN clause, 1 700 ledger rows + 3 400 audit entries against one head row) and the head journal's parse time at realistic size against the 2.13 timed harness. Both are named as unmeasured; AD-44 is the contract they would trip"
+    owner: "Dev"
     status: open
