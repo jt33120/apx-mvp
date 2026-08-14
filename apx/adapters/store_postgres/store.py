@@ -23,7 +23,7 @@ from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
 from sqlalchemy import Text, and_, cast, delete, event, func, or_, select, text
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from apx.adapters.store_postgres.backfill import case_theory_version_id, link_id
@@ -40,6 +40,7 @@ from apx.adapters.store_postgres.models import (
     Failure,
     ImportJob,
     ImportUnit,
+    JournalGap,
     JustificationRejection,
     LabelRecord,
     LinePlacement,
@@ -113,6 +114,7 @@ from apx.core.domain.head_journal import (
     HeadEntry,
     HeadJournal,
     Reconciliation,
+    chain_of,
     journal_scope,
     tenant_of,
 )
@@ -140,6 +142,7 @@ from apx.core.domain.line_projection import (
 )
 from apx.core.domain.matter_record import (
     CaseTheoryLine,
+    ChainEntryLine,
     ChainVerdictLine,
     Cover,
     LineHistoryLine,
@@ -151,6 +154,9 @@ from apx.core.domain.matter_record import (
     ValidationLine,
     ValidationSummary,
     assemble,
+)
+from apx.core.domain.matter_record import (
+    WitnessLine as ChainWitnessLine,
 )
 from apx.core.domain.normalization import normalize
 from apx.core.domain.override import (
@@ -253,6 +259,10 @@ _BACKUP_TABLES = (
     "recall_review",
     "backup_record", "truncation_marker", "taxonomy_label_entry", "line_placement", "pin_entry",
     "piece_justification", "justification_rejection",
+    # Story 5.9 — the heads the journal could not record. They travel because they are evidence
+    # about the record's own witness: a restore that dropped them would restore a record whose
+    # unwitnessed stretches nobody could name any more.
+    "journal_gap",
 )
 
 
@@ -391,8 +401,16 @@ class BackupStatus:
 
 @dataclass(frozen=True)
 class TruncationStatus:
-    """A detected restore-truncation, or its absence (AD-35). ``active`` is True while un-cleared —
-    named on the face of every export until an audited override clears it; never repaired."""
+    """A detected discontinuity between the record and its outside witness, or its absence (AD-35).
+    ``active`` is True while un-cleared — named on the face of every export until an audited
+    override clears it; never repaired.
+
+    ``kind`` distinguishes the two findings Story 5.9 separated: a **truncation** (the record ends
+    earlier than it did) from a **fork** (the record carries a different value where the witness
+    also has one — it was rewritten and re-chained). ``chains`` names the truncated ones with their
+    loss;
+    ``forks`` names the forked ones with the sequence the two disagree at. They are kept apart
+    because they do not add up: acts removed and acts rewritten are different losses."""
 
     tenant: str
     active: bool
@@ -402,6 +420,20 @@ class TruncationStatus:
     cleared_at: str | None
     chains: str = ""        # every truncated chain, "scope:was->now", comma-joined
     entries_lost: int = 0   # the TOTAL across every chain, never one chain's share
+    kind: str = "truncated"  # truncated | forked | both
+    forks: str = ""          # every forked chain, "scope@seq", comma-joined
+
+
+@dataclass(frozen=True)
+class JournalGapStatus:
+    """How many chain heads the journal failed to record for a tenant, and the last of them
+    (Story 5.9, AD-35). Persistent, so the alarm survives the restart that used to clear it."""
+
+    tenant: str
+    gaps: int
+    last_at: str | None = None
+    last_scope: str = ""
+    last_seq: int = 0
 
 
 @dataclass(frozen=True)
@@ -583,6 +615,14 @@ class ChainSlice:
     verified: bool
     verifiable_in_isolation: bool
     broken_at: int | None = None
+    #: WHICH failure ``broken_at`` points at (Story 5.9): a gap, a broken link, an unreadable
+    #: field. Five findings used to arrive as one boolean and one integer, and a reader told
+    #: *rupture au n° 7* could not tell an act that was removed from one that was rewritten.
+    cause: str | None = None
+    #: the value this chain's first entry chains onto, or None when it is unknown (a head row
+    #: rebuilt at restore never carried one). Carried onto the export so a reader can prove the
+    #: first link instead of taking it as given.
+    anchor: str | None = None
 
 
 @dataclass(frozen=True)
@@ -905,6 +945,103 @@ def _snapshot_isolation_sql(dialect: str) -> str | None:
     return "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ" if dialect == "postgresql" else None
 
 
+def _absent_chain_lines(
+    matter: str, slices: Sequence[ChainSlice], witnesses: dict[str, ChainWitnessLine]
+) -> tuple[ChainVerdictLine, ...]:
+    """A cover line for a chain the OUTSIDE WITNESS knows and the record no longer holds (AD-35).
+
+    ``read_audit`` builds its slices from the entries it finds, so a *matter* chain removed
+    **wholesale** — every entry and the head row with them — produced no slice, no cover line, and
+    therefore no place for the comparison to run. The maximal truncation, the one that removes
+    everything, was the only one that left the document silent, and a silent document reads as a
+    clean one.
+
+    The line carries ``verified=False``: nothing was recomputed, and *not checked* must never print
+    as *checked and fine*."""
+    if any(sl.chain_scope == matter for sl in slices) or matter not in witnesses:
+        return ()
+    return (ChainVerdictLine(
+        chain_scope=matter, label_fr=AUDIT.chain_label_fr(matter), entries=0, verified=False,
+        anchor=None, witness=witnesses[matter]),)
+
+
+def _discontinuity_note_fr(status: TruncationStatus) -> str:
+    """What an un-acknowledged discontinuity says on the face of every export (AD-35).
+
+    A **fork** loses no acts, so the note this used to print — *"0 acte(s) manquant(s)"* — was worse
+    than silence on the finding that matters most: a reader would take a zero for reassurance on a
+    document whose record had been rewritten. The two are named apart because they are two different
+    letters to write."""
+    lost = status.entries_lost
+    truncated = (
+        f"{lost} acte(s) du registre ont disparu" if lost else "des actes du registre ont disparu")
+    forked = (
+        "le registre ne correspond plus au témoin extérieur : une entrée y a été réécrite ou "
+        "en a disparu")
+    if status.kind == TruncationMarker.KIND_BOTH:
+        body = f"{truncated}, et {forked}"
+    elif status.kind == TruncationMarker.KIND_FORKED:
+        body = forked
+    else:
+        body = truncated
+    return f"{body} — constat non acquitté."
+
+
+class AuditUnwritable(RuntimeError):
+    """The *audit record* could not be written, so the act did not happen (FR-53 / AD-22).
+
+    Raised at the audit write itself, never at the act's boundary, and **never** for contention:
+    AD-22 names the trap in as many words — *"a lock timeout or write contention is not 'cannot be
+    written at all' and does not open that escape"*. Story 5.5 introduced the head-row lock
+    precisely so two concurrent writers queue instead of one dying; classifying that queue as an
+    unwritable store would turn ordinary busy-ness into a product-wide refusal, which is the
+    inversion of the rule rather than the rule.
+
+    The escape AD-22 forbids is proceeding WITHOUT the entry. Refusing loudly is not that escape —
+    it is the only alternative to it."""
+
+
+#: The tables whose write failure means the RECORD could not be written. Matched against the
+#: failing statement, so a business-row constraint violation in the same flush keeps its own
+#: identity instead of being reported as an unwritable audit store.
+_AUDIT_TABLES_SQL: tuple[str, ...] = ("audit_record", "audit_chain_head")
+
+#: Contention, by SQLSTATE: lock_not_available, query_canceled (a statement/lock timeout),
+#: serialization_failure, deadlock_detected. None of them is "cannot be written at all" (AD-22).
+_CONTENTION_SQLSTATES: frozenset[str] = frozenset({"55P03", "57014", "40001", "40P01"})
+
+
+def _is_contention(exc: SQLAlchemyError) -> bool:
+    """Whether a database error is a WAIT rather than a refusal (AD-22's named trap)."""
+    orig = getattr(exc, "orig", None)
+    code = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    if code in _CONTENTION_SQLSTATES:
+        return True
+    text_ = str(orig if orig is not None else exc).lower()
+    return any(
+        marker in text_
+        for marker in ("database is locked", "database table is locked", "deadlock"))
+
+
+def _classify_audit_write(exc: SQLAlchemyError) -> BaseException:
+    """The exception an audit-write failure should propagate as.
+
+    An ``IntegrityError`` is a concurrent allocation of the same ``(tenant, chain_scope, seq)`` and
+    belongs to the retry loop, which is what it has always done. Contention is a wait. Anything else
+    on an audit table — a revoked INSERT, a read-only store, a full disk — is the state FR-53's
+    fourth consequence describes, and the act is refused by name. A failure on a statement that is
+    NOT an audit table keeps its own identity: it is somebody else's bug, and dressing it as an
+    unwritable record would make a business constraint look like a tamper alarm.
+    """
+    if isinstance(exc, IntegrityError) or _is_contention(exc):
+        return exc
+    statement = (getattr(exc, "statement", "") or "").lower()
+    if not any(table in statement for table in _AUDIT_TABLES_SQL):
+        return exc
+    return AuditUnwritable(
+        "l'acte est refusé : son inscription au journal d'audit n'a pas pu être écrite")
+
+
 def _safe_decrypt(ciphertext: str | None, context: str) -> str | None:
     """Decrypt a raw-read encrypted column, or ``None`` if it cannot be authenticated — a
     tamper, the wrong key, or a legacy plaintext value. Lets the audit read degrade ONE bad row
@@ -963,12 +1100,15 @@ class SqlStore:
                 self._journal.record(HeadEntry(
                     scope, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
             except OSError as exc:
-                # Surfaced two ways, never silent (AC5): a WARNING log now, and the sticky
-                # `journal_degraded` flag the DR status reads. A head we could not record means a
-                # later restore-truncation to this point could go undetected — an operator alarm.
+                # Surfaced THREE ways, never silent: a WARNING log, the sticky `journal_degraded`
+                # flag this process reads, and — since Story 5.9 — a persisted ``journal_gap`` row.
+                # A head we could not record means a later restore-truncation to this point could go
+                # undetected, and an alarm about an undetectable loss cannot itself live only in the
+                # memory of a process that will be restarted.
                 self.journal_degraded = True
                 _log.warning(
                     "head journal write failed for scope %s at seq %s: %s", scope, seq, exc)
+                self._record_journal_gap(scope, seq, chain, str(exc))
 
     def _lock_chain_head(
         self, session: Session, tenant: str, chain_scope: str
@@ -1051,6 +1191,20 @@ class SqlStore:
             session.add(AuditChainHead(
                 tenant=tenant, chain_scope=chain_scope, seq=seq, chain=chain, anchor=anchor,
                 opened_at=ts, updated_at=ts))
+        # FLUSH HERE (Story 5.9, FR-53). Without it the INSERT happens at commit, by which point
+        # the failure is a generic database error about a transaction containing several writes and
+        # the act's caller cannot tell "the record could not be written" from anything else. The
+        # transaction still rolls back either way — atomicity was never the gap — but FR-53's fourth
+        # consequence needs the two told apart: *where the audit store cannot be written at all, the
+        # application refuses the affected actions rather than degrading to an unaudited mode*, and
+        # a product cannot refuse for a reason it cannot name.
+        try:
+            session.flush()
+        except SQLAlchemyError as exc:
+            classified = _classify_audit_write(exc)
+            if classified is exc:
+                raise          # a collision or a wait — re-raised unchanged, cause and all
+            raise classified from exc
         return chain
 
     def _open_chain(
@@ -1929,6 +2083,12 @@ class SqlStore:
         numbers and no sentence — which is what "no sentence was composed" looks like, and is
         different from a sentence we invented."""
         quoted = bound_sentences or {}
+        # The outside witness is read FIRST, before a single entry (Story 5.9). Read afterwards, an
+        # ordinary audited act landing between the two reads would put the journal ahead of the
+        # entries the document holds, and the document would report itself TRUNCATED — an alarm of
+        # tampering, raised by nothing but concurrency. Taken first, the same race can only leave
+        # the record running past its witness, which is *unwitnessed*: honest, unalarming, and true.
+        witnesses = self._witness_lines(tenant, matter)
         trail = self.read_audit(matter, tenant, scopes)
         overrides = self.read_audit(matter, tenant, scopes, overrides_only=True)
         truncation = self.truncation_status(tenant)
@@ -1938,9 +2098,13 @@ class SqlStore:
             # must be able to tell what this document could not have contained (FR-26).
             scope_held = session.scalar(select(MatterScope.scope).where(
                 MatterScope.tenant == tenant, MatterScope.matter == matter)) or ""
+            # §9 (Story 5.9) — the entries themselves, so the continuity verdict on the cover stops
+            # being the one claim on this document that has to be taken on the producer's word.
+            entry_lines = self._record_trail(session, tenant, matter)
 
         cover = Cover(
             matter=matter,
+            tenant=tenant,
             scope=scope_held,
             tier=tier,
             produced_by=actor,
@@ -1951,16 +2115,18 @@ class SqlStore:
                     label_fr=AUDIT.chain_label_fr(sl.chain_scope),
                     entries=sl.entries,
                     verified=sl.verified,
-                    # AD-43: only the matter's own chain can be recomputed by a reader holding
-                    # this document — the tenant chain's links run through entries outside the
-                    # scope, and saying so is the point of printing two lines.
-                    recomputable_from_this_document=sl.verifiable_in_isolation,
-                    broken_at=sl.broken_at)
-                for sl in trail.slices),
+                    # `recomputable_from_this_document` is NOT passed: ``assemble`` derives it from
+                    # what the document turns out to hold (Story 5.9). It used to be handed over
+                    # from here, as `verifiable_in_isolation` — a fact about whether the DATABASE's
+                    # head row carried an anchor — under a name that asserts a property of the
+                    # reader's bytes, on a document that carried no entries at all.
+                    broken_at=sl.broken_at,
+                    cause=sl.cause,
+                    anchor=sl.anchor,
+                    witness=witnesses.get(sl.chain_scope))
+                for sl in trail.slices) + _absent_chain_lines(matter, trail.slices, witnesses),
             truncation_unacknowledged=truncation.active,
-            truncation_note=(
-                f"{truncation.entries_lost} acte(s) manquant(s) au journal, non acquitté(s)"
-                if truncation.active else None),
+            truncation_note=_discontinuity_note_fr(truncation) if truncation.active else None,
             degraded_extracts=self._degraded_extract_count(
                 tenant=tenant, matter=matter, scopes=scopes),
         )
@@ -2032,6 +2198,7 @@ class SqlStore:
                 read=counts.read, from_the_list=counts.from_the_list,
                 individually=counts.individually, in_bulk=counts.in_bulk, batches=counts.batches,
                 withdrawn=counts.withdrawn, never_validated=counts.never_validated),
+            trail=entry_lines,
             modified_values=sum(
                 1 for e in trail.entries
                 if AUDIT.ACTS[e.action].act_class == AUDIT.CLASS_VALUE_MODIFIED),
@@ -2630,16 +2797,105 @@ class SqlStore:
         """Record every live CHAIN head to the journal (called at start-up, after the
         boot reconcile). Returns how many heads were recorded. The journal is append-only and grows
         one line per advance; a long-lived run would want periodic compaction (retain the latest
-        head per scope) — deferred, immaterial at the single-firm design target (AD-32)."""
+        head per scope) — deferred, immaterial at the single-firm design target (AD-32).
+
+        **A tenant with an ACTIVE discontinuity is skipped** (Story 5.9). This call runs immediately
+        after the boot reconcile, and writing the live head of a record already found discontinuous
+        would enter, as the outside witness, the very state under dispute — after which the next
+        boot compares the disputed value against a copy of itself and finds nothing. The marker is
+        persistent so the finding survives regardless; skipping keeps the *evidence* alive too, and
+        the override that clears the marker writes the acknowledged heads itself
+        (``_journal_acknowledged_heads``), which is where an accepted record is supposed to be
+        written down."""
         j = journal or self._journal
         if j is None:
             return 0
         now = _audit_ts(datetime.now(UTC))
         count = 0
+        disputed: dict[str, bool] = {}
         for scope, (seq, chain) in self.audit_heads().items():
+            tenant = tenant_of(scope)
+            if tenant not in disputed:
+                disputed[tenant] = self.truncation_status(tenant).active
+            if disputed[tenant]:
+                continue
             j.record(HeadEntry(scope, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
             count += 1
         return count
+
+    def _witness_lines(self, tenant: str, matter: str) -> dict[str, ChainWitnessLine]:
+        """The heads OUTSIDE the restorable store for the chains a *matter*'s export can carry.
+
+        This is the one value on the document the producing system did not compute. Without it a
+        truncation to an earlier consistent point recomputes perfectly on the reader's side and
+        reads as clean — so a document with a continuity section but no witness proves that nothing
+        was ALTERED and says nothing at all about whether anything was REMOVED, which is the failure
+        the whole apparatus exists for.
+
+        **Only the *matter*'s own chain.** The *tenant* chain's witness would tell a reader holding
+        one scoped export how many acts the whole firm has performed, across every other matter,
+        which is a number their wall exists to keep from them — and it would buy them nothing, since
+        they hold a slice of that chain and cannot conclude where it ends either way."""
+        if self._journal is None:
+            return {}
+        head = self._journal.latest(journal_scope(tenant, matter))
+        if head is None:
+            return {}
+        return {matter: ChainWitnessLine(
+            seq=head.seq, chain=head.chain, recorded_at=head.recorded_at,
+            app_version=head.app_version, schema_version=head.schema_version)}
+
+    def _record_trail(
+        self, session: Session, tenant: str, matter: str
+    ) -> tuple[ChainEntryLine, ...]:
+        """§9 — the *matter*'s entries as the document carries them (Story 5.9, FR-53).
+
+        Exactly the entries ``read_audit`` returns for this *matter* — its own chain, plus the
+        *tenant*-chain acts naming it — but with every field the chained value is taken over, and
+        the timestamp in the rendering the chain was ACTUALLY taken over (``_audit_ts``), not the
+        display rendering the rest of the document uses. A reader handed ``+00:00`` and asked to
+        recompute a value taken over ``.000000`` concludes tampering; the recipe is byte-exact or it
+        is not a recipe.
+
+        An unreadable actor or detail travels as ``None``, never as a placeholder: the verifier then
+        reports *a field cannot be authenticated* rather than *a link does not recompute*, which are
+        two different findings and two different conclusions for a reader to draw."""
+        # Restricted to the two chains that can carry this *matter*'s acts. Reading (and decrypting)
+        # every chain of the tenant to then discard most of them made the export's cost a function
+        # of the FIRM's size rather than the matter's, and it read rows this document will never be
+        # allowed to show.
+        entries = self._verifiable_entries(
+            session, tenant, chain_scopes=[matter, AUDIT.TENANT_CHAIN])
+        mine = [
+            e for e in entries
+            if e.chain_scope == matter
+            or (e.chain_scope == AUDIT.TENANT_CHAIN and e.matter == matter)
+        ]
+        return tuple(
+            ChainEntryLine(
+                chain_scope=e.chain_scope, seq=e.seq, at=e.timestamp, actor=e.actor,
+                action=e.action, detail=e.detail, chain=e.chain,
+                content_version=e.content_version, app_version=e.app_version or "",
+                schema_version=e.schema_version or "", matter=e.matter)
+            for e in sorted(mine, key=lambda e: (e.chain_scope, e.seq)))
+
+    def _chains_at(
+        self, tenant: str, chain_scope: str, seqs: Sequence[int]
+    ) -> dict[int, str]:
+        """The chain values the LIVE record carries at the given sequences of one chain.
+
+        The left-hand side of the only comparison in this product whose right-hand side lives
+        outside the restorable store. Taken at every witnessed point in ONE query rather than one
+        query per point: the journal holds a line per commit, and a per-point round trip would make
+        the boot reconciliation's cost a function of how long the deployment has been running."""
+        if not seqs:
+            return {}
+        with self._sf() as session:
+            rows = session.execute(
+                select(AuditRecord.seq, AuditRecord.chain).where(
+                    AuditRecord.tenant == tenant, AuditRecord.chain_scope == chain_scope,
+                    AuditRecord.seq.in_(list(seqs)))).all()
+        return {int(seq): chain for seq, chain in rows}
 
     def reconcile_heads(self, journal: HeadJournal | None = None) -> list[Reconciliation]:
         """Reconcile every scope's live head against the journal (AD-35). A live head BEHIND the
@@ -2671,18 +2927,68 @@ class SqlStore:
         for scope in sorted(set(heads) | set(journal_max)):
             live_seq = heads.get(scope, (0, ""))[0]
             cleared_at = self._marker_cleared_at(tenant_of(scope))
+            plain = journal_max.get(scope, 0)
+            reference = plain
             if cleared_at is not None:
                 # A cleared marker: the baseline is the heads recorded AFTER the override, so a live
                 # head below THAT is a new truncation — not below the stale pre-truncation head the
                 # append-only journal still carries (which the override already accounted for).
                 floor = _audit_ts(_as_utc(cleared_at))
-                reference = max(
+                post = max(
                     (e.seq for e in entries if e.scope == scope and e.recorded_at > floor),
                     default=0)
-            else:  # no marker, or one still active — the plain 'live behind the journal' test
-                reference = journal_max.get(scope, 0)
-            rec = Reconciliation(scope, live_seq, reference, truncated=live_seq < reference)
-            out.append(rec)
+                # An override lowers the bar only where the journal CORROBORATES it. Clearing writes
+                # the acknowledged heads to the journal, so a genuine clearance always leaves a line
+                # after the floor; no line means the acknowledgement has no outside witness — a
+                # marker row carrying a future ``cleared_at`` (the marker travels inside the backup,
+                # so a forger can write one), or a chain whose head row has since gone. A plain
+                # ``default=0`` accepted that: nothing is below zero, so the chain became
+                # unfalsifiable. An unwitnessed acknowledgement now leaves the bar where it was.
+                reference = post or plain
+            # ── the fork: the ONE comparison whose right-hand side is outside the store ──
+            # A record rewritten and re-chained to the same length is internally perfect — every
+            # link recomputes, the allocator agrees with its entries, the length never moved — and
+            # every check this product ran before Story 5.9 compared one in-store value against
+            # another. The journal has recorded the chain VALUE on every advance since Story 1.11
+            # and nothing ever read it back.
+            #
+            # Compared at EVERY point the journal witnessed, not at the newest one. Comparing only
+            # the latest line made the detection survive exactly one reconciliation: the forger's
+            # record goes on writing, each commit journals a head at a higher sequence, and the next
+            # comparison then takes a POST-forgery line — which matches, because the forged record
+            # produced it. The disagreement is looked for at the earliest witnessed point, where a
+            # rewrite of history shows up and cannot be papered over by anything written after it.
+            witnessed: dict[int, str] = {}
+            floor_at = _audit_ts(_as_utc(cleared_at)) if cleared_at is not None else None
+            for e in entries:
+                if e.scope != scope or e.seq > live_seq or not e.chain:
+                    continue
+                # An acknowledged discontinuity is settled: only what the journal witnessed AFTER
+                # the override counts, exactly as for the truncation baseline above. Otherwise the
+                # signed override would be answered forever by the lines it was signed to settle.
+                if floor_at is not None and e.recorded_at <= floor_at:
+                    continue
+                witnessed[e.seq] = e.chain   # a later line at the same seq speaks for that point
+            forked, witnessed_seq, journal_chain, live_chain = False, 0, "", ""
+            if witnessed:
+                live_chains = self._chains_at(
+                    tenant_of(scope), chain_of(scope), sorted(witnessed))
+                for seq in sorted(witnessed):
+                    live = live_chains.get(seq, "")
+                    # A DIFFERENT value and NO value are both disagreements with the witness, and
+                    # the second used to be skipped on the reasoning that a missing entry "is a
+                    # truncation and is reported as one". It is not: ``truncated`` below compares
+                    # the head row's sequence, and deleting an entry from the middle leaves that
+                    # sequence exactly where it was — so an act the witness saw, removed, was
+                    # reported as nothing at all. The guard named one table and the comparison it
+                    # deferred to read another (review, confirmed).
+                    if live != witnessed[seq]:
+                        forked = True
+                        witnessed_seq, journal_chain, live_chain = seq, witnessed[seq], live
+                        break
+            out.append(Reconciliation(
+                scope, live_seq, reference, truncated=live_seq < reference, forked=forked,
+                witnessed_seq=witnessed_seq, journal_chain=journal_chain, live_chain=live_chain))
         # ONE marker per tenant describing EVERY chain that fell, not one per chain overwriting the
         # last. A restore rolls the whole database back, so several chains truncate together; the
         # per-chain loop that wrote the marker recorded whichever scope sorted last, understating
@@ -2690,10 +2996,10 @@ class SqlStore:
         # reported).
         by_tenant: dict[str, list[Reconciliation]] = {}
         for rec in out:
-            if rec.truncated:
+            if rec.diverged:
                 by_tenant.setdefault(tenant_of(rec.scope), []).append(rec)
         for tenant, recs in sorted(by_tenant.items()):
-            self._record_truncation(tenant, recs)
+            self._record_discontinuity(tenant, recs)
         return out
 
     def _marker_cleared_at(self, tenant: str) -> datetime | None:
@@ -2704,30 +3010,53 @@ class SqlStore:
             m = session.get(TruncationMarker, tenant)
             return m.cleared_at if m is not None else None
 
-    def _record_truncation(self, tenant: str, recs: list[Reconciliation]) -> None:
-        """Upsert ONE active truncation marker describing every chain that fell. The keep-cleared
-        decision lives in ``reconcile_heads`` (via the post-override baseline), so this ALWAYS
-        records an active marker — a re-detection after an override correctly reactivates it, never
-        a silent no-op that would leave a fresh data loss un-flagged.
+    def _record_discontinuity(self, tenant: str, recs: list[Reconciliation]) -> None:
+        """Upsert ONE active marker describing every chain the reconciliation found discontinuous.
+        The keep-cleared decision lives in ``reconcile_heads`` (via the post-override baseline), so
+        this ALWAYS records an active marker — a re-detection after an override correctly
+        reactivates it, never a silent no-op that would leave a fresh data loss un-flagged.
 
         ``journal_seq``/``live_seq`` keep their meaning for the WORST-hit chain (the one that lost
         most), because a single pair cannot describe several chains and a reader shown the smallest
-        loss is being flattered. ``entries_lost`` is the total and ``chains`` names each one."""
+        loss is being flattered. ``entries_lost`` is the total over the TRUNCATED chains only.
+
+        **A fork is counted apart from a truncation and never folded into ``entries_lost``**
+        (Story 5.9). A rewritten chain has lost no acts — it has lost its *identity*, which is a
+        different and in most readings worse finding — and adding zero to a loss total would print a
+        reassuring number under a heading that does not apply to it."""
         if not recs:
             return
-        worst = max(recs, key=lambda r: r.journal_seq - r.live_seq)
-        total = sum(r.journal_seq - r.live_seq for r in recs)
+        truncated = [r for r in recs if r.truncated]
+        forked = [r for r in recs if r.forked]
+        total = sum(r.journal_seq - r.live_seq for r in truncated)
         named = ", ".join(
-            f"{r.scope}:{r.journal_seq}->{r.live_seq}" for r in sorted(recs, key=lambda r: r.scope))
+            f"{r.scope}:{r.journal_seq}->{r.live_seq}"
+            for r in sorted(truncated, key=lambda r: r.scope))
+        forks = ", ".join(
+            f"{r.scope}@{r.witnessed_seq}" for r in sorted(forked, key=lambda r: r.scope))
+        if truncated and forked:
+            kind = TruncationMarker.KIND_BOTH
+        elif forked:
+            kind = TruncationMarker.KIND_FORKED
+        else:
+            kind = TruncationMarker.KIND_TRUNCATED
+        # The pair describes the worst TRUNCATION where there is one; with forks alone it describes
+        # where the two records part company, which is what "where the record was / is now" means
+        # for a chain that was rewritten rather than shortened.
+        worst = (max(truncated, key=lambda r: r.journal_seq - r.live_seq) if truncated
+                 else max(forked, key=lambda r: r.witnessed_seq))
+        journal_seq = worst.journal_seq if truncated else worst.witnessed_seq
+        live_seq = worst.live_seq
         now = datetime.now(UTC)
         with self._sf() as session, session.begin():
             session.merge(TruncationMarker(
-                tenant=tenant, detected_at=now, journal_seq=worst.journal_seq,
-                live_seq=worst.live_seq, chains=named, entries_lost=total,
-                cleared_by=None, reason=None, cleared_at=None))
+                tenant=tenant, detected_at=now, journal_seq=journal_seq,
+                live_seq=live_seq, chains=named or None, entries_lost=total, kind=kind,
+                forks=forks or None, cleared_by=None, reason=None, cleared_at=None))
 
     def truncation_status(self, tenant: str) -> TruncationStatus:
-        """A tenant's truncation status — active while un-cleared (named on every export, AD-35)."""
+        """A tenant's discontinuity status — active while un-cleared (named on every export,
+        AD-35)."""
         with self._sf() as session:
             m = session.get(TruncationMarker, tenant)
         if m is None:
@@ -2736,7 +3065,38 @@ class SqlStore:
             tenant, active=m.cleared_at is None, journal_seq=m.journal_seq, live_seq=m.live_seq,
             detected_at=m.detected_at.isoformat(),
             cleared_at=m.cleared_at.isoformat() if m.cleared_at is not None else None,
-            chains=m.chains or "", entries_lost=m.entries_lost or 0)
+            chains=m.chains or "", entries_lost=m.entries_lost or 0,
+            kind=m.kind or TruncationMarker.KIND_TRUNCATED, forks=m.forks or "")
+
+    def journal_gap_status(self, tenant: str) -> JournalGapStatus:
+        """How many chain heads this tenant's journal failed to record, and the last of them
+        (Story 5.9, AD-35). Persistent: the alarm used to be a boolean in one process's memory and
+        cleared itself on the next restart, which is a silent repair of the one condition that makes
+        a later truncation undetectable."""
+        with self._sf() as session:
+            rows = session.execute(
+                select(JournalGap.scope, JournalGap.seq, JournalGap.at)
+                .where(JournalGap.tenant == tenant)
+                .order_by(JournalGap.at.desc())
+            ).all()
+        if not rows:
+            return JournalGapStatus(tenant, 0)
+        scope, seq, at = rows[0]
+        return JournalGapStatus(
+            tenant, gaps=len(rows), last_at=_as_utc(at).isoformat(), last_scope=scope,
+            last_seq=int(seq))
+
+    def _record_journal_gap(self, scope: str, seq: int, chain: str, detail: str) -> None:
+        """Persist a head the journal could not record. Best-effort by necessity — the act it
+        belongs to is already committed and cannot be undone from here — but never silent: the row
+        is the alarm, the ``journal_degraded`` flag is only this process's copy of it."""
+        try:
+            with self._sf() as session, session.begin():
+                session.add(JournalGap(
+                    id=uuid4().hex, tenant=tenant_of(scope), scope=scope, seq=int(seq),
+                    chain=chain, at=datetime.now(UTC), detail=detail[:2000]))
+        except SQLAlchemyError:  # the database is the reason we are here; the log still fires
+            _log.exception("could not persist the journal gap for scope %s at seq %s", scope, seq)
 
     def clear_truncation(self, tenant: str, actor: str, reason: str) -> None:
         """Clear an active truncation by an audited OVERRIDE with a reason (AD-35/AD-25) — the only
@@ -2756,7 +3116,14 @@ class SqlStore:
             m.cleared_by, m.reason, m.cleared_at = actor, reason, now
             self._append_audit(
                 session, tenant, None, actor, AUDIT.ACT_TRUNCATION_OVERRIDE,
-                override_detail(reason, journal_seq=m.journal_seq, live_seq=m.live_seq), now)
+                # ``kind`` since Story 5.9: without it the record showed an override of a
+                # "truncation" that had lost zero acts, and a reader could not tell that what was
+                # acknowledged was a record found REWRITTEN — the more serious of the two findings,
+                # and the one the pair of sequence numbers describes least well.
+                override_detail(
+                    reason, kind=m.kind or TruncationMarker.KIND_TRUNCATED,
+                    journal_seq=m.journal_seq, live_seq=m.live_seq),
+                now)
 
         self._audited_tx(_work)
         self._journal_acknowledged_heads(tenant)
@@ -2788,12 +3155,15 @@ class SqlStore:
                 self._journal.record(HeadEntry(
                     scope, seq, chain, now, _APP_VERSION, _HEAD_SCHEMA_VERSION))
             except OSError as exc:
-                # Same surfacing as any other post-commit head write (AC5): never silent, because
-                # an unrecorded acknowledged head is exactly a later truncation nobody will see.
+                # Same surfacing as any other post-commit head write: never silent, because an
+                # unrecorded acknowledged head is exactly a later truncation nobody will see — and
+                # since Story 5.9 it is also the case where the override's own baseline goes
+                # unwitnessed, which ``reconcile_heads`` now refuses to let lower the bar.
                 self.journal_degraded = True
                 _log.warning(
                     "head journal write failed for the acknowledged head of scope %s at seq %s: %s",
                     scope, seq, exc)
+                self._record_journal_gap(scope, seq, chain, str(exc))
 
     # ── logical, tenant-boundary backup + an exercised restore (AD-32) ──
 
@@ -3027,15 +3397,42 @@ class SqlStore:
         backup target). In a true disaster the journal volume is lost WITH the primary; the backup's
         own head tail is then the only surviving outside record, and reconcile needs it to detect a
         truncation at all. Append-only and best-effort: a malformed tail is skipped, a write failure
-        is surfaced as degraded — neither fails the restore itself."""
+        is surfaced as degraded — neither fails the restore itself.
+
+        **Only for a scope the live journal has never heard of** (Story 5.9). The head tail comes
+        from the backup file, which is exactly the artefact a forger controls; the journal is
+        append-only and ``witness_upto`` answers with the LAST line at a sequence, so seeding a
+        scope the journal already witnesses would let a supplied head overwrite the honest witness
+        it is meant to be compared against — turning the one out-of-store defence into a value the
+        attacker chose. A journal that still knows the scope is not the disaster this seed exists
+        for.
+
+        **And only where the tail is well-formed as data, not merely as keys.** A dataclass does not
+        check types: a tail entry carrying ``"seq": "9999"`` used to be appended to an append-only
+        file, after which every reconciliation — including the one in the boot path — raised
+        comparing a string to an integer, permanently."""
         j = journal or self._journal
         if j is None:
             return
+        known = set(j.all_latest())
         for h in backup.head_tail:
             try:
-                j.record(HeadEntry(**h))
+                entry = HeadEntry(**h)
             except TypeError:
                 continue  # a malformed head-tail entry is skipped, never fatal to the restore
+            if not isinstance(entry.seq, int) or isinstance(entry.seq, bool):
+                continue
+            if not all(isinstance(v, str) for v in (
+                    entry.scope, entry.chain, entry.recorded_at,
+                    entry.app_version, entry.schema_version)):
+                continue
+            if entry.scope in known:
+                _log.info(
+                    "head tail for scope %s not seeded: the journal already witnesses it",
+                    entry.scope)
+                continue
+            try:
+                j.record(entry)
             except OSError as exc:
                 self.journal_degraded = True
                 _log.warning(
@@ -3461,7 +3858,8 @@ class SqlStore:
                 chain_scope=matter, entries=own.entries, verified=own.verified,
                 # The matter's own chain is exactly what FR-53 asks for: a reader holding only
                 # these entries and the anchor recomputes every link.
-                verifiable_in_isolation=own.anchored, broken_at=own.broken_at))
+                verifiable_in_isolation=own.anchored, broken_at=own.broken_at,
+                cause=own.cause, anchor=anchors.get(matter)))
         # The tenant slice is reported whenever a TENANT CHAIN EXISTS, never only when this reader
         # still holds entries on it. Conditioning it on `legacy` being non-empty made a wholesale
         # removal of a matter's pre-5.5 history invisible: the slice simply disappeared and the
@@ -3475,7 +3873,9 @@ class SqlStore:
                 verified=tenant_verdict.verified if tenant_verdict else False,
                 # Verified here by recomputing the WHOLE tenant chain, which this reader cannot do
                 # from the export: the intervening links belong to matters outside their scope.
-                verifiable_in_isolation=False))
+                verifiable_in_isolation=False,
+                cause=tenant_verdict.cause if tenant_verdict else None,
+                anchor=anchors.get(AUDIT.TENANT_CHAIN)))
 
         entries = [
             AuditEntry(

@@ -33,7 +33,7 @@ from apx.adapters.extraction.msg import MsgExpander, MsgExtractor
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.originals_fs import FilesystemOriginalStore
 from apx.adapters.store_postgres.admission import admit
-from apx.adapters.store_postgres.engine import make_session_factory
+from apx.adapters.store_postgres.opening import open_store
 from apx.adapters.store_postgres.store import ImportJobView, SqlStore
 from apx.core.app.ingest import enumerate_units, ingest_one_file
 from apx.core.domain.config import ExpansionBounds, expansion_bounds
@@ -191,8 +191,12 @@ def _run_import(
 @app.task(name="apx.run_import", retry=RetryStrategy(max_attempts=100))
 def run_import(job_id: str) -> None:
     """The registered ingestion task. Builds the store at run time (so the worker binds the
-    live DATABASE_URL) and runs the resumable orchestration."""
-    _run_import(SqlStore(make_session_factory()), job_id)
+    live DATABASE_URL) and runs the resumable orchestration.
+
+    Through ``open_store`` since Story 5.9, and the journal is REQUIRED: the worker writes the bulk
+    of the record, and every head it advanced without an outside witness was a stretch a later
+    truncation could remove undetectably (AD-35)."""
+    _run_import(open_store(), job_id)
 
 
 async def enqueue_import(job_id: str) -> None:

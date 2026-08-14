@@ -646,7 +646,31 @@ export type MatterRecordDoc = {
   validation_summary: ValidationSummary | null;
   modified_values: number;
   accepted_values: number;
+  trail: Record<string, unknown>[];
   pending: { key: string; heading_fr: string; story: string; sentence_fr: string }[];
+  continuity: ChainReading[];
+};
+
+/* ── Story 5.9: the continuity check, RUN ON THE DOCUMENT (FR-53) ──────────────────────────────
+   Everything else the export carries is produced by the system the document describes. `sound` is
+   the only conclusion that requires all four: the reader recomputed it, it recomputes, it agrees
+   with the verdict printed on the cover, and it ends where a witness OUTSIDE the restorable store
+   saw it end. A truncation to an earlier consistent point recomputes perfectly — `verified` alone
+   would call it clean. */
+export type ChainReading = {
+  chain_scope: string;
+  label_fr: string;
+  recomputable: boolean;
+  sound: boolean;
+  sentence_fr: string;
+  verified: boolean | null;
+  printed_verified: boolean;
+  agrees_with_producer: boolean | null;
+  broken_at: number | null;
+  cause: string | null;
+  witness_state: string;
+  witness_missing: number;
+  witness_unwitnessed: number;
 };
 
 /* ── Story 5.8: the VALIDATION ACT (FR-45) ─────────────────────────────────────────────────────

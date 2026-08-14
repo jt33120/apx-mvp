@@ -95,6 +95,22 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     # less honest record of what was actually weighed. The marker's genuinely content-bearing
     # columns (``cleared_by``, the human-written ``reason``) are EncryptedText.
     ("TruncationMarker", "chains"),
+    # Story 5.9 — the same argument, extended to the two columns that generalise the marker from a
+    # truncation to a DISCONTINUITY. ``kind`` is a closed categorical (truncated | forked | both),
+    # the shape of ``resolution_state`` and ``action``; ``forks`` is machine-built from chain scopes
+    # and one integer each, exactly like ``chains`` beside it. Both are read for display only.
+    ("TruncationMarker", "kind"),
+    ("TruncationMarker", "forks"),
+    # Story 5.9 — the journal-gap ledger: a head the outside witness could not record. ``scope`` is
+    # the journal identity (tenant␟matter), holding what ``matter`` already holds in the clear;
+    # ``chain`` is a sha256 digest, the same machine identity as every other chain value in this
+    # model; ``detail`` is the operating system's own write-failure message (a path and an errno),
+    # an operator alarm and never client content. This row exists to make an ALARM survive a
+    # restart, and encrypting the alarm behind the key whose absence is itself an alarm would be a
+    # circularity for no protection.
+    ("JournalGap", "scope"),
+    ("JournalGap", "chain"),
+    ("JournalGap", "detail"),
     # Story 5.8 — the validation act's non-content columns (FR-45). ``batch_id`` is a sha256 over
     # the batch's own inputs, the same kind of machine identity as ``ranking_version_id``; it exists
     # so a reader can group one gesture's entries and holds nothing about the documents. The three

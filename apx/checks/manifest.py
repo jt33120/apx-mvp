@@ -36,6 +36,7 @@ from apx.checks import (
     case_theory_ownership,
     confidence_derivation,
     configuration,
+    continuity,
     credential_storage,
     encryption,
     estimator,
@@ -669,6 +670,22 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        validation.acceptance_is_never_manufactured,
        "every name and French string literal across apx/** — no dwell/scroll/visit path to an "
        "acceptance, and ONE home for the sentence the record attributes to the lawyer"),
+    # ── story 5.9: the record cannot be SHORTENED (FR-53/AD-35/AD-22) ─────────────────────────
+    _p("store-has-one-door", "FR-53", "AD-35", "every writing store is journalled",
+       continuity.the_store_has_one_door,
+       "every SqlStore(...) construction across apx/** — the head journal is what makes a "
+       "truncation detectable, and the worker and both provisioning commands built the store "
+       "without it"),
+    _p("continuity-claim-is-derived", "FR-53", "AD-33",
+       "the continuity claim is derived from the document",
+       continuity.the_continuity_claim_is_derived_from_the_document,
+       "every recomputable_from_this_document= keyword across apx/** — the flag asserts a property "
+       "of the READER's bytes and used to be handed over carrying a fact about the database"),
+    _p("audit-write-never-swallowed", "FR-53", "AD-22",
+       "an audit write failure is never swallowed",
+       continuity.an_audit_write_failure_is_never_swallowed,
+       "every try/except around an _append_audit call across apx/** — a handler that logs and "
+       "continues is the unaudited mode AD-22 forbids by name"),
     _p("override-ground-named", "FR-25", "AD-33", "an override names its FR-25 ground",
        override.override_names_its_ground,
        "the act catalogue (every override names one of FR-25's three grounds; the override class "

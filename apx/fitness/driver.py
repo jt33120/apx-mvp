@@ -176,11 +176,13 @@ def _the_record_verifies_offline() -> None:
     is asserted here is the half the *bâtonnier* actually performs — recomputing a chain from the
     bytes in front of them, holding ONE matter's entries and nothing else.
 
-    What is deliberately NOT claimed: a tail truncation. Dropping the last entries leaves a
-    shorter chain that recomputes perfectly, and no reader can tell from the export alone. That is
-    what the head journal outside the restorable store is for (AD-35) and what story 5.9 puts on
-    the export's face. Asserting it here would be this project's recurring defect — a comparison
-    whose right-hand side is not the same thing as its left, failing towards the flattering side.
+    **A tail truncation is now claimed, and only because story 5.9 gave the reader something to
+    claim it with.** Dropping the last entries leaves a shorter chain that recomputes perfectly:
+    no amount of recomputation can see it, and until 5.9 this frame said so and handed the problem
+    on by name. What closes it is not a cleverer verifier but a value from OUTSIDE the store — the
+    head journal's witness, carried onto the document — so the assertion below compares the end of a
+    chain against a head the record itself did not produce. Recomputation and completeness are two
+    different questions and this stage now asks both.
     """
     from apx.core.domain import audit
 
@@ -249,6 +251,92 @@ def _the_record_verifies_offline() -> None:
     assert [v.chain_scope for v in both] == ["affaire-a", "affaire-b"]
     assert all(v.verified for v in both), "two chains of one tenant did not verify independently"
 
+    # ── story 5.9: WHICH failure, and IS THIS ALL OF IT ────────────────────────────────────────
+    # Five findings used to arrive as one boolean and one integer. A bâtonnier told *rupture au
+    # n° 7* cannot write the same letter for an act that was removed, an act that was rewritten and
+    # a field whose key is missing — so each names itself.
+    assert tampered.cause == audit.CAUSE_LINK, "a rewritten entry must report a broken LINK"
+    assert gapped.cause == audit.CAUSE_GAP, "a missing entry must report a GAP"
+    unreadable = _verdict([export[0], replace(export[1], detail=None), export[2]])
+    assert unreadable.cause == audit.CAUSE_UNREADABLE, "an unauthenticated field must say so"
+    assert clean.cause is None, "a verified chain must name no cause"
+
+    # The completeness half, which recomputation cannot supply at any length. The witness is the
+    # head recorded OUTSIDE the restorable store; the record below is compared against it.
+    head = audit.HeadWitness(chain_scope="affaire-a", seq=3, chain=export[2].chain)
+    assert audit.compare_to_witness(export, head).state == audit.WITNESS_CURRENT
+    cut = audit.compare_to_witness(export[:2], head)
+    assert cut.state == audit.WITNESS_TRUNCATED and cut.missing == 1, (
+        "a chain cut back to an earlier consistent point recomputes perfectly — only the outside "
+        "witness can see that it now ends earlier than it did (AD-35)")
+    assert not cut.complete
+    # A record running PAST the witness is not a fault — the head is journalled after the commit —
+    # but it is never counted as clean either: those are the acts a later truncation could remove
+    # without leaving a trace.
+    behind = audit.HeadWitness(chain_scope="affaire-a", seq=1, chain=export[0].chain)
+    ahead = audit.compare_to_witness(export, behind)
+    assert ahead.state == audit.WITNESS_UNWITNESSED and ahead.unwitnessed == 2
+    assert not ahead.complete
+    # And the forgery the length can never show: rewritten, re-chained, same length, every link
+    # holding. Only a value the forger did not produce disagrees with it.
+    reforged = _chain("affaire-a", [audit.ACT_INGEST, audit.ACT_JUDGE, audit.ACT_LINE_PLACED])
+    assert _verdict(reforged).verified, (
+        "the forgery must be INTERNALLY perfect or the next assertion proves nothing")
+    assert audit.compare_to_witness(reforged, head).state == audit.WITNESS_FORKED, (
+        "a record rewritten and re-chained to the same length passed every in-store check; the "
+        "journalled value is the only thing that disagrees with it (AD-35)")
+
+    # ── the whole check, run on a DOCUMENT, in a process with no store ─────────────────────────
+    from apx.core.domain.matter_record import read_continuity
+
+    record = _document(export, anchor="", witness=head)
+    (reading,) = [r for r in read_continuity(record) if r.chain_scope == "affaire-a"]
+    assert reading.recomputable and reading.sound, (
+        f"a clean document did not read as sound: {reading.sentence_fr}")
+    short = _document(export[:2], anchor="", witness=head)
+    (cut_reading,) = [r for r in read_continuity(short) if r.chain_scope == "affaire-a"]
+    assert cut_reading.verdict is not None and cut_reading.verdict.verified, (
+        "the truncated document must still RECOMPUTE — that is what makes it undetectable without "
+        "the witness")
+    assert not cut_reading.sound and "manquant" in cut_reading.sentence_fr, (
+        "a truncated document must not read as sound, and must say how many acts are missing")
+
+
+def _document(entries: list, anchor: str, witness: object):  # noqa: ANN001, ANN202
+    """One exported *matter* record carrying a chain and its outside witness — built here, in a
+    process with no store, which is the whole point of the assertion above."""
+    from apx.core.domain import audit
+    from apx.core.domain.inventory import Inventory
+    from apx.core.domain.matter_record import (
+        ChainEntryLine,
+        ChainVerdictLine,
+        Cover,
+        Tier,
+        WitnessLine,
+        assemble,
+    )
+
+    line = ChainVerdictLine(
+        chain_scope="affaire-a", label_fr=audit.chain_label_fr("affaire-a"),
+        entries=len(entries), verified=True, anchor=anchor,
+        witness=WitnessLine(seq=witness.seq, chain=witness.chain))  # type: ignore[attr-defined]
+    return assemble(
+        cover=Cover(
+            matter="affaire-a", tenant="cabinet", scope="mur", tier=Tier.FULL,
+            produced_by="Me Dupont", produced_at="2026-08-13T12:00:00.000000", chains=(line,)),
+        denominator=Inventory(
+            submitted_pieces=0, in_corpus=0, open_register_entries=0,
+            overridden_register_entries=0, excluded_as_noise=0, retired=0,
+            unknown_cardinality_entries=0),
+        trail=tuple(
+            ChainEntryLine(
+                chain_scope=e.chain_scope, seq=e.seq, at=e.timestamp, actor=e.actor,
+                action=e.action, detail=e.detail, chain=e.chain,
+                content_version=e.content_version, app_version=e.app_version or "",
+                schema_version=e.schema_version or "", matter=e.matter)
+            for e in entries),
+    )
+
 
 # The pipeline. Order is the FR-55 sequence. `needs_model=True` marks a capability
 # that does NOT survive the model provider's absence (the degradation list, AC4).
@@ -274,8 +362,9 @@ STAGES: list[Stage] = [
         "5.5",
         ASSERTED,
         check=_the_record_verifies_offline,
-        invariant="verifiable by a reader holding ONE matter's entries and nothing else; the "
-                  "write path needs a database and is not reached here",
+        invariant="recomputable by a reader holding ONE matter's entries and nothing else, each "
+                  "failure naming itself, AND complete against a witness recorded outside the "
+                  "store (5.9) — the write path needs a database and is not reached here",
     ),
     Stage(
         "confidence bound as a sentence",

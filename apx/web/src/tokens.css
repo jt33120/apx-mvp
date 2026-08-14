@@ -567,3 +567,19 @@ button:focus-visible { box-shadow: var(--apx-ring); }
   .apx-drawer { width: 100%; position: static; }
   .apx-fork { grid-template-columns: 1fr; }
 }
+
+/* ── Story 5.9: the continuity check, on the export's face (FR-53) ────────────────────────────
+   Every chain is listed, sound or not. A block that showed only the failures would make an empty
+   block mean two things — nothing wrong, and nothing checked — which is the ambiguity this whole
+   apparatus exists to remove. */
+.apx-continuity {
+  margin-top: .7rem;
+  padding: .6rem .75rem;
+  border: 1px solid var(--apx-line);
+  border-radius: var(--apx-radius-sm);
+  background: var(--apx-surface-2);
+}
+.apx-continuity ul { margin: .35rem 0 0; padding-left: 1.1rem; }
+.apx-continuity li { margin: .2rem 0; line-height: 1.45; }
+.apx-cont--ok { color: var(--apx-kept); }
+.apx-cont--open { color: var(--apx-review); }

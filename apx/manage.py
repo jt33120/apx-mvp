@@ -27,16 +27,20 @@ from pathlib import Path
 
 from sqlalchemy.exc import IntegrityError
 
-from apx.adapters.store_postgres.engine import make_session_factory
+from apx.adapters.store_postgres.opening import open_store
 from apx.adapters.store_postgres.store import SqlStore, TenantAlreadyProvisioned, TenantBackup
-from apx.core.domain.head_journal import open_journal
 
 
 def _open_store() -> SqlStore:
     """The store wired to the head journal (AD-35) — so a manage command's audited writes and a
-    restore both reconcile the chain head outside the restorable store."""
-    journal = open_journal(dict(os.environ), required=False)
-    return SqlStore(make_session_factory(), head_journal=journal)
+    restore both reconcile the chain head outside the restorable store.
+
+    **Required, since Story 5.9.** It was optional, and the consequence was precise: with
+    ``APX_HEAD_JOURNAL`` unset, ``reconcile_heads`` returned an empty list and ``manage restore``
+    printed its ordinary success line — the one blessed destructive operation, performing no
+    continuity check at all and saying nothing about having skipped it. Absence is refusal here,
+    on the same gate as the encryption key."""
+    return open_store()
 
 
 def _create_user(store: SqlStore, args: argparse.Namespace, password: str) -> str:
@@ -131,10 +135,18 @@ def restore(store: SqlStore, in_path: str) -> str:
                      payload["user_scopes"], payload["head_tail"])
     recs = store.restore_tenant(b)
     truncated = [r.scope for r in recs if r.truncated]
+    # Story 5.9 — a FORK is reported too, and apart. Reporting only truncations meant a restore of
+    # a record that had been rewritten and re-chained to the same length printed the ordinary
+    # success line: the operator was told the restore worked, on the one finding that says the
+    # record in front of them is not the record.
+    forked = [r.scope for r in recs if r.forked]
     msg = f"restore : tenant={b.tenant} restauré depuis {in_path}"
     if truncated:
         msg += (f" — ATTENTION : troncature détectée pour {truncated} (la tête vive est en deçà "
                 "du journal ; acquitter via l'override DR)")
+    if forked:
+        msg += (f" — ATTENTION : registre réécrit pour {forked} (la valeur de chaîne diffère de "
+                "celle du témoin extérieur ; acquitter via l'override DR)")
     return msg
 
 
@@ -191,7 +203,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         password = os.environ.get("APX_NEW_PASSWORD") or getpass.getpass("Mot de passe admin : ")
         if not password:
             raise SystemExit("un mot de passe est requis (APX_NEW_PASSWORD ou saisie)")
-        store = SqlStore(make_session_factory())
+        store = _open_store()
         try:
             uid = _provision(store, args, password)
         except TenantAlreadyProvisioned as exc:
@@ -203,7 +215,7 @@ def main(argv: Sequence[str] | None = None) -> None:
         password = os.environ.get("APX_NEW_PASSWORD") or getpass.getpass("Mot de passe : ")
         if not password:
             raise SystemExit("un mot de passe est requis (APX_NEW_PASSWORD ou saisie)")
-        store = SqlStore(make_session_factory())
+        store = _open_store()
         uid = _create_user(store, args, password)
         scopes = sorted(args.scope or [])
         print(f"créé : {uid} · {args.email} · admin={args.admin} · scopes={scopes}")

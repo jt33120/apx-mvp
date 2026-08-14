@@ -19,6 +19,7 @@ from apx.checks import (
     case_theory_ownership,
     confidence_derivation,
     configuration,
+    continuity,
     credential_storage,
     encryption,
     estimator,
@@ -215,6 +216,10 @@ CHECKS: list[Callable[[], CheckResult]] = [
     validation.only_the_validation_act_accepts,
     validation.the_opened_fact_is_never_a_literal,
     validation.acceptance_is_never_manufactured,
+    # ── story 5.9: the record cannot be SHORTENED (FR-53/AD-35/AD-22) ──
+    continuity.the_store_has_one_door,
+    continuity.the_continuity_claim_is_derived_from_the_document,
+    continuity.an_audit_write_failure_is_never_swallowed,
     statement.the_sentence_has_one_composer,
     statement.the_sentence_is_composed_offline,
     statement.unfitness_offers_no_line_move,

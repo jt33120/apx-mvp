@@ -41,6 +41,7 @@ from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
 from apx.core.domain.cascade import Band, CascadeResult, PieceJudgement, Stage
 from apx.core.domain.config import CascadeConfig
 from apx.core.domain.failures import ErrorClass
+from apx.core.domain.head_journal import HeadJournal
 from apx.core.domain.matter_record import MatterRecord, Tier
 from apx.core.domain.ranking import RankingIdentityInputs, assemble_identity, rank_cascade
 from apx.core.domain.triage_sets import PinSide
@@ -96,6 +97,44 @@ def _recompute(entries):
             sum(1 for e in live if e["provenance"] == "from-the-list")]
 
 
+def _recompute_chain(doc, cover):
+    """Recompute the matter's chain FROM THE PRINTED BYTES, and compare where it ends against the
+    head recorded outside the restorable store.
+
+    Imports ``apx.core.domain.audit`` — pure core, stdlib only, no adapter, no store — which is the
+    same module a bâtonnier's own expert would run. If the document does not carry the entries there
+    is nothing to recompute, and this says so instead of reporting a verified chain."""
+    from apx.core.domain import audit
+
+    matter = cover["matter"]
+    own = next((c for c in cover["chains"] if c["chain_scope"] == matter), None)
+    rows = [e for e in doc.get("trail", []) if e["chain_scope"] == matter]
+    entries = [
+        audit.VerifiableEntry(
+            tenant=cover["tenant"], chain_scope=e["chain_scope"], seq=e["seq"], matter=e["matter"],
+            actor=e["actor"], action=e["action"], detail=e["detail"], timestamp=e["at"],
+            chain=e["chain"], content_version=e["content_version"],
+            app_version=e["app_version"], schema_version=e["schema_version"])
+        for e in rows]
+    if not entries or own is None:
+        return {"recomputed_links": 0, "chain_recomputes": None, "witness_state": None,
+                "chain_complete": False}
+    anchors = {matter: own["anchor"]} if own["anchor"] is not None else {}
+    verdicts = audit.verify_chains(entries, anchors)
+    witness = own.get("witness")
+    comparison = audit.compare_to_witness(
+        entries,
+        audit.HeadWitness(chain_scope=matter, seq=witness["seq"], chain=witness["chain"])
+        if witness else None)
+    return {
+        "recomputed_links": len(entries),
+        "chain_recomputes": all(v.verified for v in verdicts),
+        "chain_anchored": all(v.anchored for v in verdicts),
+        "witness_state": comparison.state,
+        "chain_complete": comparison.complete,
+    }
+
+
 doc = json.loads(sys.stdin.read())
 cover, denom = doc["cover"], {d["key"]: d["count"] for d in doc["denominator"]}
 
@@ -115,6 +154,12 @@ out = {
     "recomputable_chains": [c["chain_scope"] for c in cover["chains"]
                             if c["recomputable_from_this_document"]],
     "chains_stated": len(cover["chains"]),
+    # ...and, since Story 5.9, what the reader can conclude by DOING it. Everything above this line
+    # re-derives counts from rows; the chain's verdict was the one claim on the page that had to be
+    # taken on the producer's word, because the entries it was computed over never left the
+    # database. `_recompute_chain` performs the recomputation from the printed bytes and compares
+    # the end of the chain against the head recorded outside the restorable store (AD-35).
+    **_recompute_chain(doc, cover),
     "scope": cover["scope"],
     "tier": cover["tier"],
     "degraded": cover["degraded_extracts"] > 0,
@@ -168,11 +213,16 @@ def _piece(piece_id: str) -> IngestedPiece:
 
 
 @pytest.fixture
-def store() -> SqlStore:
+def store(tmp_path: Path) -> SqlStore:
     engine = create_engine(
         "sqlite://", connect_args={"check_same_thread": False}, poolclass=StaticPool)
     Base.metadata.create_all(engine)
-    s = SqlStore(sessionmaker(bind=engine, future=True))
+    # Wired to a head journal (AD-35): the witness the exported document carries has to come from
+    # somewhere outside the store, and a fixture without one would test the honest-but-unwitnessed
+    # path while looking like it tested the whole thing.
+    s = SqlStore(
+        sessionmaker(bind=engine, future=True),
+        head_journal=HeadJournal(tmp_path / "heads.journal"))
     s.save(
         IngestionResult(
             # The four pièces the ranking below is over. They were implicit until Story 5.8: the
@@ -241,12 +291,45 @@ def test_a_reader_with_no_store_recomputes_every_number(store: SqlStore, tier: T
     assert read["scope"] == WALL and read["tier"] == tier.value
 
 
-def test_the_reader_is_told_which_chain_this_document_alone_proves(store: SqlStore) -> None:
-    # AD-43: the matter's own chain is recomputable from a scoped export and the tenant chain is
-    # not — the document says which, and the reader can act on that without the system
-    read = _read_without_a_store(_serialise(_document(store, Tier.NUMBERS_ONLY)))
+def test_the_reader_recomputes_the_chain_in_a_process_with_no_store(store: SqlStore) -> None:
+    """FR-53: *a gap, a reordering or a truncation is detectable by a reader holding only the
+    export*. Until Story 5.9 this test read the printed ``recomputable_from_this_document`` flag
+    and reported which scopes claimed it — it copied a boolean out of the document and asserted the
+    copy. It now recomputes every link from the printed bytes, in a subprocess with no store, and
+    compares the end of the chain against the head recorded outside the restorable store."""
+    record = _document(store, Tier.FULL)
+    read = _read_without_a_store(_serialise(record))
     assert read["chains_stated"] >= 1
     assert read["recomputable_chains"] == [MATTER]
+    assert read["recomputed_links"] == len([e for e in record.trail if e.chain_scope == MATTER])
+    assert read["recomputed_links"] > 0, "a document with no entries proves nothing about its chain"
+    assert read["chain_recomputes"] is True and read["chain_anchored"] is True
+    assert read["witness_state"] == "current" and read["chain_complete"] is True
+
+
+def test_a_truncated_document_recomputes_and_the_witness_is_what_catches_it(
+    store: SqlStore,
+) -> None:
+    """The failure that made this story necessary: cut the tail off the document and every link
+    still holds. Nothing inside the record can see it. The head recorded outside the restorable
+    store can — and this is the reader doing it, with no access to anything else."""
+    record = _document(store, Tier.FULL)
+    kept = tuple(e for e in record.trail if e.seq <= 2)
+    cut = dataclasses.replace(record, trail=kept)
+    read = _read_without_a_store(_serialise(cut))
+    assert read["chain_recomputes"] is True, (
+        "the truncated document must still recompute — that is exactly why it needs a witness")
+    assert read["witness_state"] == "truncated"
+    assert read["chain_complete"] is False
+
+
+def test_a_numbers_only_document_reports_not_checked_never_verified(store: SqlStore) -> None:
+    """The tier drops §9 with every other content-bearing section. What the reader must then get is
+    *not checked* — never a verdict, and never a flag claiming a recomputation nobody performed."""
+    read = _read_without_a_store(_serialise(_document(store, Tier.NUMBERS_ONLY)))
+    assert read["recomputable_chains"] == []
+    assert read["recomputed_links"] == 0
+    assert read["chain_recomputes"] is None and read["chain_complete"] is False
 
 
 def test_nothing_is_pending_now_and_the_zero_means_what_it_says(store: SqlStore) -> None:

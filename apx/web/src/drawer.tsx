@@ -8,6 +8,7 @@ import {
   validateBatch,
   validatePiece,
   withdrawValidation,
+  type ChainReading,
   type Drawer,
   type ExportTier,
   type ValidationEntry,
@@ -349,10 +350,16 @@ export function BulkValidationConfirm({ matter, pieceIds, onDone, onCancel }: {
 export function ExportFork({ matter, scope }: { matter: string; scope?: string }) {
   const [confirming, setConfirming] = useState(false);
   const [done, setDone] = useState<string | null>(null);
+  const [readings, setReadings] = useState<ChainReading[]>([]);
   const [err, setErr] = useState<string | null>(null);
 
   async function produce(tier: ExportTier) {
+    // Everything the LAST document said is cleared first. A refused production used to leave the
+    // previous document's continuity verdict on screen beside the error, where it reads as this
+    // one's — a verdict about bytes nobody produced (review, confirmed).
     setErr(null);
+    setDone(null);
+    setReadings([]);
     try {
       const doc = await exportMatterRecord(matter, tier);
       const v = doc.validation_summary;
@@ -371,6 +378,10 @@ export function ExportFork({ matter, scope }: { matter: string; scope?: string }
       setDone(
         `Document produit (${tier === "full" ? "dossier complet" : "chiffres seuls"}) — `
         + `${doc.overrides_total} dérogation(s) au journal.${validations}${pending}`);
+      // Story 5.9 (FR-53) — the continuity check ran ON THE DOCUMENT, and its result belongs on
+      // the document's face rather than in a payload nobody reads. Every chain is shown, sound or
+      // not: showing only the failures would make a page with nothing on it mean two things.
+      setReadings(doc.continuity ?? []);
       setConfirming(false);
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
@@ -448,6 +459,22 @@ export function ExportFork({ matter, scope }: { matter: string; scope?: string }
         niveau, votre nom, l'affaire, le périmètre et l'instant.
       </p>
       {done ? <p className="apx-seal apx-seal--ok">{done}</p> : null}
+      {readings.length > 0 ? (
+        <div className="apx-continuity">
+          <span className="apx-eyebrow">Contrôle de continuité, effectué sur ce document</span>
+          <ul>
+            {readings.map((r) => (
+              <li key={r.chain_scope} className={r.sound ? "apx-cont--ok" : "apx-cont--open"}>
+                <strong>{r.label_fr}</strong> — {r.sentence_fr}
+              </li>
+            ))}
+          </ul>
+          <p className="apx-hint" style={{ margin: ".35rem 0 0" }}>
+            Ce contrôle est refait à partir des seules données de l'export : un lecteur qui reçoit
+            ce document obtient le même résultat sans APX.
+          </p>
+        </div>
+      ) : null}
       {err ? <p className="apx-seal apx-seal--bad">{err}</p> : null}
     </section>
   );

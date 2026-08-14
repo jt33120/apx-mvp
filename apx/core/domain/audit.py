@@ -490,17 +490,40 @@ class VerifiableEntry:
     schema_version: str | None
 
 
+#: Why a chain did not verify. Five different findings used to arrive as one boolean and one
+#: integer, and they are not the same conclusion: a *bâtonnier* told *rupture au n° 7* cannot tell
+#: whether an act was removed, whether the record was rewritten, or whether the encryption key is
+#: simply wrong — and those are three different letters to write (FR-53).
+CAUSE_GAP = "gap"                # the sequence is not contiguous: a number is missing
+CAUSE_LINK = "link"              # a value does not recompute: an entry was rewritten or reordered
+CAUSE_UNREADABLE = "unreadable"  # a field cannot be authenticated: tamper, wrong key, plaintext
+
+CAUSE_FR: dict[str, str] = {
+    CAUSE_GAP: "un numéro manque dans la suite : un acte a été retiré du registre",
+    CAUSE_LINK: "un maillon ne se recalcule pas : une entrée a été réécrite",
+    CAUSE_UNREADABLE: "un champ ne peut pas être authentifié : altération, clé absente ou valeur "
+                      "en clair",
+}
+
+
 @dataclass(frozen=True)
 class ChainVerdict:
     """What a reader can conclude about ONE chain. ``anchored`` is False when the chain's starting
     value was not supplied — every link after the first is still proved, and the first is taken as
-    given rather than silently counted as proved."""
+    given rather than silently counted as proved.
+
+    ``cause`` names WHICH failure ``broken_at`` points at, and is None exactly when ``verified``."""
 
     chain_scope: str
     entries: int
     verified: bool
     anchored: bool
     broken_at: int | None = None   # the sequence number of the first link that did not hold
+    cause: str | None = None       # CAUSE_GAP | CAUSE_LINK | CAUSE_UNREADABLE, or None
+
+    @property
+    def cause_fr(self) -> str | None:
+        return CAUSE_FR.get(self.cause) if self.cause else None
 
 
 def verify_chains(
@@ -526,12 +549,13 @@ def verify_chains(
         anchored = anchor is not None
         prev = anchor if anchored else None
         broken: int | None = None
+        cause: str | None = None
         for i, e in enumerate(rows):
             if e.seq != i + 1:                       # a gap, a reorder, or a truncated head
-                broken = e.seq
+                broken, cause = e.seq, CAUSE_GAP
                 break
             if e.actor is None or e.detail is None:  # an unreadable field cannot be authenticated
-                broken = e.seq
+                broken, cause = e.seq, CAUSE_UNREADABLE
                 break
             if prev is None:   # an unanchored chain's first link: taken as given, never as proved
                 prev = e.chain
@@ -542,10 +566,142 @@ def verify_chains(
                 timestamp=e.timestamp, app_version=e.app_version or "",
                 schema_version=e.schema_version or "")
             if chain_value(prev, content) != e.chain:
-                broken = e.seq
+                broken, cause = e.seq, CAUSE_LINK
                 break
             prev = e.chain
         verdicts.append(ChainVerdict(
             chain_scope=scope, entries=len(rows), verified=broken is None,
-            anchored=anchored, broken_at=broken))
+            anchored=anchored, broken_at=broken, cause=cause))
     return tuple(verdicts)
+
+
+# ── the outside witness: what proves the record is ALL of it (FR-53 / AD-35) ───────────────────
+#
+# Everything above proves the record was not ALTERED. None of it proves the record was not
+# SHORTENED: a truncation to an earlier consistent point produces a chain whose every link
+# verifies, and there is no expected length anywhere in the entries themselves. Completeness needs
+# a value the record does not contain — one recorded outside the store it describes.
+
+#: The record ends where the witness saw it end, and carries the same value there.
+WITNESS_CURRENT = "current"
+#: The record ends BEFORE the witness saw it end — acts that existed are gone (a truncation).
+WITNESS_TRUNCATED = "truncated"
+#: The record runs PAST the witness. Not a fault in itself — the witness is written after the
+#: commit, so the last acts of a live system are routinely un-witnessed — but never counted as
+#: clean either: those acts are exactly the ones a later truncation could remove undetectably.
+WITNESS_UNWITNESSED = "unwitnessed"
+#: The record carries a DIFFERENT value at a point the witness also holds — the record was rewritten
+#: and re-chained. Length and links prove nothing here; only the outside value does.
+WITNESS_FORKED = "forked"
+#: No witness for this chain: nothing was recorded outside, so nothing can be concluded.
+WITNESS_ABSENT = "absent"
+#: The reader does not hold this chain in full (a scoped export of the *tenant* chain), so its end
+#: is not this reader's to judge. Distinct from ABSENT: the witness may exist and be perfectly good.
+WITNESS_PARTIAL = "partial"
+
+
+@dataclass(frozen=True)
+class HeadWitness:
+    """One chain head as an outside record holds it (AD-35) — scope, how far the chain had run, and
+    the value it carried there. The pure-core mirror of a head-journal line: a reader holding an
+    export and no store can compare against it without importing an adapter."""
+
+    chain_scope: str
+    seq: int
+    chain: str
+    recorded_at: str = ""
+    app_version: str = ""
+    schema_version: str = ""
+
+
+@dataclass(frozen=True)
+class HeadComparison:
+    """What comparing a chain against its outside witness establishes. ``missing`` is the number of
+    acts the witness saw and this record does not; ``unwitnessed`` the number this record holds past
+    the witness. Both are 0 outside their own state, never a signed difference that reads as the
+    other one."""
+
+    chain_scope: str
+    state: str
+    last_seq: int = 0
+    witness_seq: int = 0
+    missing: int = 0
+    unwitnessed: int = 0
+
+    @property
+    def complete(self) -> bool:
+        """The ONLY state that establishes completeness. Written as an equality rather than as
+        ``state != TRUNCATED`` on purpose: a new state added later defaults to *not proven*, which
+        is the direction this project's defects never fail in on their own."""
+        return self.state == WITNESS_CURRENT
+
+
+def compare_to_witness(
+    entries: list[VerifiableEntry],
+    witness: HeadWitness | None,
+    *,
+    partial: bool = False,
+) -> HeadComparison:
+    """Compare ONE chain's entries against the head recorded outside the store.
+
+    ``partial`` says the caller holds only a slice of this chain — a scoped export holds the acts of
+    its own *matter* on the *tenant* chain and nothing else — in which case where the chain ENDS is
+    not a fact this reader can establish, and the comparison says so rather than reporting every
+    scoped export as truncated.
+
+    The fork test comes first and is taken at the highest point BOTH sides hold. A record rewritten
+    and re-chained to the same length is internally perfect: same length, every link recomputes,
+    the allocator agrees with the entries. Only a value from outside disagrees with it.
+    """
+    scope = witness.chain_scope if witness is not None else (
+        entries[0].chain_scope if entries else "")
+    last = max((e.seq for e in entries), default=0)
+    if partial:
+        return HeadComparison(scope, WITNESS_PARTIAL, last_seq=last,
+                              witness_seq=witness.seq if witness else 0)
+    if witness is None:
+        return HeadComparison(scope, WITNESS_ABSENT, last_seq=last)
+    at_witness = next((e.chain for e in entries if e.seq == witness.seq), None)
+    if at_witness is not None and at_witness != witness.chain:
+        return HeadComparison(scope, WITNESS_FORKED, last_seq=last, witness_seq=witness.seq)
+    if last < witness.seq:
+        return HeadComparison(scope, WITNESS_TRUNCATED, last_seq=last, witness_seq=witness.seq,
+                              missing=witness.seq - last)
+    if last > witness.seq:
+        return HeadComparison(scope, WITNESS_UNWITNESSED, last_seq=last, witness_seq=witness.seq,
+                              unwitnessed=last - witness.seq)
+    return HeadComparison(scope, WITNESS_CURRENT, last_seq=last, witness_seq=witness.seq)
+
+
+#: What each state says to the reader of a document, in the lawyer's language. Every one of them is
+#: a sentence about THIS document, never about the system that produced it.
+WITNESS_FR: dict[str, str] = {
+    WITNESS_CURRENT:
+        "le registre s'arrête là où le témoin extérieur l'a vu s'arrêter, et porte la même valeur.",
+    WITNESS_TRUNCATED:
+        "le registre s'arrête AVANT le témoin extérieur : des actes qui ont existé n'y sont plus.",
+    WITNESS_UNWITNESSED:
+        "les derniers actes n'ont pas encore de témoin extérieur : leur disparition ultérieure ne "
+        "serait pas détectable.",
+    WITNESS_FORKED:
+        "le registre porte une valeur différente de celle du témoin extérieur au même rang : il a "
+        "été réécrit.",
+    WITNESS_ABSENT:
+        "aucun témoin extérieur n'a été enregistré pour cette chaîne : sa complétude ne peut pas "
+        "être établie.",
+    WITNESS_PARTIAL:
+        "ce document ne porte qu'une part de cette chaîne : ce n'est pas à ce lecteur d'établir où "
+        "elle se termine.",
+}
+
+
+def witness_sentence_fr(comparison: HeadComparison) -> str:
+    """The comparison as one sentence, with its count where it has one."""
+    base = WITNESS_FR[comparison.state]
+    if comparison.state == WITNESS_TRUNCATED:
+        n = comparison.missing
+        return f"{base} {n} acte{'s' if n > 1 else ''} manquant{'s' if n > 1 else ''}."
+    if comparison.state == WITNESS_UNWITNESSED:
+        n = comparison.unwitnessed
+        return f"{base} {n} acte{'s' if n > 1 else ''} concerné{'s' if n > 1 else ''}."
+    return base

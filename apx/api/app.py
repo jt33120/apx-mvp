@@ -30,7 +30,7 @@ from uuid import uuid4
 
 import pyotp
 from fastapi import Cookie, Depends, FastAPI, Form, HTTPException, Request, Response, UploadFile
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from sqlalchemy.exc import IntegrityError
@@ -50,9 +50,10 @@ from apx.adapters.originals_fs import FilesystemOriginalStore
 from apx.adapters.render_html import CompositePieceRenderer, HtmlPieceRenderer, MsgRenderer
 from apx.adapters.render_image import Pdf2ImageRasterizer
 from apx.adapters.store_postgres.admission import admit
-from apx.adapters.store_postgres.engine import make_session_factory
+from apx.adapters.store_postgres.opening import open_store
 from apx.adapters.store_postgres.queue import enqueue_import
 from apx.adapters.store_postgres.store import (
+    AuditUnwritable,
     ScopeConflict,
     ScopeDenied,
     SqlStore,
@@ -99,9 +100,8 @@ from apx.core.domain.config import (
 )
 from apx.core.domain.crypto import DecryptionError
 from apx.core.domain.freshness import Freshness
-from apx.core.domain.head_journal import open_journal
 from apx.core.domain.inventory import Inventory
-from apx.core.domain.matter_record import Tier
+from apx.core.domain.matter_record import Tier, read_continuity
 from apx.core.domain.override import MissingOverrideReason, ground_label_fr
 from apx.core.domain.sampling import KIND_BOUND, KIND_CENSUS
 from apx.core.domain.taxonomy_label import OutOfTaxonomyLabel
@@ -135,6 +135,32 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
 app = FastAPI(title="APX", version="0.1.0", lifespan=_lifespan)
 
 SESSION_COOKIE = "apx_session"
+
+
+@app.exception_handler(AuditUnwritable)
+def _audit_unwritable_handler(_request: Request, exc: AuditUnwritable) -> JSONResponse:
+    """FR-53's fourth consequence, at the boundary: *where the audit store cannot be written at
+    all, the application refuses the affected actions rather than degrading to an unaudited mode;
+    read-only functions may continue*.
+
+    Registered ONCE, for every route, rather than per handler — that is the difference between a
+    property and a habit. A write path that forgot to catch it would answer 500, which reads as *the
+    server broke* rather than as *the act was refused and nothing was written*; a write path that
+    caught it and continued would be the unaudited mode the requirement forbids. Read paths append
+    nothing, never raise this, and go on answering.
+
+    503, not 500: the act is refusable now and doable later, which is exactly what the state is."""
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": str(exc),
+            "sentence_fr": (
+                "L'acte est refusé : son inscription au journal d'audit n'a pas pu être écrite, "
+                "et rien n'a été enregistré. APX ne poursuit jamais un acte sans sa trace. La "
+                "consultation reste possible."
+            ),
+        },
+    )
 
 # ── hardening ──────────────────────────────────────────────────────────────────
 _MAX_UPLOAD_BYTES = 500 * 1024 * 1024
@@ -228,10 +254,11 @@ def _store() -> SqlStore | None:
     """The durable store, built from DATABASE_URL, wired to the head journal (AD-35) so every
     audited write records its chain head outside the restorable store. None when DATABASE_URL is
     unset — the stateless ingest computation still runs, but persistence, read-back and auth need
-    it. The journal's presence is enforced at start-up (the gate); here it is opened best-effort."""
+    it. Built through ``open_store``, the runtime's one door (Story 5.9); the journal's presence is
+    enforced at start-up by the gate, which is the only reason this call may pass
+    ``journal_required=False`` and the only place in the runtime that does."""
     try:
-        journal = open_journal(dict(os.environ), required=False)
-        return SqlStore(make_session_factory(), head_journal=journal)
+        return open_store(dict(os.environ), journal_required=False)
     except RuntimeError:
         return None
 
@@ -491,6 +518,31 @@ class ValidationLogOut(BaseModel):
     current_ranking_version_id: str | None = None
 
 
+class ChainReadingOut(BaseModel):
+    """What the continuity check concludes **from the document alone** (FR-53, Story 5.9).
+
+    Produced by ``apx.core.domain.matter_record.read_continuity``, a pure function over the exported
+    structure: the same call a reader holding nothing but this payload can make for themselves, and
+    which is the point of it appearing here rather than a verdict only the server can compute.
+    ``agrees_with_producer`` is the finding that has no counterpart anywhere else in the product —
+    the document's own claim, checked against the document's own material."""
+
+    chain_scope: str
+    label_fr: str
+    recomputable: bool
+    sound: bool
+    sentence_fr: str
+    verified: bool | None = None       # the READER's recomputation; None when not recomputable
+    printed_verified: bool = False     # what the cover claims
+    #: None when no recomputation was performed — a comparison nobody made is not agreement
+    agrees_with_producer: bool | None = None
+    broken_at: int | None = None
+    cause: str | None = None
+    witness_state: str = ""
+    witness_missing: int = 0
+    witness_unwitnessed: int = 0
+
+
 class MatterRecordOut(BaseModel):
     """The *matter* record as a document (FR-26). The tier decided what is here: a numbers-only
     document was BUILT without the client content, not built and then stripped."""
@@ -507,7 +559,10 @@ class MatterRecordOut(BaseModel):
     validation_summary: dict | None = None   # §7's counts, split by register and never pooled
     modified_values: int
     accepted_values: int          # §8 — only where a validation act occurred (FR-45)
+    trail: list[dict] = []        # §9 — the entries, so the cover's verdict can be contradicted
     pending: list[dict]
+    #: the continuity check, run on this document — on its face, per chain (FR-53)
+    continuity: list[ChainReadingOut] = []
 
 
 class RegisterOverrideIn(BaseModel):
@@ -1155,11 +1210,33 @@ class BackupStatusOut(BaseModel):
 
 
 class TruncationStatusOut(BaseModel):
+    """The discontinuity between the record and its outside witness (AD-35).
+
+    ``chains``, ``entries_lost``, ``kind`` and ``forks`` were computed by the store and dropped
+    here, so the administrator signing the FR-25 reason saw the WORST chain's pair and was never
+    told the total nor which *matters* fell — the flattering half of data the store already held.
+    ``kind`` distinguishes a truncation (acts removed) from a fork (the record rewritten): different
+    findings, different letters."""
+
     active: bool
     journal_seq: int
     live_seq: int
     detected_at: str | None
     cleared_at: str | None
+    kind: str = "truncated"
+    chains: str = ""
+    forks: str = ""
+    entries_lost: int = 0
+
+
+class JournalGapOut(BaseModel):
+    """Heads the journal could not record (AD-35). Persistent since Story 5.9: the alarm used to be
+    a boolean in one process's memory and cleared itself on the next restart."""
+
+    gaps: int
+    last_at: str | None = None
+    last_scope: str = ""
+    last_seq: int = 0
 
 
 class FootprintOut(BaseModel):
@@ -1173,6 +1250,7 @@ class DrStatusOut(BaseModel):
     truncation: TruncationStatusOut
     design_target_footprint: FootprintOut
     journal_degraded: bool  # the head journal (AD-35) could not be written — a monitored alarm
+    journal_gaps: JournalGapOut
 
 
 @app.get("/api/admin/dr", response_model=DrStatusOut)
@@ -1186,6 +1264,7 @@ def admin_dr_status(ident: Identity = Depends(require_admin)) -> DrStatusOut:
     interval = int(store.get_config(ident.tenant, "backup_interval_hours"))
     bs = store.backup_status(ident.tenant, interval)
     ts = store.truncation_status(ident.tenant)
+    gaps = store.journal_gap_status(ident.tenant)
     fp = capacity.design_target_footprint()
     return DrStatusOut(
         backup=BackupStatusOut(
@@ -1193,10 +1272,17 @@ def admin_dr_status(ident: Identity = Depends(require_admin)) -> DrStatusOut:
             interval_hours=bs.interval_hours),
         truncation=TruncationStatusOut(
             active=ts.active, journal_seq=ts.journal_seq, live_seq=ts.live_seq,
-            detected_at=ts.detected_at, cleared_at=ts.cleared_at),
+            detected_at=ts.detected_at, cleared_at=ts.cleared_at, kind=ts.kind,
+            chains=ts.chains, forks=ts.forks, entries_lost=ts.entries_lost),
         design_target_footprint=FootprintOut(
             piece_count=fp.piece_count, total_bytes=fp.total_bytes, human=fp.human),
-        journal_degraded=store.journal_degraded)
+        # OR, not the flag alone: the in-process flag cannot survive a restart and the import
+        # worker never had a journal to fail, so a deployment could hold recorded gaps and report
+        # itself healthy on every screen the moment the API restarted.
+        journal_degraded=store.journal_degraded or gaps.gaps > 0,
+        journal_gaps=JournalGapOut(
+            gaps=gaps.gaps, last_at=gaps.last_at, last_scope=gaps.last_scope,
+            last_seq=gaps.last_seq))
 
 
 class TruncationOverrideIn(BaseModel):
@@ -2043,6 +2129,21 @@ def export_matter_record(
     payload = dataclasses.asdict(record)
     payload["cover"]["degraded"] = record.cover.degraded
     payload["cover"]["degraded_sentence_fr"] = record.cover.degraded_sentence_fr
+    # The continuity check RUNS on the document (FR-53). Deliberately over ``record`` and not over
+    # the store: it is the same pure call a reader holding only this payload can make, so what
+    # appears on the face is reproducible by whoever receives it rather than asserted at them.
+    payload["continuity"] = [
+        ChainReadingOut(
+            chain_scope=r.chain_scope, label_fr=r.label_fr, recomputable=r.recomputable,
+            sound=r.sound, sentence_fr=r.sentence_fr,
+            verified=r.verdict.verified if r.verdict is not None else None,
+            printed_verified=r.printed_verified, agrees_with_producer=r.agrees_with_producer,
+            broken_at=r.verdict.broken_at if r.verdict is not None else None,
+            cause=r.verdict.cause if r.verdict is not None else None,
+            witness_state=r.comparison.state, witness_missing=r.comparison.missing,
+            witness_unwitnessed=r.comparison.unwitnessed).model_dump()
+        for r in read_continuity(record)
+    ]
     return MatterRecordOut(**payload)
 
 

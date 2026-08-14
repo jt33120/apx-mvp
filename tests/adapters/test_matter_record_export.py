@@ -26,7 +26,7 @@ from apx.core.domain import audit as AUDIT
 from apx.core.domain.cascade import Band, CascadeResult, PieceJudgement, Stage
 from apx.core.domain.config import CascadeConfig
 from apx.core.domain.failures import ErrorClass
-from apx.core.domain.matter_record import Tier
+from apx.core.domain.matter_record import Tier, read_continuity
 from apx.core.domain.ranking import RankingIdentityInputs, assemble_identity, rank_cascade
 from apx.core.domain.triage_sets import PinSide
 
@@ -190,13 +190,39 @@ def test_the_cover_states_the_wall_it_was_produced_under(store: SqlStore) -> Non
 def test_the_continuity_verdict_is_per_chain_and_says_which_one_the_reader_can_recompute(
     store: SqlStore,
 ) -> None:
-    # AD-43: one boolean over both would claim a property of bytes the reader does not hold
-    chains = _export(store).cover.chains
-    own = next(c for c in chains if c.chain_scope == MATTER)
+    """AD-43: one boolean over both would claim a property of bytes the reader does not hold.
+
+    **Story 5.9 rewrote this test rather than its subject.** It used to read
+    ``recomputable_from_this_document`` and assert it was True — a boolean computed, at the time,
+    from whether the tenant's head row in the DATABASE carried an anchor. It passed on a
+    numbers-only document that carried no audit entries whatsoever, which is to say it asserted the
+    flag rather than the thing the flag is named after. It now attempts the recomputation.
+    """
+    full = _export(store, Tier.FULL)
+    own = next(c for c in full.cover.chains if c.chain_scope == MATTER)
     assert own.verified and own.recomputable_from_this_document
     assert own.label_fr == f"affaire « {MATTER} »"
-    for other in (c for c in chains if c.chain_scope != MATTER):
+    assert own.anchor, "a matter chain carries the value its first entry chains onto"
+    assert [e for e in full.trail if e.chain_scope == MATTER], "…and the entries to check it with"
+    reading = next(r for r in read_continuity(full) if r.chain_scope == MATTER)
+    assert reading.recomputable and reading.verdict is not None and reading.verdict.verified
+    assert reading.agrees_with_producer, "the reader's recomputation contradicted the cover"
+    # AD-43: the tenant chain is never recomputable from a scoped export, in either tier
+    for other in (c for c in full.cover.chains if c.chain_scope != MATTER):
         assert not other.recomputable_from_this_document
+
+
+def test_a_numbers_only_document_says_it_carries_the_producers_word(store: SqlStore) -> None:
+    """The tier drops §9 like every other content-bearing section — an entry's ``detail`` carries a
+    lawyer's own search terms for some verbs. What must NOT happen is the document going on claiming
+    the reader can recompute it: the honest sentence is the alternative to the false flag."""
+    numbers_only = _export(store, Tier.NUMBERS_ONLY)
+    assert numbers_only.trail == ()
+    own = next(c for c in numbers_only.cover.chains if c.chain_scope == MATTER)
+    assert not own.recomputable_from_this_document
+    reading = next(r for r in read_continuity(numbers_only) if r.chain_scope == MATTER)
+    assert reading.verdict is None and not reading.sound
+    assert "affirmée par le producteur" in reading.sentence_fr
 
 
 def test_an_unacknowledged_truncation_is_named_on_the_face(store: SqlStore) -> None:

@@ -23,6 +23,17 @@ case "$APX_VOLUME_ENCRYPTED" in
     exit 1 ;;
 esac
 
+# Head-journal pre-flight (AD-35, Story 5.9), on the same footing as the encryption key. The
+# journal is what makes a truncation detectable at all, and since 5.9 EVERY writing process —
+# the API, the import worker and the manage commands — opens it required. A container started
+# without it fails here, with a sentence, rather than at the first import job.
+if [ -z "$APX_HEAD_JOURNAL" ]; then
+  echo "APX_HEAD_JOURNAL is required (the chain head is recorded OUTSIDE the restorable store," \
+       "on a volume the database dump does not cover — AD-35). Without it a restore that" \
+       "shortens the audit record is undetectable." >&2
+  exit 1
+fi
+
 echo "apx: applying migrations…"
 alembic upgrade head
 

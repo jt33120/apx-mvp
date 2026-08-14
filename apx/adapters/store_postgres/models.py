@@ -606,18 +606,36 @@ class BackupRecord(Base):
 
 
 class TruncationMarker(Base):
-    """A detected restore-truncation (story 1.11, AD-35): the live chain head fell BEHIND the head
-    journal — the record now ends earlier than it did. Persistent and **never repaired**; cleared
-    only by an audited override with a reason. One row per tenant, carrying EVERY chain the latest
-    detection found truncated (a restore rolls the whole database back, so several chains fall at
-    once) together with the total number of entries lost."""
+    """A detected discontinuity between the record and the head journal (story 1.11 / 5.9, AD-35).
+    Persistent and **never repaired**; cleared only by an audited override with a reason. One row
+    per tenant, carrying EVERY chain the latest detection found discontinuous (a restore rolls the
+    whole database back, so several chains fall at once) with the total number of entries lost.
+
+    Two findings share the row, and ``kind`` says which (Story 5.9). A **truncation** is a live head
+    BEHIND the journal: the record ends earlier than it did. A **fork** is a live value that DIFFERS
+    from the journalled one at a sequence both hold: the record was rewritten and re-chained, which
+    no comparison of lengths can see and which every in-store check passes. They share one row
+    because AD-35 gives a discontinuity exactly one way out — an audited override — and two ways out
+    is one way out and one hole."""
 
     __tablename__ = "truncation_marker"
+
+    #: the two findings, and ``both`` when one detection saw each on different chains
+    KIND_TRUNCATED = "truncated"
+    KIND_FORKED = "forked"
+    KIND_BOTH = "both"
 
     tenant: Mapped[str] = mapped_column(String, primary_key=True)
     detected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     journal_seq: Mapped[int] = mapped_column(Integer, nullable=False)   # where the record was
     live_seq: Mapped[int] = mapped_column(Integer, nullable=False)      # where it ends now
+    kind: Mapped[str] = mapped_column(
+        String, nullable=False, default=KIND_TRUNCATED, server_default=KIND_TRUNCATED)
+    #: every FORKED chain with the sequence the two disagree at, "scope@seq, …". Kept apart from
+    #: ``chains`` (the truncated ones) because the two findings do not add up: an act that was
+    #: removed and an act that was rewritten are different losses and a single list of scopes would
+    #: leave a reader unable to say which happened to which chain.
+    forks: Mapped[str | None] = mapped_column(Text, nullable=True)
     # Story 5.5 — a tenant now runs SEVERAL chains (AD-43), so one restore truncates several at
     # once and the pair above can only describe one of them. ``chains`` names every truncated
     # chain with its own loss, and ``entries_lost`` is the TOTAL. Without them the marker reported
@@ -631,6 +649,33 @@ class TruncationMarker(Base):
     reason: Mapped[str | None] = mapped_column(
         EncryptedText("truncation_marker.reason"), nullable=True)
     cleared_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+
+
+class JournalGap(Base):
+    """A chain head the head journal could not record (Story 5.9, AD-35).
+
+    The head journal is what makes a truncation detectable at all, and it is written after the
+    commit — so a failed journal write leaves an act on the chain with no outside witness, and a
+    later truncation back to that point is undetectable. Until this table the condition was
+    ``SqlStore.journal_degraded``, a boolean in one process's memory: it cleared on the next
+    restart, the import worker could never raise it, and clearing it required nothing at all. That
+    is a silent repair of the one condition AD-35 exists to make loud.
+
+    Append-only, like every other evidential ledger here: a gap is closed by recording the head
+    later, never by deleting the row that says it was missing."""
+
+    __tablename__ = "journal_gap"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    #: the JOURNAL scope, not the chain scope — the bare tenant for the tenant chain and
+    #: ``tenant␟matter`` for a matter chain, so this row and the journal line it stands in for are
+    #: keyed identically and no reconciliation has to translate between two spellings
+    scope: Mapped[str] = mapped_column(String, nullable=False)
+    seq: Mapped[int] = mapped_column(Integer, nullable=False)
+    chain: Mapped[str] = mapped_column(String(64), nullable=False)
+    at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    detail: Mapped[str | None] = mapped_column(Text, nullable=True)  # the write failure, verbatim
 
 
 class RecallReview(Base):

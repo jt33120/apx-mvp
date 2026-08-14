@@ -52,6 +52,14 @@ def tenant_of(scope: str) -> str:
     return scope.split(SCOPE_SEP, 1)[0]
 
 
+def chain_of(scope: str) -> str:
+    """The ``chain_scope`` inside a journalled identity: the *matter*, or ``""`` for the *tenant*
+    chain. The inverse of :func:`journal_scope`, so a caller comparing a journalled head against a
+    live one never has to spell the chain a second way."""
+    parts = scope.split(SCOPE_SEP, 1)
+    return parts[1] if len(parts) == 2 else ""
+
+
 @dataclass(frozen=True)
 class HeadEntry:
     """One recorded chain head. ``scope`` is the chain identity from :func:`journal_scope`: the
@@ -67,13 +75,29 @@ class HeadEntry:
 
 @dataclass(frozen=True)
 class Reconciliation:
-    """The comparison of a live chain head against the journal's latest for one scope. ``truncated``
-    is True when the live head is BEHIND the journal — the record ends earlier than it did."""
+    """The comparison of a live chain head against the journal's latest for one scope.
+
+    ``truncated`` is True when the live head is BEHIND the journal — the record ends earlier than it
+    did. ``forked`` is True when the two hold DIFFERENT VALUES at a sequence they both hold — the
+    record was rewritten and re-chained, which no comparison of lengths can see. The second is the
+    reason the journal has recorded a chain value on every advance since Story 1.11; until Story 5.9
+    nothing read it back, and a forged restore of the same length satisfied every check the product
+    ran, all of which compared one in-store value against another."""
 
     scope: str
     live_seq: int
     journal_seq: int
     truncated: bool
+    forked: bool = False
+    witnessed_seq: int = 0     # the sequence at which the two values were compared (0: nowhere)
+    journal_chain: str = ""    # what the outside record holds there
+    live_chain: str = ""       # what the record now carries there
+
+    @property
+    def diverged(self) -> bool:
+        """Either finding. Both are a discontinuity, both are cleared only by an audited override,
+        and a caller that handles one and not the other is the bug this exists to prevent."""
+        return self.truncated or self.forked
 
 
 class HeadJournal:
@@ -115,9 +139,21 @@ class HeadJournal:
             if not line:
                 continue
             try:
-                out.append(HeadEntry(**json.loads(line)))
+                entry = HeadEntry(**json.loads(line))
             except (ValueError, TypeError):
                 continue  # a malformed line is skipped; a truncation shows in the valid heads
+            # A dataclass does not check types, and this file is APPEND-ONLY: one line carrying
+            # ``"seq": "9999"`` — which a restore can seed straight from an untrusted backup's head
+            # tail — used to be accepted here and then raise ``TypeError`` comparing str to int in
+            # every later reconciliation, forever, including the one in the boot path. A poisoned
+            # line must be skippable on READ, because it can never be removed.
+            if not isinstance(entry.seq, int) or isinstance(entry.seq, bool):
+                continue
+            if not all(isinstance(v, str) for v in (
+                    entry.scope, entry.chain, entry.recorded_at,
+                    entry.app_version, entry.schema_version)):
+                continue
+            out.append(entry)
         return out
 
     _entries = entries  # internal alias (kept for the methods below)
@@ -133,6 +169,25 @@ class HeadJournal:
             if e.scope not in latest or e.seq > latest[e.scope].seq:
                 latest[e.scope] = e
         return latest
+
+    def witness_upto(self, scope: str, seq: int) -> HeadEntry | None:
+        """The most advanced head this journal recorded for ``scope`` **at or before** ``seq``, or
+        None when it never recorded one that early.
+
+        The journal records a head per commit, not per entry, so the two sides rarely hold the same
+        sequence number; the only point at which an outside value and a live value can be compared
+        at all is the highest one the outside record reached without overrunning the live one. A
+        comparison taken at the journal's own latest instead would report every ordinary lagging
+        journal as a disagreement."""
+        best: HeadEntry | None = None
+        for e in self.entries():
+            # ``>=``, not ``>``: several lines can carry the same sequence — an acknowledged head is
+            # written at the sequence the record already stood at — and the LAST one written is the
+            # one that speaks for that point. Taking the first would let an acknowledgement be
+            # answered forever by the line it was signed to settle.
+            if e.scope == scope and e.seq <= seq and (best is None or e.seq >= best.seq):
+                best = e
+        return best
 
     def reconcile(self, scope: str, live_seq: int) -> Reconciliation:
         """Compare a live chain head against the journal's latest. A live seq BELOW the journal's
