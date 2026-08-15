@@ -4,15 +4,21 @@ Mass-document triage for law firms. Hexagonal core, adapters at the edges, **one
 stateful service** (PostgreSQL). Runs the same one artefact hosted, in CI, and
 air-gapped inside a firm (AD-3).
 
-> **Status: story 1.11 — backup, restore & disaster recovery.** The frozen payload schema (1.3),
-> the *tenant* wall (1.4), owned auth (1.5), scope administration (1.6), encryption at rest with a
-> fail-closed start-up gate (1.7), secrets held only in the environment (1.8), configuration-as-data
-> through one audited surface (1.9), the content-free projection primitive (1.10), and now **a head
-> journal held outside the restorable store** so a dump restore can no longer silently truncate the
-> evidential record, a **complete tenant-boundary backup + an exercised restore**, and a **stated
-> storage footprint with a pre-flight capacity refusal** (1.11) — exist; ingestion, retrieval and the
-> model tiers do not yet. What is deliberately absent, and which story owns it, is listed at the
-> bottom.
+> **Status: Epics 1–5 complete (5.9 closed 2026-08-14, `69ca1cb`). Epic 6 is next and has not
+> started.** The platform (1.1–1.12), ingestion and the timed 5 000-*pièce* gate (2.1–2.13),
+> retrieval with a declared truth status and the *pièce* read path (3.1–3.5d), triage — one ranked
+> order, **the line**, pins, nothing deleted and nothing categorised (4.1–4.13) — and the
+> statistical and evidential layer: a sampling run over the derived discarded set, a hypergeometric
+> estimator **proven by simulation before it is allowed to speak**, one owner for the sentence, an
+> *audit record* chained per (*tenant*, *matter*) that a *bâtonnier* can verify from the export
+> alone, overrides with a mandatory reason, the drawer and its export, the validation act, and
+> continuity — the record cannot be **shortened** without saying so (5.1–5.9).
+>
+> **Epic 6 remains:** the *retained set* export, the client-pushed diagnostic, i18n keys, locale,
+> the language reaching the model, and the usability gate. Three architecture contracts (AD-46
+> upgrade-fails-closed, AD-49, AD-44) are deferred and **owned by no story** — see action item B5 in
+> `_bmad-output/implementation-artifacts/epic-5-retro-2026-08-14.md`. What is deliberately absent,
+> and which story owns it, is listed at the bottom.
 
 Planning artefacts (PRD, architecture spine, epics, stories) live under
 `_bmad-output/planning-artifacts/`. The previous implementation at
