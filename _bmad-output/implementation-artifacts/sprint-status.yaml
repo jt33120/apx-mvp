@@ -166,19 +166,23 @@ action_items:
   - epic: 5
     action: "B2 — re-review stories 5.6, 5.7 and 5.8 with the adversarial fleet now that orchestration is available. They were reviewed INLINE by one reader and they are the stories that produce what leaves the building (the matter record a batonnier reads, and the claim 'a human read this'). The inline pass on 5.7 confirmed ONE finding; 5.9's fleet found NINE in code whose tests were green. Same lenses as 5.9 plus A3 and A4"
     owner: "Dev"
-    status: open
+    status: in-progress
+    resolution: "PHASE 1 DONE 2026-08-15: 4 lenses x 3 stories, 12/12 returned, 0 lost, 64 candidate findings (5.6:19, 5.7:24, 5.8:21). The prediction held — the inline pass on 5.7 had confirmed ONE finding and the fleet raises 24 candidates on it, with FOUR independent lenses converging on each of three separate 5.7 defects. Deduplicated to 10 distinct HIGH defects. PHASE 2 (2 independent skeptics per defect, one attacking the mechanism and one the consequence, both defaulting to REFUTED) was still running when this line was written — findings are CANDIDATES, not confirmed, and nothing has been fixed yet"
   - epic: 5
     action: "B3 — build the decision-implementation audit, the epic's dominant finding: every [ADOPTED] AD in ARCHITECTURE-SPINE.md is either implemented at a named site or deferred with an owner written down, ideally as a structural check so the build fails when an adopted decision has neither. Epic 5 hit this four times on load-bearing decisions — AD-43 decided before anything was built and implemented only in 5.5 (until then every batonnier export reported tampering on an untampered record), HeadEntry.chain journalled since 1.11 and read by nobody until 5.9, audit_chain_head outside _BACKUP_TABLES since 1.11 (it touched every backup the deployment holds), and the banned-phrasing check English-only and green for eleven stories over an all-French product"
     owner: "Dev"
-    status: open
+    status: done
+    resolution: "b3-b4-audit-2026-08-15.md — 49/49 ADs, 7 auditors + 7 skeptics, 0 chunks lost, 0 unadjudicated, 13 verdicts overturned and EVERY overturn toward the harsher reading. Verdict labels are inflated by the instruction to lean harsh, so the document reports verified citations rather than a score. Seven findings re-verified by hand; two agent claims overturned by that check (AD-18's deferral IS recorded in stories 4.6/4.13; AD-39's 'violation' conflates the Story-2.x label pile with the Epic-4 derived view). New items C1-C8"
   - epic: 5
     action: "B4 — the same sweep for the FRs, clause by clause. FR-23 has four clauses; three were built across earlier stories and the fourth (the worklist line) was claimed by no story at all, found by three lenses in 5.4. A requirement two-thirds implemented reads from the outside exactly like one that is finished"
     owner: "Dev"
-    status: open
+    status: done
+    resolution: "b3-b4-audit-2026-08-15.md — 60/60 FRs, 6 auditors + 6 skeptics, 0 lost, 0 unadjudicated, 27 verdicts overturned (all toward the harsher reading), 141 clauses recorded as not built. The systematic pattern, and the reason the count is 141 rather than a defect list: a large coherent share are the SAME clause — 'and it surfaces on the worklist as an actionable line' / 'where an entry is required to be actionable, the action must exist' — across FR-1, 2, 3, 5, 6, 7, 9, 10. The mechanism was built every time and the half that TELLS the lawyer was not. That is one story (C5), not 141 defects, and it is the largest risk to FR-59's usability gate"
   - epic: 5
     action: "B5 — give AD-46, AD-49 and AD-44 an owner: a story in epic 6 or a new epic 7 for deployment and operations. All three are named as deferred inside story files and owned by NO story in epics.md (AD-46 lives in cross-cutting prose at epics.md:395-396, outside every epic). AD-46 first: upgrade.sh + the verified pg_dump before every Alembic migration + the recorded audit head — a migration is the second operation that can destroy the record and it is currently ungated"
     owner: "Julian + Dev"
     status: open
+    resolution: "SCOPE GREW, 2026-08-15. The B3/B4 audit found the unowned pile is larger than AD-46/49/44: the ranking wiring (C4) is the substrate of 22 shipped stories and belongs to no epic, and the worklist half (C5) is a clause repeated across eight FRs. Whatever epic 7 is created for AD-46/49/44 should carry C4 and C5, and C4 should come first — Epic 6's own story 6.1 exports a retained set derived from a ranking no user can produce"
   - epic: 5
     action: "B6 — decide what the live deployment is for. apx-production.up.railway.app is a 2026-07-23 snapshot (~45 stories and 7 migrations behind master), builder RAILPACK so docker/entrypoint.sh and its fail-closed pre-flights never run, APX_ENCRYPTION_KEY and APX_VOLUME_ENCRYPTED unset (AD-31), APX_HEAD_JOURNAL unset with no volume mount (AD-35 — a correctly built container would now REFUSE to start there), and region us-west2 against the project's first non-negotiable, EU-only. Either bring it to master on an EU region built from the Dockerfile with a persistent volume, or take it down"
     owner: "Julian"
@@ -186,12 +190,49 @@ action_items:
   - epic: 5
     action: "B7 — keep the A3 (wrong referent) and A4 (seams) lenses permanently in every review, and add a third: which decision or requirement does this diff claim to implement, and is every clause of it actually reachable?"
     owner: "Dev"
-    status: open
+    status: done
+    resolution: "written into CLAUDE.md's 'The story cycle' section (commit 4383490) so it survives a fresh session with no conversation history: the three standing lenses, the two-independent-skeptics-defaulting-to-REFUTED standard, and the duty to report coverage lost. Exercised the same day by B2 (12/12 lenses, 0 lost) and by B3/B4 (26 agents, 0 lost)"
   - epic: 5
     action: "B8 — A8 carried: French orthotypography across every register (95 %, 1,4 %, 1 400), fixed once when the locale mechanism lands in story 6.4"
     owner: "Dev (story 6.4)"
     status: open
+# Action items from the B3/B4 audit (2026-08-15).
+# Full context: implementation-artifacts/b3-b4-audit-2026-08-15.md
+# Every finding below was re-verified by hand after the agents reported it.
+  - epic: 5
+    action: "C1 BLOCKING SECURITY — POST /api/ingest takes `folder` as a bare str off the request body and validates it with one line, `if not folder.is_dir()`. No root, no containment, no allowlist (apx/api/app.py:1347, IngestRequest at :383). Any authenticated user holding any scope can name any directory the API process can read and have it walked, extracted, PERSISTED INTO THEIR OWN MATTER under their own RBAC scope, with originals retained — reading across every matter wall and every tenant on the host, under a product whose stated non-negotiables are Chinese walls and tenant isolation. Registered as a live production action (ingest-folder-route). The SPA uses /api/ingest-upload, but the API is the boundary. Story 2.1's review FOUND AND FIXED a traversal on the upload path and never asked the same question of the sibling route. FR-1's three traversal clauses (confinement to the subtree, a traversal-outside-root register class, cycle detection) are all unbuilt. Confine to a configured root, refuse outside it, build the three clauses, add a structural check"
+    owner: "Dev"
+    status: open
+  - epic: 5
+    action: "C2 BLOCKING — nine tenant-scoped tables are absent from _BACKUP_TABLES, derived from the live model metadata (35 mapped, 29 tenant-scoped, 20 in the backup): artefact_stamp, case_theory_version, import_job, piece_open, ranked_entry, ranking_version, register_override, sampling_run, validation_act. A restore loses every ranking and ranked order, every case theory, every sampling run and therefore every confidence bound, every validation act, every recorded piece-open, every override and every freshness stamp — while the audit record SURVIVES, so the restored record attests a validation whose ledger is gone. The list is hand-maintained: 5.5 added audit_chain_head, 5.9 added journal_gap, B2 independently found register_override missing, and nobody ever asked whether the list was complete. Make it complete BY CONSTRUCTION: a structural check asserting every tenant-scoped mapped table is in the backup or on a written exclusion list with a reason — the test_never_hard_delete discipline applied to DR"
+    owner: "Dev"
+    status: open
+  - epic: 5
+    action: "C3 — AD-32's Rule opens 'a complete restorable backup of a tenant — ORIGINALS, extracted text, index, audit record, failure register, configuration'. backup_tenant (store.py:3187) runs SELECT * FROM {tbl} over _BACKUP_TABLES and nothing else; the string 'original' does not appear in the function; the originals live on the filesystem under FilesystemOriginalStore. The backup is also written as PLAINTEXT JSON (apx/manage.py:123). Put the originals in the backup, or amend AD-32 to say they are out of it"
+    owner: "Dev + Julian"
+    status: open
+  - epic: 5
+    action: "C4 BLOCKING PLANNING — the ranking act has no production caller. grep over apx/ returns definitions only; apx/api/app.py has ZERO references to produce_ranking, record_ranking or run_cascade; 8 test files call it. No HTTP route, no worker job, no manage command creates a ranking version — the only judgement a user can invoke is POST /api/matters/{matter}/judge, which runs triage_pieces (the Story-2.x label pile), not the Epic-4 cascade. This IS recorded (stories 4.6 and 4.13 both state the deferral in writing) which makes it worse rather than better: the ranked table, the line, pins, the priced move, derived confidence, justifications, the sampling run, the estimator, the bound, the validation act and sections 5-9 of the matter record — 22 shipped stories — all stand on an act no user gesture can perform, and epics.md schedules the wiring in NO story. Epic 6 is the last epic in the plan and does not contain it"
+    owner: "Julian + Dev"
+    status: open
+  - epic: 5
+    action: "C5 — build the worklist half. Of 141 clauses the B4 sweep records as not built, a large coherent share are one sentence repeated across FR-1, 2, 3, 5, 6, 7, 9 and 10: 'and it surfaces on the worklist as an actionable line' / 'and generates a worklist line' / 'where an entry is required to be actionable, the action must exist'. The mechanism was built every time; the half that TELLS the lawyer and gives her the control was not. core/domain/worklist.py emits freshness lines and FR-23's unfitness line and nothing else. One story, not 141 defects — and the largest single risk to FR-59's usability gate, which would otherwise review surfaces that do not exist"
+    owner: "Julian + Dev"
+    status: open
+  - epic: 5
+    action: "C6 — restore AD-4's two tightening contracts in pyproject.toml:137-146. Both are commented out and labelled '# tightened in 1.12'; story 1.12 is DONE. An AST walk of apx/adapters finds 13 cross-package import edges across 8 distinct package pairs (store_postgres -> embedder_bgem3/expansion/extraction/ocr_tesseract/originals_fs; render_html -> extraction/spool; render_image -> spool). The commented contract would not restore the property: an `independence` contract constrains only edges BETWEEN listed modules and it names five, so it reaches 3 of the 8 pairs. Size it to the tree as it now is"
+    owner: "Dev"
+    status: open
+  - epic: 5
+    action: "C7 — settle AD-22 against AD-6 for bulk acts, in the spine, in writing. SqlStore.bulk_retry (store.py:2010-2034) opens a transaction INSIDE the candidate loop and writes the single bulk-retry audit entry in an (N+1)th transaction after it, so N business acts commit and a crash before the last one leaves them recorded nowhere. AD-22 says an act whose entry cannot be written FAILS, both or neither; AD-6/FR-5 require exactly one entry per bulk job, never one per piece. The two cannot both hold for this shape and the code chooses AD-6 silently. This needs a decision, not a fix"
+    owner: "Julian + Dev"
+    status: open
+  - epic: 5
+    action: "C8 — re-run the B3/B4 audit at the close of every epic, as the retrospective is. Both fan-outs are scripted; together they cost about 5.3 M tokens and 26 agents. Also unverified and left as work rather than filed as a finding: whether the LLM judge's swallowed transport failure (apx/adapters/llm_openai_compat/judge.py:80 returns Verdict(UNCERTAIN) on any exception, against AD-19's 'loud failure everywhere, nothing is imputed') then produces a DERIVED confidence carrying a named observable signal from a model response that does not exist"
+    owner: "Dev"
+    status: open
   - epic: 5
     action: "B9 — measure story 5.8's 1 700-piece batch (one transaction, one IN clause, 1 700 ledger rows + 3 400 audit entries against one head row) and the head journal's parse time at realistic size against the 2.13 timed harness. Both are named as unmeasured; AD-44 is the contract they would trip"
     owner: "Dev"
-    status: open
+    status: done
+    resolution: "b9-evidential-measurement-2026-08-15.md, instrument apx/timedrun/evidential.py + 6 tests. BOTH LINEAR, neither trips AD-44 at the design target. The batch: 1.19/1.22/1.23/1.13 ms per piece at n=100/425/1700/3400 — no super-linear term, peak RSS 133->159 MiB across a 34x growth; 1 700 pieces is ~2.1 s of held transaction, and contention is excluded from AuditUnwritable so a concurrent act WAITS rather than failing. The journal: ~4.5 us/line, 500 000 lines = 105 MiB parsed in 2.4 s, and it grows one line PER COMMIT AND CHAIN (not per entry — _write_heads keeps the highest seq per chain), so the 1 700-piece batch produces one or two lines. Story 1.11's deferral of compaction holds, with a crossover now written down: ~1 000 000 lines is ~5 s per reconciliation, and reconciliation runs at every boot. NOT measured, and stated as such: contention (many writers on one head under FOR UPDATE on real PostgreSQL) — that is AD-44's actual subject and belongs with the 2.13 run. measurements.json untouched (NFR-2)"
