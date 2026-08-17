@@ -30,6 +30,34 @@ def _encryption_provisioned() -> None:
 
 
 @pytest.fixture(autouse=True)
+def _ingest_root(tmp_path):  # noqa: ANN001, ANN201
+    """A per-test ingestion root (story 7.1, FR-1).
+
+    Server-side folder ingestion is confined to ``APX_INGEST_ROOT`` and refuses EVERY folder when it
+    is unset — so without this the whole suite's ingest paths would refuse. The root is the test's
+    own ``tmp_path``, which is where every test builds the folders it submits.
+
+    Its corollary is that a test pinning ``APX_DATA_PATH`` must pin it to a SUBDIRECTORY of
+    ``tmp_path`` and not to ``tmp_path`` itself: a root that can reach ``originals/`` or ``spool/``
+    is exactly the configuration ``ingest_root`` refuses, because those two directories hold another
+    *matter*'s retained documents and another user's upload in flight. That is also the shape a real
+    deployment has, so the suite is not modelling something the product does not do.
+
+    The fail-closed branches — unset, reaching the originals, a folder outside the root — are driven
+    with explicit env in ``tests/api/test_ingest_confinement.py``, the way the encryption gate's
+    branches are driven in ``tests/api/test_startup_gate.py``.
+    """
+    root = tmp_path
+    prior = os.environ.get("APX_INGEST_ROOT")
+    os.environ["APX_INGEST_ROOT"] = str(root)
+    yield root
+    if prior is None:
+        os.environ.pop("APX_INGEST_ROOT", None)
+    else:
+        os.environ["APX_INGEST_ROOT"] = prior
+
+
+@pytest.fixture(autouse=True)
 def _fresh_head_journal(tmp_path) -> None:  # noqa: ANN001
     # A throwaway head journal (story 1.11, AD-35) so the start-up gate passes under TestClient —
     # PER TEST, so heads recorded by one test's app boot never make a later test's fresh-DB tenant

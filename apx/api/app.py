@@ -105,6 +105,14 @@ from apx.core.domain.matter_record import Tier, read_continuity
 from apx.core.domain.override import MissingOverrideReason, ground_label_fr
 from apx.core.domain.sampling import KIND_BOUND, KIND_CENSUS
 from apx.core.domain.taxonomy_label import OutOfTaxonomyLabel
+from apx.core.domain.traversal import (
+    OutsideRoot,
+    RootNotConfigured,
+    RootOverlapsDataVolume,
+    ingest_root,
+    resolve_within,
+    walk_confined,
+)
 from apx.core.domain.triage_table import ChangeLogEntry
 from apx.core.domain.validation import ASSERTION_FR, is_stale, provenance_sentence_fr
 from apx.core.ports.embedding import Embedder
@@ -1344,10 +1352,28 @@ def ingest(req: IngestRequest, ident: Identity = Depends(current_identity)) -> I
             status_code=400,
             detail="un détenteur est requis (« détenteur inconnu » si vraiment inconnu)",
         )
-    folder = Path(req.folder)
-    if not folder.is_dir():
-        raise HTTPException(status_code=400, detail=f"not a folder: {req.folder}")
-    _capacity_preflight(sum(1 for p in folder.rglob("*") if p.is_file()))  # refuse if it won't fit
+    # FR-1 / Story 7.1: the folder is a caller-supplied path, so it is confined to the deployment's
+    # declared root before ANY filesystem call whose behaviour depends on it. Until this story it
+    # was validated by `folder.is_dir()` alone, which let any authenticated user name any directory
+    # the API could read — including $APX_DATA_PATH/originals and another user's upload spool.
+    try:
+        root = ingest_root()
+    except RootNotConfigured as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except RootOverlapsDataVolume as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    try:
+        folder = resolve_within(root, req.folder)
+        if not folder.is_dir():
+            raise OutsideRoot
+    except OutsideRoot as exc:
+        # ONE answer for "outside the root" and for "does not exist": a caller must not be able to
+        # map the server's filesystem one request at a time (FR-14's non-disclosure, which every
+        # identifier-taking route already follows).
+        raise HTTPException(
+            status_code=400, detail="dossier introuvable dans l'arborescence autorisée") from exc
+    walk = walk_confined(folder)
+    _capacity_preflight(len(walk.files))  # the walk that ingests, not a second one (AC-6)
     store = _store()
     bounds = (expansion_bounds(lambda k: store.get_config(ident.tenant, k))
               if store is not None else ExpansionBounds.defaults())

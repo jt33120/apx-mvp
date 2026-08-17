@@ -75,6 +75,7 @@ from apx.checks import (
     statement,
     taxonomy_label_ownership,
     tenant_isolation,
+    traversal,
     triage_sets_one_derivation,
     truth_status,
     truth_status_surface,
@@ -686,6 +687,12 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        continuity.an_audit_write_failure_is_never_swallowed,
        "every try/except around an _append_audit call across apx/** — a handler that logs and "
        "continues is the unaudited mode AD-22 forbids by name"),
+    # ── story 7.1: the ingestion boundary (FR-1 / C1) ────────────────────────────────────────
+    _p("filesystem-has-one-walk", "FR-1", "AD-33", "the filesystem has one walk",
+       traversal.the_filesystem_has_one_walk,
+       "every rglob/glob/iterdir/walk/scandir/listdir call across apx/** — the confined walk is "
+       "where the submitted subtree's boundary is applied, and the route validated a "
+       "caller-supplied absolute path with is_dir() before handing it to a second traversal"),
     _p("override-ground-named", "FR-25", "AD-33", "an override names its FR-25 ground",
        override.override_names_its_ground,
        "the act catalogue (every override names one of FR-25's three grounds; the override class "

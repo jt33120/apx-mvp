@@ -24,6 +24,20 @@ from apx.api.app import app
 from apx.core.app.ingest import IngestedPiece, IngestionResult
 from apx.core.domain.ocr_layout import OcrLayout, OcrPage
 
+
+def _data(tmp_path):  # noqa: ANN001, ANN202
+    """The data volume, in its own subdirectory.
+
+    Story 7.1: APX_INGEST_ROOT is the test's tmp_path, and a root that can reach
+    $APX_DATA_PATH/originals or /spool is refused — those hold another matter's
+    retained documents and another user's upload. So the data volume sits BESIDE the
+    ingestable tree rather than inside it, which is also how a deployment separates them.
+    """
+    d = tmp_path.parent / f"{tmp_path.name}-data"
+    d.mkdir(exist_ok=True)
+    return d
+
+
 SECRET = "test-secret"
 TENANT, WALL, OTHER_WALL = "t", "wall-a", "wall-b"
 _LAYOUT = OcrLayout(
@@ -45,7 +59,7 @@ def _prepare(tmp_path: Path, monkeypatch) -> SqlStore:
     Base.metadata.create_all(create_engine(url))
     monkeypatch.setenv("DATABASE_URL", url)
     monkeypatch.setenv("APX_SECRET_KEY", SECRET)
-    monkeypatch.setenv("APX_DATA_PATH", str(tmp_path))
+    monkeypatch.setenv("APX_DATA_PATH", str(_data(tmp_path)))
     return SqlStore(sessionmaker(bind=create_engine(url), future=True))
 
 
@@ -71,7 +85,8 @@ def _seed_scan(store: SqlStore, matter: str, scope: str, data: bytes, filename: 
 
 
 def _corrupt_layout(tmp_path: Path) -> None:
-    for f in tmp_path.rglob("*.ocr-layout"):
+    # The blobs live on the data volume, which sits BESIDE the ingestable tree since story 7.1.
+    for f in _data(tmp_path).rglob("*.ocr-layout"):
         f.write_bytes(b"garbage that will not authenticate under AES-GCM")
         return
 

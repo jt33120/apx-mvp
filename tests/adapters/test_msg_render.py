@@ -10,6 +10,20 @@ from apx.adapters.extraction import msg as msgmod
 from apx.adapters.render_html.msg import MsgRenderer
 
 
+def _data(tmp_path):  # noqa: ANN001, ANN202
+    """The data volume, in its own subdirectory.
+
+    Story 7.1: APX_INGEST_ROOT is the test's tmp_path, and a root that can reach
+    $APX_DATA_PATH/originals or /spool is refused — those hold another matter's
+    retained documents and another user's upload. So the data volume sits BESIDE the
+    ingestable tree rather than inside it, which is also how a deployment separates them.
+    """
+    d = tmp_path.parent / f"{tmp_path.name}-data"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+
 def _worker(monkeypatch: pytest.MonkeyPatch, result: object) -> None:
     monkeypatch.setattr(msgmod, "_run_msg_worker", lambda p, m: result)
 
@@ -91,7 +105,8 @@ def test_spool_dir_prefers_the_encrypted_data_volume(
     import tempfile
 
     from apx.adapters.spool import spool_dir
-    monkeypatch.setenv("APX_DATA_PATH", str(tmp_path))
-    assert spool_dir() == str(tmp_path)                   # decrypted plaintext stays on the volume
+    monkeypatch.setenv("APX_DATA_PATH", str(_data(tmp_path)))
+    # decrypted plaintext stays on the volume
+    assert spool_dir() == str(_data(tmp_path))
     monkeypatch.delenv("APX_DATA_PATH", raising=False)
     assert spool_dir() == tempfile.gettempdir()           # dev/test fallback only

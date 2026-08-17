@@ -33,6 +33,7 @@ from apx.core.domain.extraction import ExtractOutcome
 from apx.core.domain.failures import ErrorClass, redacted_diagnostic
 from apx.core.domain.identity import content_hash, piece_id
 from apx.core.domain.inventory import Inventory
+from apx.core.domain.traversal import walk_confined
 from apx.core.ports.expansion import ContainerUnopenable, Expander
 from apx.core.ports.extraction import Extractor
 from apx.core.ports.originals import OriginalStore
@@ -110,8 +111,12 @@ def enumerate_units(folder: Path) -> list[str]:
     """The submitted *units* of an import (AD-17): every file under ``folder``, folder-relative
     and sorted — the set frozen at enumeration. A container's members are expanded within their
     own unit at processing time (reusing the expander); they are not pre-enumerated here (that
-    finer per-member granularity is Story 2.4)."""
-    return sorted(str(p.relative_to(folder)) for p in folder.rglob("*") if p.is_file())
+    finer per-member granularity is Story 2.4).
+
+    Walks through :func:`walk_confined` (Story 7.1), so a link out of the subtree is never a unit.
+    The links themselves are recorded by :func:`ingest_folder`, which owns the register; a unit set
+    that silently included them would freeze another *matter*'s material into this job (FR-1)."""
+    return sorted(f.relative for f in walk_confined(folder).files)
 
 
 def _ingest_one(
@@ -330,14 +335,27 @@ def ingest_folder(
     now = datetime.now(UTC)
     resolved = bounds or ExpansionBounds.defaults()
     patterns = DEFAULT_EXCLUSION_LIST if noise_patterns is None else noise_patterns
+    walk = walk_confined(folder)
+    # FR-1: a link out of the subtree is RECORDED and not ingested. The entry is written before the
+    # files are read, so a job that dies mid-extraction still carries the boundary finding — the
+    # thing an administrator has to act on, and the one FR-1's assumption says no later filter can
+    # recover ("the pre-filter cannot detect data that was mislabelled at the boundary").
+    for link in walk.out_of_scope:
+        result.failures.append(IngestedFailure(
+            filename=Path(link.relative).name, submitted_path=link.relative,
+            matter=matter, tenant=tenant, error_class=ErrorClass.TRAVERSAL_OUT_OF_SCOPE,
+            detail=(f"lien {'de dossier' if link.is_directory else 'de fichier'} pointant hors du "
+                    f"dossier sélectionné ({link.target}) — non versé au corpus"),
+            custodian=custodian))
     with tempfile.TemporaryDirectory(prefix="apx-expand-") as tmp:
         tmpdir = Path(tmp)
-        for path in sorted(p for p in folder.rglob("*") if p.is_file()):
+        for walked in walk.files:
+            path = walked.path
             # A fresh member counter per top-level unit — the SAME scope the worker's
             # ``ingest_one_file`` uses (``container_max_members`` is per top-level unit, so the sync
             # whole-folder path and the resumable per-unit path enforce it identically).
             _ingest_one(
-                path, str(path.relative_to(folder)), 0, result=result, matter=matter,
+                path, walked.relative, 0, result=result, matter=matter,
                 tenant=tenant, custodian=custodian, extractor=extractor, expander=expander,
                 original_store=original_store, now=now, tmpdir=tmpdir, counter=[0],
                 max_bytes=max_bytes, bounds=resolved, noise_patterns=patterns)

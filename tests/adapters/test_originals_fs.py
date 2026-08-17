@@ -15,6 +15,20 @@ from apx.adapters.originals_fs import FilesystemOriginalStore
 from apx.core.domain.crypto import Cipher, DecryptionError
 
 
+def _data(tmp_path):  # noqa: ANN001, ANN202
+    """The data volume, in its own subdirectory.
+
+    Story 7.1: APX_INGEST_ROOT is the test's tmp_path, and a root that can reach
+    $APX_DATA_PATH/originals or /spool is refused — those hold another matter's
+    retained documents and another user's upload. So the data volume sits BESIDE the
+    ingestable tree rather than inside it, which is also how a deployment separates them.
+    """
+    d = tmp_path.parent / f"{tmp_path.name}-data"
+    d.mkdir(exist_ok=True)
+    return d
+
+
+
 def _store(root: Path, key: bytes | None = None) -> FilesystemOriginalStore:
     return FilesystemOriginalStore(root, Cipher(key or os.urandom(32)))
 
@@ -178,10 +192,11 @@ def test_a_kind_blob_cannot_be_read_as_another_kind(tmp_path: Path) -> None:
 
 def test_from_env_builds_from_data_path_and_key(tmp_path: Path) -> None:
     from apx.core.domain.crypto import generate_key
-    env = {"APX_DATA_PATH": str(tmp_path), "APX_ENCRYPTION_KEY": generate_key()}
+    env = {"APX_DATA_PATH": str(_data(tmp_path)), "APX_ENCRYPTION_KEY": generate_key()}
     s = FilesystemOriginalStore.from_env(env)
     data = b"env-built"
     ch = _ch(data)
     s.put("t", ch, data)
-    assert _blob(tmp_path / "originals", "t", ch).exists()  # root is $APX_DATA_PATH/originals
+    # root is $APX_DATA_PATH/originals
+    assert _blob(_data(tmp_path) / "originals", "t", ch).exists()
     assert s.open("t", ch) == data

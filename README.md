@@ -341,6 +341,25 @@ unit would be dropped under pressure, so dropping it must not drop the egress gu
 diagnostic **export** (packaging, the push act as a named egress) is story 6.2; the style extractor
 is the next increment; the cockpit is the front-end (AD-29).
 
+## The ingestion boundary (FR-1)
+
+Server-side folder ingestion reads **one declared directory tree and nothing else**. `APX_INGEST_ROOT`
+names it; `POST /api/ingest` resolves the caller's folder within it and refuses anything outside with
+the **same answer it gives for a folder that does not exist**, so the route is not a directory oracle.
+**Unset, the route refuses every call** — there is no "anywhere" fallback, which is precisely what the
+route did before Story 7.1, when a caller-supplied absolute path was validated by `folder.is_dir()`
+alone. A root that can reach `$APX_DATA_PATH/originals` or `$APX_DATA_PATH/spool` is refused outright:
+those hold another *matter*'s retained documents and another user's upload in flight, so a confinement
+admitting them would grant exactly what it exists to deny. Put the ingestable tree **beside** the data
+volume, not around it.
+
+Inside the submitted folder, traversal stays in the subtree. A symbolic link — to a file or to a
+directory — whose target resolves outside is **not ingested** and is recorded in the *failure register*
+as `traversal-out-of-scope`, naming the link. A cycle terminates rather than hanging. One structural
+check (`filesystem-has-one-walk`) holds the property that there is exactly one directory enumeration
+in the runtime, because a second walk is not a duplicate — it is a path on which the boundary does not
+exist.
+
 ## Backup, restore & disaster recovery (AD-32/AD-35)
 
 A dump restore is the one blessed operation that can hard-delete the evidential record — and a
@@ -487,6 +506,7 @@ could contain is an inflated claim about what the suite proves).
 | `store-has-one-door` | FR-53 | AD-35 | structural | the_store_has_one_door | every `SqlStore(...)` construction across apx/** — the head journal, outside the restorable store, is the only thing that makes a truncation detectable, and the import worker plus both provisioning commands built the store without one, writing the bulk of the record with no outside witness at all |
 | `continuity-claim-is-derived` | FR-53 | AD-33 | structural | the_continuity_claim_is_derived_from_the_document | every `recomputable_from_this_document=` keyword across apx/** — the flag asserts a property of the bytes the READER holds, and used to be handed over from the adapter carrying a fact about whether a row in the database had an anchor, so it printed **true** on a court document that carried no entries at all |
 | `audit-write-never-swallowed` | FR-53 | AD-22 | structural | an_audit_write_failure_is_never_swallowed | every `try`/`except` around an `_append_audit` call across apx/** — FR-53's first consequence is that the act FAILS, and it is defeated by one handler that logs and continues, which reads as defensive programming and produces an act that happened beside a record saying it did not |
+| `filesystem-has-one-walk` | FR-1 | AD-33 | structural | the_filesystem_has_one_walk | every `rglob`/`glob`/`iterdir`/`walk`/`scandir`/`listdir` call across apx/** — the confined walk is where the submitted subtree's boundary is applied, and until Story 7.1 the ingest route validated a **caller-supplied absolute path** with `is_dir()` alone before handing it to `rglob`, while the capacity pre-flight ran a second traversal of its own. A second walk is not a duplicate; it is a path on which the boundary does not exist |
 | `override-ground-named` | FR-25 | AD-33 | structural | override_names_its_ground | the act catalogue — every override names one of FR-25's three grounds and the override class has a real writer — plus any comparison against the override act **class** across apx/**: a pin is an override whose FR-24 class is `pin`, so a class-based count reports zero on a matter with forty pins and looks right on every matter that has none |
 | `statement-one-composer` | FR-23 | AD-37 | structural | the_sentence_has_one_composer | confidence-bound wording in runtime string literals + apx/web/src — the sentence is composed only in core/domain/statement.py, never re-assembled by a read seam or by the client (a client-composed claim can omit the RBAC scope and the staleness the server puts inside the string) |
 | `statement-composed-offline` | FR-55 | AD-4 | structural | the_sentence_is_composed_offline | the transitive import closure of core/domain/statement.py — Domain-only, no networking module, and the composer must exist and export `statement_fr`. A check on an ABSENCE, deliberately the belt: the braces is the round-trip test that regenerates the sentence from the recorded artefact and compares it character for character |

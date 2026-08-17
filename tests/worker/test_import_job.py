@@ -25,6 +25,20 @@ from apx.adapters.store_postgres.store import SqlStore
 from apx.core.app.ingest import IngestionResult
 from tests.embedding_fakes import FakeEmbedder
 
+
+def _data(tmp_path):  # noqa: ANN001, ANN202
+    """The data volume, in its own subdirectory.
+
+    Story 7.1: APX_INGEST_ROOT is the test's tmp_path, and a root that can reach
+    $APX_DATA_PATH/originals or /spool is refused — those hold another matter's
+    retained documents and another user's upload. So the data volume sits BESIDE the
+    ingestable tree rather than inside it, which is also how a deployment separates them.
+    """
+    d = tmp_path.parent / f"{tmp_path.name}-data"
+    d.mkdir(exist_ok=True)
+    return d
+
+
 _NOW = datetime(2026, 7, 27, 12, 0, tzinfo=UTC)
 _FAKE = FakeEmbedder()  # story 2.8: the embedder injected at the port boundary (never the real one)
 
@@ -46,7 +60,7 @@ _ORIG = _NoRetention()
 def _isolate_originals(tmp_path, monkeypatch) -> None:
     # story 3.5a: the default worker path now retains each pièce's original from_env — pin
     # APX_DATA_PATH to the test's tmp dir so those blobs stay isolated, not in a global temp dir.
-    monkeypatch.setenv("APX_DATA_PATH", str(tmp_path))
+    monkeypatch.setenv("APX_DATA_PATH", str(_data(tmp_path)))
 
 
 @pytest.fixture
