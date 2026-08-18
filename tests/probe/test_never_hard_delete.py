@@ -47,7 +47,7 @@ from apx.core.app.justification import (
 from apx.core.app.label import assign_taxonomy_label, revert_taxonomy_label
 from apx.core.app.line import move_line, place_line, price_line_move
 from apx.core.app.pin import pin_piece, remove_pin
-from apx.core.app.rank import produce_ranking
+from apx.core.app.rank import produce_ranking, rank_and_draw_the_line
 from apx.core.app.register_override import (
     override_register_entry as core_override_register_entry,
 )
@@ -267,6 +267,17 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
                 scorer=FakeScorer({p: 0.9 - 0.3 * i for i, p in enumerate(pieces)}),
                 judge=FixedJudge(), config=_cfg(), inputs=_inputs(), tenant=TENANT, matter=MATTER,
                 actor="me.durand", scopes={WALL}, recorder=store)
+
+        def _rank_and_draw() -> None:
+            """The paired act (Story 7.5): a second version, WITH its cut. The probe walks it as
+            its own step because it writes both a ranking and a placement, and the question this
+            probe asks — did anything evidential disappear — is exactly the one a re-rank raises:
+            version 1's rows and its placements must still be there afterwards."""
+            rank_and_draw_the_line(
+                _units(store, MATTER), case_theory=None,
+                scorer=FakeScorer({p: 0.9 - 0.3 * i for i, p in enumerate(pieces)}),
+                judge=FixedJudge(), config=_cfg(), inputs=_inputs(), tenant=TENANT, matter=MATTER,
+                actor="me.durand", scopes={WALL}, recorder=store, placer=store)
 
         def _place() -> None:
             line = place_line(
@@ -526,6 +537,7 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             _Step(("judge-matter",),
                   lambda: _post(f"/api/matters/{MATTER}/judge", {"question": "bail"})),
             _Step(("rank.produce_ranking",), _rank),
+            _Step(("rank.rank_and_draw_the_line",), _rank_and_draw),
             _Step(("line.place_line",), _place),
             _Step(("line.move_line",), _move),
             # Story 5.1 — the sampling run. AFTER the order and the line exist: its population is

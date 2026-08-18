@@ -2136,7 +2136,10 @@ class SqlStore:
 
         theories = self.list_case_theory_versions(
             tenant=tenant, matter=matter, scopes=scopes) or []
-        history = self.read_line_history(tenant=tenant, matter=matter, scopes=scopes) or ()
+        # EVERY version's placements (FR-24: *every* position). The version-scoped reader used to
+        # be called here, which emptied §3 the moment a matter had a second ranking.
+        history = self.read_line_history_all_versions(
+            tenant=tenant, matter=matter, scopes=scopes) or ()
         pin_log = self.read_pin_log(tenant=tenant, matter=matter, scopes=scopes) or ()
         runs = self.list_sampling_runs(tenant=tenant, matter=matter, scopes=scopes) or ()
         validations = self.read_validation_log(
@@ -4633,6 +4636,40 @@ class SqlStore:
                     placed_by=r.placed_by, at=_as_utc(r.at),
                     priced_statement=r.priced_statement)
                 for r in rows)
+
+    def read_line_history_all_versions(
+        self, *, tenant: str, matter: str, scopes: set[str],
+    ) -> tuple[LinePlacementRecord, ...] | None:
+        """**Every** position the line has held in the *matter*, across every *ranking version*,
+        ordered by ``(version_no, seq)`` — what FR-24/FR-26 mean by *every position*.
+
+        :meth:`read_line_history` is version-scoped and honest about it; the **export's call site**
+        was not, and passed no ``version_no``, so it resolved the latest version and read only that
+        version's placements. On a *matter* with two rankings, §3 of the document a *bâtonnier*
+        receives was therefore **empty** — not marked pending, just a section with no rows — over a
+        *matter* where a lawyer had moved the line three times and priced every move. An empty §3
+        and *no line was ever placed* are the same bytes, and the second is a false statement about
+        what a person decided.
+
+        Two readers rather than a parameter, because they answer different questions: a surface asks
+        *where is the line now, over this version*, and the record asks *what did she decide, ever*.
+        ``None`` when out of scope or absent (indistinguishable, non-disclosing); an empty tuple is
+        a real answer. Not audited (a read)."""
+        with self._sf() as session:
+            if not self._matter_held(session, tenant, matter, scopes):
+                return None
+            rows = session.execute(
+                select(LinePlacement, RankingVersionRow.version_no)
+                .join(RankingVersionRow, LinePlacement.ranking_version_id == RankingVersionRow.id)
+                .where(
+                    RankingVersionRow.tenant == tenant, RankingVersionRow.matter == matter)
+                .order_by(RankingVersionRow.version_no, LinePlacement.seq)).all()
+            return tuple(
+                LinePlacementRecord(
+                    version_id=r.ranking_version_id, version_no=version_no, seq=r.seq,
+                    last_retained_piece_id=r.last_retained_piece_id, basis=r.basis,
+                    placed_by=r.placed_by, at=_as_utc(r.at), priced_statement=r.priced_statement)
+                for r, version_no in rows)
 
     def read_pin_log(
         self, *, tenant: str, matter: str, scopes: set[str],

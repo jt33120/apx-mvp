@@ -17,6 +17,7 @@ from dataclasses import replace
 from apx.core.app.cascade import run_cascade
 from apx.core.domain.cascade import CascadeUnit
 from apx.core.domain.config import CascadeConfig
+from apx.core.domain.line import LinePlacementView
 from apx.core.domain.ranking import (
     PROMPT_VERSION,
     JudgeIdentity,
@@ -26,6 +27,7 @@ from apx.core.domain.ranking import (
     rank_cascade,
 )
 from apx.core.ports.judge import Judge
+from apx.core.ports.line import LinePlacementRecorder
 from apx.core.ports.ranking import RankingRecorder
 from apx.core.ports.scorer import SemanticScorer
 
@@ -98,3 +100,40 @@ def identity_inputs(
         chunking_config_version=chunking_config_version,
         schema_version=schema_version,
     )
+
+
+def rank_and_draw_the_line(
+    units: list[CascadeUnit], *, case_theory: str | None, scorer: SemanticScorer, judge: Judge,
+    config: CascadeConfig, inputs: RankingIdentityInputs, tenant: str, matter: str, actor: str,
+    scopes: set[str], recorder: RankingRecorder, placer: LinePlacementRecorder,
+) -> tuple[RankingVersion, LinePlacementView | None]:
+    """Produce a new *ranking version* **and** draw the tool's cut over it — one act, not two.
+
+    A version with no placement leaves the *matter* **worse than before the re-rank**, and silently.
+    The line in force is read over the *latest* version, so the previous placement reads superseded
+    the instant version n+1 exists; a superseded artefact deliberately emits no *worklist* line; and
+    the *worklist* has nothing it could honestly offer anyway — its own contract says a line names
+    *the artefact the offer would supersede, never the artefact it would produce*, and a line that
+    was never placed is neither. So the result would be an empty worklist over a *matter* where
+    every ranked *pièce* has fallen into the unsplit set, no *sampling run* can start, and no
+    *confidence bound* can exist.
+
+    Drawing the cut needs no consent, and the codebase already says so: a first placement records
+    ``priced_statement=None`` because *"a first placement is the tool drawing the cut, not a human
+    move, so there was no price to show and none to record"*. The human act is **moving** the line
+    (FR-19), and it is priced. What FR-17 does on version 1 is what this does on version n+1.
+
+    **Two transactions, deliberately.** Each of ``record_ranking`` and ``place_line`` owns its own
+    audited transaction, and a placement that fails must not roll back an order that cost one model
+    call per uncertain *pièce*. ``None`` for the placement is a real answer, not a failure: no
+    *pièce* in a retain band, and a line is never fabricated (AD-19).
+    """
+    version = produce_ranking(
+        units, case_theory=case_theory, scorer=scorer, judge=judge, config=config, inputs=inputs,
+        tenant=tenant, matter=matter, actor=actor, scopes=scopes, recorder=recorder)
+    # Over the version JUST minted, named explicitly. Letting the placer resolve "the latest" would
+    # be right by accident today and wrong the moment two acts overlap — and the failure direction
+    # is the catastrophic one: a stamp whose line_seq belongs to another version reads FRESH.
+    placement = placer.place_line(
+        tenant=tenant, matter=matter, actor=actor, scopes=scopes, version_no=version.version_no)
+    return version, placement

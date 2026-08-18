@@ -89,11 +89,11 @@ cd <repo-root> && export PATH="$PWD/.venv/bin:$PATH" && \
 cd <repo-root>/apx/web && npm run typecheck && npm run build
 ```
 
-Expected as of Story 7.4 (2026-08-18): ruff clean · `Contracts: 3 kept, 0 broken` ·
+Expected as of Story 7.5 (2026-08-18): ruff clean · `Contracts: 3 kept, 0 broken` ·
 **108** structural checks passed · fitness frame green, 6 asserted / 7 pending ·
-**2 199 passed, 12 skipped** · client typecheck and build clean.
+**2 206 passed, 12 skipped** · client typecheck and build clean.
 *(Epic 5 close: 103 / 2 077. 7.1: 104 / 2 113. B2: 105 / 2 141. 7.2: 106 / 2 173.
-7.3: 107 / 2 191.)*
+7.3: 107 / 2 191. 7.4: 108 / 2 199.)*
 
 - **uv only** — `.venv/bin/ruff`, `.venv/bin/python`. Never `pip`. `uv sync --group dev`
   on a fresh clone; `cd apx/web && npm ci` for the client.
@@ -105,6 +105,10 @@ Expected as of Story 7.4 (2026-08-18): ruff clean · `Contracts: 3 kept, 0 broke
   past it where the formatter's arithmetic does not. **Reflow by hand.**
 - `python -m apx.checks | tail -2` alone hides a failure behind the README meta-checks —
   read the count line **and** grep `[FAIL]` separately.
+- **Start the gate only on a tree you have stopped editing.** A run that begins before the
+  last edit imports the old modules and then reads the new source, so a registry check
+  fails against a tree that no longer exists. That red is an artefact, not a defect —
+  but it is indistinguishable from a real one until you re-run.
 
 ## Committing
 

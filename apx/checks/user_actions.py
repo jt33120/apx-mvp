@@ -438,6 +438,10 @@ USER_ACTIONS: tuple[UserAction, ...] = (
     _seam("rank.produce_ranking",
           "mints a ranking version and inserts its ranked entries; an earlier version's rows stay "
           "(AD-23 — a version-pinned read must still resolve)", changes_state=True),
+    _seam("rank.rank_and_draw_the_line",
+          "mints a ranking version AND draws the tool's cut over it — one act, because a version "
+          "with no placement makes the previous line superseded-and-unmentioned, which leaves the "
+          "matter with no cut and an empty worklist (Story 7.5/FR-17)", changes_state=True),
     _seam("triage.triage_pieces",
           "runs the judge over the pièces and returns the outcome; the persistence is the caller's",
           changes_state=False),

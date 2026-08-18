@@ -31,7 +31,7 @@ from apx.adapters.store_postgres.store import SqlStore, TenantAlreadyProvisioned
 from apx.backup_bundle import read_bundle, restore_originals, write_bundle
 from apx.core.app.ingest import SCHEMA_VERSION
 from apx.core.app.line import place_line
-from apx.core.app.rank import identity_inputs, produce_ranking
+from apx.core.app.rank import identity_inputs, rank_and_draw_the_line
 from apx.core.domain.chunking import chunking_config
 from apx.core.domain.config import cascade_config
 from apx.core.ports.embedding import Embedder
@@ -196,7 +196,7 @@ def rank(
     embedder = embedder or Bgem3Embedder()
     judge = judge or open_judge(store, tenant)
     get = lambda key: store.get_config(tenant, key)  # noqa: E731 — the config-as-data getter
-    version = produce_ranking(
+    version, placement = rank_and_draw_the_line(
         units,
         case_theory=current.text if current is not None else None,
         scorer=store.semantic_scorer(embedder),
@@ -208,10 +208,12 @@ def rank(
             embedder_model_id=embedder.model_id, embedder_model_version=embedder.model_version,
             chunking_config_version=chunking_config(get).version,
             schema_version=SCHEMA_VERSION),
-        tenant=tenant, matter=matter, actor=actor, scopes=scopes, recorder=store)
+        tenant=tenant, matter=matter, actor=actor, scopes=scopes, recorder=store, placer=store)
     basis = "théorie du cas" if current is not None else "signaux intrinsèques"
+    cut = (f"ligne : {placement.last_retained_piece_id}" if placement is not None
+           else "aucune ligne (aucune pièce en bande retenue)")
     return (f"rank : dossier={matter} → classement n° {version.version_no} "
-            f"({len(units)} pièces, base : {basis}, juge : {judge.identity.model})")
+            f"({len(units)} pièces, base : {basis}, juge : {judge.identity.model}, {cut})")
 
 
 def place(store: SqlStore, *, tenant: str, matter: str, actor: str, scopes: set[str]) -> str:
