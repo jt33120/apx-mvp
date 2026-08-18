@@ -36,11 +36,16 @@ from apx.adapters.originals_fs import FilesystemOriginalStore
 from apx.adapters.store_postgres.admission import admit
 from apx.adapters.store_postgres.opening import open_store
 from apx.adapters.store_postgres.store import ImportJobView, SqlStore
-from apx.core.app.ingest import enumerate_units, ingest_one_file
-from apx.core.domain.config import ExpansionBounds, expansion_bounds
+from apx.core.app.ingest import SCHEMA_VERSION, enumerate_units, ingest_one_file
+from apx.core.app.rank import LineNotDrawn, identity_inputs, rank_and_draw_the_line
+from apx.core.domain.chunking import chunking_config
+from apx.core.domain.config import ExpansionBounds, cascade_config, expansion_bounds
 from apx.core.ports.embedding import Embedder
 from apx.core.ports.extraction import Extractor
+from apx.core.ports.judge import Judge
 from apx.core.ports.originals import OriginalStore
+from apx.core.ports.scorer import SemanticScorer
+from apx.wiring import open_judge
 
 
 def _conninfo(database_url: str) -> str:
@@ -200,6 +205,122 @@ def run_import(job_id: str) -> None:
     _run_import(open_store(), job_id)
 
 
+# ── Story 7.6: the RANKING job (AD-6) ─────────────────────────────────────────────────────────
+# AD-6 names ranking by name as a queued job: one model call per uncertain pièce does not belong in
+# a request. The shape is the import's — a store-typed orchestration, a thin registered task, and an
+# enqueue helper that opens the queue itself — and the places it deliberately diverges are marked.
+
+#: One cascade per job, ever. `run_cascade` is a single monolithic in-memory pass with no
+#: checkpoint, so a re-dispatch does not resume anything — it re-pays one model call per uncertain
+#: pièce over the whole matter. The import's 100 attempts are safe only because a re-dispatch
+#: processes ONLY still-pending units; there is no such unit here.
+_RANKING_MAX_ATTEMPTS = 1
+
+
+def _run_ranking(
+    store: SqlStore, job_id: str, *, embedder: Embedder | None = None, judge: Judge | None = None,
+    scorer: SemanticScorer | None = None, now: datetime | None = None,
+) -> None:
+    """Run one queued ranking against the application-owned ledger — pure of Procrastinate, so it is
+    driven directly with a SQLite store exactly as ``_run_import`` is.
+
+    **Every exit is a terminal ledger state.** The act cannot raise past this function on a failure
+    of the ranking itself, because a raise would be a claim about *availability* over a permanent
+    cause, in the direction a caller retries rather than reports — the shape story 7.4 closed at the
+    upload route. The lawyer is told what happened, in her language, on a row she can read.
+
+    The wall comes off the ledger row, not from the worker's imagination, and it is re-checked
+    **before anything is read**: ``read_case_theory`` answers ``None`` for out-of-scope and for
+    absent alike, and a ``None`` theory is also how the act says *rank on intrinsic signals* — so a
+    job that lost its wall between enqueue and dispatch would otherwise produce a complete,
+    permanently fingerprinted ranking whose header names a deliberate methodology for a theory that
+    was simply never fetched.
+    """
+    stamp = now or datetime.now(UTC)
+    job = store.read_ranking_job(job_id)
+    if job is None or job.state in ("done", "failed"):
+        return  # a re-dispatch of a terminal job is a no-op
+    # AD-17: the counter advances in its own committed transaction BEFORE the work, so an OS-level
+    # kill still advances it and the cascade is never paid for twice on one job.
+    if store.bump_ranking_attempt(job_id, stamp) > _RANKING_MAX_ATTEMPTS:
+        store.fail_ranking_job(
+            job_id, now=stamp,
+            detail="le classement a déjà été lancé une fois et n'est pas relancé automatiquement ; "
+                   "relancez-le si vous le souhaitez")
+        return
+    store.start_ranking_job(job_id, stamp)
+    scopes = {job.scope}
+    if not store.matter_is_held(tenant=job.tenant, matter=job.matter, scopes=scopes):
+        store.fail_ranking_job(
+            job_id, now=stamp,
+            detail="dossier introuvable sous le périmètre de la demande ; rien n'a été lu")
+        return
+    try:
+        version, _placement = _rank_now(
+            store, tenant=job.tenant, matter=job.matter, actor=job.actor, scopes=scopes,
+            embedder=embedder, judge=judge, scorer=scorer)
+    except LineNotDrawn as exc:
+        # The order committed, the cut did not — named, with the version, so the remedy (placing
+        # the line over THAT version) is reachable rather than inferable from "the latest".
+        store.fail_ranking_job(
+            job_id, now=stamp, version_no=exc.version_no,
+            detail=f"le classement n° {exc.version_no} est enregistré, la ligne n'a pas été "
+                   "tracée ; posez la ligne sur ce classement")
+        return
+    except Exception as exc:  # noqa: BLE001 — every failure is a ledger state, never a raise
+        store.fail_ranking_job(job_id, now=stamp, detail=f"le classement a échoué : {exc}")
+        return
+    store.finish_ranking_job(job_id, version_no=version.version_no, now=stamp)
+
+
+def _rank_now(
+    store: SqlStore, *, tenant: str, matter: str, actor: str, scopes: set[str],
+    embedder: Embedder | None, judge: Judge | None, scorer: SemanticScorer | None,
+):  # noqa: ANN202 — (RankingVersion, LinePlacementView | None), both adapter-free core types
+    """Assemble the act's arguments and perform it — the same assembly ``manage rank`` makes, and
+    for the same reasons: every identity input comes from the thing that actually produced the
+    order (the judge this deployment composed, never configuration, which records a preference and
+    would name a model that never ran).
+
+    ``rank_and_draw_the_line``, not ``produce_ranking``: a version with no cut leaves the matter
+    worse than before the re-rank and silently (story 7.5)."""
+    # The three ports the cascade runs on, built at this composition root and injectable here —
+    # the same seam ``_run_import`` opens for the embedder and the original store, and for the same
+    # reason: a local model and a pgvector session are not things a test can carry (AD-11).
+    embedder = embedder or _build_embedder()
+    scorer = scorer if scorer is not None else store.semantic_scorer(embedder)
+    judge = judge or open_judge(store, tenant)
+    get = lambda key: store.get_config(tenant, key)  # noqa: E731 — the config-as-data getter
+    theory = store.read_case_theory(tenant=tenant, matter=matter, scopes=scopes)
+    current = theory.current if theory is not None else None
+    return rank_and_draw_the_line(
+        store.cascade_units(matter, tenant, scopes),
+        case_theory=current.text if current is not None else None,
+        scorer=scorer,
+        judge=judge,
+        config=cascade_config(get),
+        inputs=identity_inputs(
+            judge=judge.identity,
+            case_theory_version_id=current.version_id if current is not None else None,
+            embedder_model_id=embedder.model_id, embedder_model_version=embedder.model_version,
+            chunking_config_version=chunking_config(get).version,
+            schema_version=SCHEMA_VERSION),
+        tenant=tenant, matter=matter, actor=actor, scopes=scopes,
+        recorder=store, placer=store)
+
+
+@app.task(name="apx.run_ranking", retry=RetryStrategy(max_attempts=3, linear_wait=5))
+def run_ranking(job_id: str) -> None:
+    """The registered ranking task. Builds the store at run time so the worker binds the live
+    ``DATABASE_URL``.
+
+    The retry is small and it guards the **bookkeeping**, not the cascade: ``_run_ranking`` turns
+    every failure of the ranking itself into a terminal ledger state and returns, so a retry can
+    only ever follow a failure of the ledger writes. Should one fire, the ledger's own cap of
+    :data:`_RANKING_MAX_ATTEMPTS` marks the job failed without running a second cascade."""
+    _run_ranking(open_store(), job_id)
+
+
 _open_lock = asyncio.Lock()
 _opened = False
 
@@ -246,3 +367,14 @@ async def enqueue_import(job_id: str) -> None:
     spooling the bytes, then the request returns immediately (AD-6)."""
     await ensure_open()
     await run_import.defer_async(job_id=job_id)
+
+
+async def enqueue_ranking(job_id: str) -> None:
+    """Defer the ranking job onto the queue (non-blocking), opening the queue first.
+
+    ``ensure_open`` is called HERE, in the act's own body, and not by a wrapper: deferring opens the
+    queue, so the property belongs to the act rather than to whoever remembered a start-up hook
+    (story 7.4). ``every_defer_opens_the_queue`` reads exactly this — an intersection of the calls
+    a function makes — so a helper that delegates its opening does not satisfy it."""
+    await ensure_open()
+    await run_ranking.defer_async(job_id=job_id)

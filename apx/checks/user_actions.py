@@ -202,6 +202,17 @@ USER_ACTIONS: tuple[UserAction, ...] = (
     _http("POST", "/api/ingest-upload", "ingest-upload-route",
           "enqueues an import job the worker drains; adds only. A job whose enqueue FAILED is "
           "rolled back by delete_import_job — transient orchestration, no pièce touched"),
+    _http("POST", "/api/matters/{matter}/ranking", "enqueue-ranking",
+          "creates a ranking_job ledger row the worker drains, which mints a NEW ranking version "
+          "beside every earlier one (AD-23 — a version-pinned read must still resolve). A job "
+          "whose enqueue fails is MARKED failed, never deleted: ranking_job is deliberately absent "
+          "from TRANSIENT_TABLES, so the probe enforces that design (story 7.6)"),
+    _http("POST", "/api/matters/{matter}/ranking/preview", "preview-rerank-cost",
+          "the open runs and the verdicts a re-rank would invalidate, stated before it is paid "
+          "for (FR-22/FR-45(a)); a pure read that writes nothing", changes_state=False),
+    _http("POST", "/api/matters/{matter}/line", "place-line-route",
+          "appends a line placement over a NAMED ranking version (FR-17); earlier placements stay "
+          "— the position history is what FR-24 asks the record for"),
     _http("PUT", "/api/matters/{matter}/case-theory", "set-case-theory",
           "appends a new case_theory_version; prior versions stay readable (FR-37)"),
     _http("DELETE", "/api/matters/{matter}/case-theory", "withdraw-case-theory",
@@ -239,6 +250,7 @@ USER_ACTIONS: tuple[UserAction, ...] = (
     _read("/api/admin/diagnostics", "read-diagnostics", "the content-free projection; a read"),
     _read("/api/admin/dr", "read-dr-status", "backup/restore + truncation status; a read"),
     _read("/api/imports/{job_id}", "read-import-progress", "an import job's progress; a read"),
+    _read("/api/rankings/{job_id}", "read-ranking-progress", "a ranking job's state; a read"),
     _read("/api/matters", "read-matters", "the matters within the caller's walls; a read"),
     _read("/api/matters/{matter}/audit", "read-audit-trail", "the audit record itself; a read"),
     _read("/api/matters/{matter}/case-theory", "read-case-theory", "the current theory; a read"),
@@ -478,6 +490,10 @@ USER_ACTIONS: tuple[UserAction, ...] = (
     # Story 4.13 — freshness. Reads only: staleness is a COMPARISON of the stamp an artefact was
     # produced under against the current observables, and nothing here resolves it — FR-58 resolves
     # staleness only by an explicit user act that produces a NEW artefact.
+    _seam("read.sampling.rerank_cost",
+          "what a re-rank would invalidate — a PREDICTION, computed before the act, never the "
+          "retrospective comparison the rest of the freshness module makes; a read",
+          changes_state=False),
     _seam("read.freshness.read_freshness",
           "compares each artefact's recorded stamp with the current observables; stores nothing "
           "and queues nothing", changes_state=False),

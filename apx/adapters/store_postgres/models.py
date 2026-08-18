@@ -412,6 +412,53 @@ class ImportUnit(Base):
     attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
 
 
+class RankingJob(Base):
+    """The application-owned ledger for the queued **ranking** act (AD-6/AD-17, story 7.6) — the
+    sole authority for a ranking job's state. Procrastinate's queue holds no state any read path
+    consults; the poll route reads this table and nothing else.
+
+    It is not a copy of :class:`ImportJob`, and the differences are the point. There is no spool and
+    no unit table: :func:`~apx.core.app.cascade.run_cascade` is one monolithic in-memory pass, so
+    there is nothing to enumerate and nothing to resume. ``state`` carries a terminal ``failed``,
+    which ``import_job`` cannot express — the reason its upload route answered 503 (a claim about
+    *availability*) over a permanent cause. ``version_no`` stays NULL until completion because the
+    number is minted inside ``record_ranking``'s transaction; written at enqueue it would be a
+    prediction, and two jobs would both predict n+1.
+    """
+
+    __tablename__ = "ranking_job"
+    # At most ONE open ranking job per matter, enforced atomically by the DB (the API's
+    # read-then-create is a TOCTOU alone). The NEGATIVE form, deliberately: `state != 'done'` — the
+    # import ledger's rule — would leave a FAILED job holding the matter's re-rank shut for ever.
+    __table_args__ = (
+        Index(
+            "uq_ranking_job_open", "tenant", "matter", unique=True,
+            sqlite_where=text("state NOT IN ('done','failed')"),
+            postgresql_where=text("state NOT IN ('done','failed')")),
+    )
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    tenant: Mapped[str] = mapped_column(String, nullable=False)
+    matter: Mapped[str] = mapped_column(String, nullable=False)
+    #: the wall the ranking runs under — the worker is a different process from the request, and a
+    #: matter has exactly one wall. Persisted, never re-derived (AD-13).
+    scope: Mapped[str] = mapped_column(String, nullable=False)
+    actor: Mapped[str] = mapped_column(EncryptedText("ranking_job.actor"), nullable=False)
+    state: Mapped[str] = mapped_column(String, nullable=False)  # queued|running|done|failed
+    #: advanced in its own committed transaction BEFORE the work begins (AD-17), so an OS-level kill
+    #: still advances it and a re-dispatch can never re-pay the cascade.
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    version_no: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    #: the failure reason, in the lawyer's language. Encrypted (AD-31) although it is *written* as
+    #: a composed French sentence: one of its branches interpolates an exception's own message, and
+    #: an exception raised inside the cascade can name a pièce. A column that is content-bearing on
+    #: one of its branches is a content-bearing column.
+    detail: Mapped[str | None] = mapped_column(
+        EncryptedText("ranking_job.detail"), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class AuditRecord(Base):
     """Append-only, tamper-evident trail (FR-24, FR-53). Each entry carries a monotonic sequence
     and a chain value over the previous entry **of its own chain**, so a gap, a reordering or a

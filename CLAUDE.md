@@ -52,9 +52,13 @@ Lost? Invoke the `bmad-help` skill and ask it what to do next.
 ## Where the state is
 
 `_bmad-output/implementation-artifacts/sprint-status.yaml` is the **single source of
-truth** for what is done, what is next, and every open action item. Read it in full
-before starting anything — each story's line carries a long note saying what that story
-actually made true. The two retrospectives (`epic-4-retro-2026-08-07.md`,
+truth** for what is done, what is next, and every open action item. It must **parse**:
+its long notes are double-quoted YAML scalars, so a quoted phrase inside one silently
+closes the scalar and breaks the whole file. Use single quotes inside a note, and check
+with a parser after editing — the file went unparseable for two stories without anyone
+noticing, because nothing in the gate reads it. Read it in full before starting
+anything — each story's line carries a long note saying what that story actually made
+true. The two retrospectives (`epic-4-retro-2026-08-07.md`,
 `epic-5-retro-2026-08-14.md`) carry the lessons and the open action items **A5, B1–B9**.
 
 ## The story cycle
@@ -89,11 +93,11 @@ cd <repo-root> && export PATH="$PWD/.venv/bin:$PATH" && \
 cd <repo-root>/apx/web && npm run typecheck && npm run build
 ```
 
-Expected as of Story 7.5 (2026-08-18): ruff clean · `Contracts: 3 kept, 0 broken` ·
-**108** structural checks passed · fitness frame green, 6 asserted / 7 pending ·
-**2 206 passed, 12 skipped** · client typecheck and build clean.
+Expected as of Story 7.6 (2026-08-18): ruff clean · `Contracts: 3 kept, 0 broken` ·
+**109** structural checks passed · fitness frame green, 6 asserted / 7 pending ·
+**2 241 passed, 12 skipped** · client typecheck and build clean.
 *(Epic 5 close: 103 / 2 077. 7.1: 104 / 2 113. B2: 105 / 2 141. 7.2: 106 / 2 173.
-7.3: 107 / 2 191. 7.4: 108 / 2 199.)*
+7.3: 107 / 2 191. 7.4: 108 / 2 199. 7.5: 108 / 2 206.)*
 
 - **uv only** — `.venv/bin/ruff`, `.venv/bin/python`. Never `pip`. `uv sync --group dev`
   on a fresh clone; `cd apx/web && npm ci` for the client.

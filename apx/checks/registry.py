@@ -54,6 +54,7 @@ from apx.checks import (
     read_path,
     register_ownership,
     renders_sanitized,
+    rerank_cost,
     sampling_freeze,
     sampling_population,
     scope_admin,
@@ -232,6 +233,7 @@ CHECKS: list[Callable[[], CheckResult]] = [
     ranking_identity_source.the_ranking_identity_has_one_source,
     # ── story 7.4: a deferral opens the queue it defers onto (AD-6) ──
     queue_open.every_defer_opens_the_queue,
+    rerank_cost.every_rerank_enqueue_states_its_cost,
     statement.the_sentence_has_one_composer,
     statement.the_sentence_is_composed_offline,
     statement.unfitness_offers_no_line_move,

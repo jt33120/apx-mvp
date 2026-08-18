@@ -102,6 +102,24 @@ def identity_inputs(
     )
 
 
+class LineNotDrawn(RuntimeError):
+    """The order committed and the cut did not — the exact state this act exists to prevent,
+    reached anyway because the two are two transactions.
+
+    It carries ``version_no`` because the caller must be able to NAME the artefact that exists. The
+    alternative is to look up *the latest* version afterwards, which is the referent this module
+    already refuses for the placement itself: right by accident when one act is running, and wrong
+    the moment two overlap. A job ledger that records the number can hand the remedy — placing the
+    cut over that version — to a lawyer; one that records only "it failed" cannot.
+    """
+
+    def __init__(self, version_no: int) -> None:
+        super().__init__(
+            f"ranking version {version_no} was recorded and its line was not drawn — the matter "
+            "has an order and no cut until one is placed over that version")
+        self.version_no = version_no
+
+
 def rank_and_draw_the_line(
     units: list[CascadeUnit], *, case_theory: str | None, scorer: SemanticScorer, judge: Judge,
     config: CascadeConfig, inputs: RankingIdentityInputs, tenant: str, matter: str, actor: str,
@@ -134,6 +152,10 @@ def rank_and_draw_the_line(
     # Over the version JUST minted, named explicitly. Letting the placer resolve "the latest" would
     # be right by accident today and wrong the moment two acts overlap — and the failure direction
     # is the catastrophic one: a stamp whose line_seq belongs to another version reads FRESH.
-    placement = placer.place_line(
-        tenant=tenant, matter=matter, actor=actor, scopes=scopes, version_no=version.version_no)
+    try:
+        placement = placer.place_line(
+            tenant=tenant, matter=matter, actor=actor, scopes=scopes,
+            version_no=version.version_no)
+    except Exception as exc:  # the half-done act, NAMED rather than left to be inferred
+        raise LineNotDrawn(version.version_no) from exc
     return version, placement

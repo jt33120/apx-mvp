@@ -6,8 +6,11 @@ green on the real tree and red on a synthetic module carrying the violation it e
 
 from __future__ import annotations
 
+import ast
+import re
 from pathlib import Path
 
+import apx.core.domain.statement as statement_module
 from apx.checks.forward_looking import (
     _banned_hit,
     _banned_hit_in_text,
@@ -101,11 +104,45 @@ def test_it_fires_when_the_composer_module_is_missing(tmp_path: Path) -> None:
     assert not r.ok and "unverifiable" in r.detail
 
 
+def _apx_imports(path: Path) -> set[str]:
+    """Every ``apx.*`` module one file imports, absolute or relative — the fixture the transitive
+    leg stands on, read from the source rather than believed from a comment."""
+    tree = ast.parse(path.read_text(encoding="utf-8"))
+    out: set[str] = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("apx"):
+            out.add(node.module or "")
+        elif isinstance(node, ast.Import):
+            out.update(a.name for a in node.names if a.name.startswith("apx"))
+    return out
+
+
 def test_it_follows_a_transitive_import_rather_than_only_the_first_hop(tmp_path: Path) -> None:
     """The composer itself can look clean while a Domain module it imports reaches out. The real
-    tree exercises this leg: statement.py imports sampling.py, which imports confidence.py."""
+    tree exercises this leg: statement.py imports sampling.py, which imports confidence.py — and
+    since story 7.6, freshness.py as well, because ``RerankCost`` draws the French for its cause
+    from FR-58's own trigger table rather than composing a second copy of the phrase.
+
+    This asserted the closure's SIZE, and a size is the weaker referent: it has to be edited every
+    time a legitimate Domain import is added, which teaches the next author to bump the number
+    rather than to look. What the leg is actually about is that the walk goes past the first hop, so
+    that is what is asserted — ``confidence`` is reached only through ``sampling``."""
     r = the_sentence_is_composed_offline()
-    assert r.ok and "3 Domain module(s)" in r.detail
+    assert r.ok, r.detail
+
+    # The chain the leg depends on, established independently of the check's own walk — the old
+    # assertion took it on trust from a docstring and would have gone on passing if it broke.
+    domain = Path(statement_module.__file__).resolve().parent
+    first_hop = _apx_imports(domain / "statement.py")
+    assert any(m.endswith("domain.sampling") for m in first_hop), (
+        f"the composer no longer imports sampling; this leg tests nothing ({sorted(first_hop)})")
+    second_hop = _apx_imports(domain / "sampling.py")
+    assert any(m.endswith("domain.confidence") for m in second_hop), (
+        f"sampling no longer imports confidence; this leg tests nothing ({sorted(second_hop)})")
+
+    # and the check's closure is bigger than the composer's own imports, i.e. the walk recursed
+    size = int(re.search(r"closure is (\d+) Domain module", r.detail).group(1))
+    assert size > 1, r.detail
 
 
 # ── unfitness-offers-no-line-move ───────────────────────────────────────────────────────────────

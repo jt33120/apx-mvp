@@ -8,6 +8,8 @@ ships — the FastAPI app and the Procrastinate worker app — and nothing more.
 
 from __future__ import annotations
 
+from procrastinate.tasks import Task
+
 
 def test_api_app_imports_and_exposes_the_slice_routes() -> None:
     from apx.api.app import app
@@ -20,10 +22,26 @@ def test_api_app_imports_and_exposes_the_slice_routes() -> None:
     assert "/api/ingest" in paths
 
 
-def test_worker_app_exposes_the_ingestion_task() -> None:
+def test_worker_app_exposes_every_task_the_queue_defines() -> None:
+    """Every task the sealed queue package defines is reachable from the worker boundary.
+
+    Story 2.2 wired the first one (Story 1.1 shipped zero) and this asserted the name. Story 7.6
+    added the ranking task and the assertion had to change — so it now states the PROPERTY instead
+    of the inventory, because the inventory is what a second task breaks and the property is what a
+    second task must satisfy.
+
+    There is no task discovery here: ``apx/worker/app.py`` is a bare re-export of the queue app, so
+    a task defined in a submodule that ``queue/__init__.py`` never imports is **never registered**,
+    and every job deferred onto it dies at dispatch with an unknown-task error. Comparing the two
+    sets is what would catch that; comparing against a hand-written list would not."""
+    from apx.adapters.store_postgres import queue as queue_module
     from apx.worker.app import app
 
-    # Story 2.2 wires the resumable ingestion task onto the worker boundary (Story 1.1 shipped
-    # zero). A task we define lives under the apx namespace; the queue submodule owns it.
-    ours = [name for name in app.tasks if name.startswith("apx")]
-    assert ours == ["apx.run_import"], f"expected exactly the ingestion task; found {ours}"
+    ours = {name for name in app.tasks if name.startswith("apx")}
+    defined = {
+        t.name for t in vars(queue_module).values()
+        if isinstance(t, Task) and t.name.startswith("apx")}
+    assert defined, "the queue package defines no task at all — this check cannot be passing"
+    assert ours == defined, (
+        f"the worker boundary exposes {sorted(ours)} and the queue defines {sorted(defined)} — a "
+        "task the worker cannot see is a queue that accepts jobs nothing will ever run")

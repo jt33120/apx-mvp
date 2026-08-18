@@ -41,6 +41,7 @@ from apx.core.domain.confidence import (
     pieces_upper_bound,
     prevalence_upper_bound,
 )
+from apx.core.domain.freshness import trigger
 
 # The run's **stored** status: what a person did to it. Append-only string values (a persisted
 # status must always decode).
@@ -560,6 +561,70 @@ class SamplingRunView:
             recorded_prevalence_upper=self.prevalence_upper,
             recorded_method=self.estimator_method,
             run_ordinal=self.run_ordinal)
+
+
+class RerankCountMismatch(ValueError):
+    """The confirmation did not name the set the re-rank is about to destroy. Refused, for the
+    reason FR-45(a) refuses a bulk validation whose count moved: a confirmation of a different act
+    is not a confirmation of this one."""
+
+
+def check_confirmed_runs(open_runs: int, confirmed: int) -> int:
+    """The re-rank's confirmation names the number of open *sampling runs* it will invalidate.
+
+    The **shape** of :func:`~apx.core.domain.validation.check_confirmed_count`, not the function:
+    that one's message says *"the confirmation named N pièce(s)"*, and a run count passed through it
+    would print a sentence about *pièces* on a dialog about *runs*. Reuse the shape, name the
+    referent."""
+    if open_runs != confirmed:
+        raise RerankCountMismatch(
+            f"la confirmation porte sur {confirmed} tirage(s) et l'acte en invalide {open_runs} — "
+            "le nombre a changé depuis l'affichage")
+    return open_runs
+
+
+@dataclass(frozen=True)
+class RerankCost:
+    """What a re-rank will destroy, stated **before** it is paid for (FR-22 / FR-45(a), story 7.6).
+
+    A new *ranking version* moves ``ranking_version_no``, and ``INPUTS_BY_KIND[KIND_SAMPLING_RUN]``
+    is every observable — so **every** open run in the *matter* is invalidated. Until this object
+    existed nothing said so: ``_guard_open_run`` is a *write* guard with two callers, both writes,
+    so the lawyer met the consequence on her next verdict as a 409, after which
+    ``abandon_sampling_run`` audited ``verdicts_kept=`` the count of the hour she had just lost.
+
+    ``verdicts_at_risk`` counts **judged families**, which is what
+    :meth:`SamplingRunView.verdicts_recorded` counts and what ``_current_verdicts`` — max-seq per
+    family — later audits as ``verdicts_kept``. A row count would be a different number: a lawyer
+    who corrected one family wrote two rows and contributes one. Promising fourteen and auditing
+    eleven is the nearly-right referent, in the one sentence about what her work cost.
+    """
+
+    open_runs: int
+    verdicts_at_risk: int
+
+    @property
+    def is_free(self) -> bool:
+        """True when nothing open stands to be invalidated — the ordinary first ranking."""
+        return self.open_runs == 0
+
+    def sentence_fr(self) -> str:
+        """The consequence, in the lawyer's language, before anything is written.
+
+        The cause is named through the trigger's own French — *« un nouveau classement »* — never
+        the raw stamp key. The 409 a lawyer meets today ends in ``ranking_version_no`` because it
+        interpolates the exception's comma-joined keys; the French for it has existed since FR-58.
+        """
+        if self.is_free:
+            return "Aucun tirage en cours : ce classement n'invalide aucun échantillonnage."
+        runs = f"{self.open_runs} tirage(s) en cours"
+        cause = trigger("ranking_version_no").fr
+        if self.verdicts_at_risk == 0:
+            return (
+                f"{runs} seront invalidés par {cause}. Aucun verdict n'y a encore été porté.")
+        return (
+            f"{runs} seront invalidés par {cause}, avec {self.verdicts_at_risk} verdict(s) déjà "
+            "portés. Les tirages invalidés doivent être abandonnés et refaits.")
 
 
 def derive_run_state(*, status: str, stamped: bool, changed: Sequence[str]) -> str:

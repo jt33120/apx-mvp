@@ -50,6 +50,11 @@ ENCRYPTED_COLUMNS = [
     ("import_job", "id", "custodian", "import_job.custodian"),
     ("import_job", "id", "case_theory", "import_job.case_theory"),
     ("import_unit", "id", "provenance_path", "import_unit.provenance_path"),
+    # Story 7.6: the ranking-job ledger — the actor (PII) and the failure detail (which can
+    # interpolate an exception naming a pièce) are encrypted; single-PK, so rotation reaches
+    # them directly.
+    ("ranking_job", "id", "actor", "ranking_job.actor"),
+    ("ranking_job", "id", "detail", "ranking_job.detail"),
     ("backup_record", "id", "detail", "backup_record.detail"),
     ("truncation_marker", "tenant", "cleared_by", "truncation_marker.cleared_by"),
     ("truncation_marker", "tenant", "reason", "truncation_marker.reason"),

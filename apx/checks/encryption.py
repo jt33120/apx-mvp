@@ -78,6 +78,11 @@ _PLAINTEXT_ALLOWLIST_QUALIFIED = {
     ("ImportJob", "state"),
     ("ImportJob", "spool_path"),
     ("ImportUnit", "state"),
+    # Story 7.6 ranking-job ledger: ``state`` is a categorical lifecycle enum, exactly as
+    # ``ImportJob.state`` is. The two content-bearing columns on this table — ``actor`` and
+    # ``detail``, whose failure branch can interpolate an exception naming a pièce — are
+    # EncryptedText, so this entry declares one column non-content, not a table.
+    ("RankingJob", "state"),
     # Story 5.5 — the audit chain identity (AD-43). ``chain_scope`` holds a matter identifier or
     # "" for the tenant chain, and ``anchor`` is a sha256 chain value. Both are exactly as
     # sensitive as the already-plaintext ``matter`` and ``chain`` columns beside them, and both are

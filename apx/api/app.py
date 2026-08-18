@@ -49,7 +49,12 @@ from apx.adapters.render_html import CompositePieceRenderer, HtmlPieceRenderer, 
 from apx.adapters.render_image import Pdf2ImageRasterizer
 from apx.adapters.store_postgres.admission import admit
 from apx.adapters.store_postgres.opening import open_store
-from apx.adapters.store_postgres.queue import close_queue, enqueue_import, ensure_open
+from apx.adapters.store_postgres.queue import (
+    close_queue,
+    enqueue_import,
+    enqueue_ranking,
+    ensure_open,
+)
 from apx.adapters.store_postgres.store import (
     AuditUnwritable,
     ScopeConflict,
@@ -61,12 +66,18 @@ from apx.api.logging import install_secret_redaction
 from apx.api.startup import startup_gate
 from apx.core.app.ingest import IngestionResult, ingest_folder
 from apx.core.app.label import assign_taxonomy_label, revert_taxonomy_label
+from apx.core.app.line import place_line
 from apx.core.app.read.deterministic import MovingPopulation, search_exhaustive
 from apx.core.app.read.drawer import read_drawer
 from apx.core.app.read.freshness import BoundReading, read_bound, read_freshness, read_worklist
 from apx.core.app.read.piece import open_piece
 from apx.core.app.read.render import render_piece
-from apx.core.app.read.sampling import SamplingRunReading, read_sampling_run, read_sampling_runs
+from apx.core.app.read.sampling import (
+    SamplingRunReading,
+    read_sampling_run,
+    read_sampling_runs,
+    rerank_cost,
+)
 from apx.core.app.read.scan import read_scan_page
 from apx.core.app.read.semantic import search_semantic
 from apx.core.app.read.triage_table import (
@@ -100,7 +111,13 @@ from apx.core.domain.freshness import Freshness
 from apx.core.domain.inventory import Inventory
 from apx.core.domain.matter_record import Tier, read_continuity
 from apx.core.domain.override import MissingOverrideReason, ground_label_fr
-from apx.core.domain.sampling import KIND_BOUND, KIND_CENSUS
+from apx.core.domain.sampling import (
+    KIND_BOUND,
+    KIND_CENSUS,
+    RerankCost,
+    RerankCountMismatch,
+    check_confirmed_runs,
+)
 from apx.core.domain.taxonomy_label import OutOfTaxonomyLabel
 from apx.core.domain.traversal import (
     OutsideRoot,
@@ -3186,6 +3203,192 @@ def abandon_run(
     if run is None:
         raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
     return _reread_run(matter, ident, run_id)
+
+
+# ── Story 7.6: the ranking act becomes a request (AD-6 / FR-17 / FR-22) ───────────────────────
+# AD-6 names ranking by name as a queued job and gives THIS layer exactly four jobs — validate,
+# authorise, enqueue, return. The cascade is one model call per uncertain pièce; it runs in the
+# worker, against the application-owned ranking_job ledger, and this module imports no ranking act.
+
+
+class RerankCostOut(BaseModel):
+    """What a re-rank will destroy, before it is paid for. ``sentence_fr`` is composed in the
+    Domain and quoted, never rebuilt here from the two numbers — a second composer is how the
+    surface eventually says something the record does not."""
+
+    open_runs: int
+    verdicts_at_risk: int
+    sentence_fr: str
+
+
+class StartRankingIn(BaseModel):
+    """The re-rank request. ``confirmed_open_runs`` is the lawyer's acknowledgement of the count she
+    was shown — required whenever the count is non-zero, and re-checked here because a selection can
+    move underneath a dialog (the FR-45(a) lesson, applied to runs)."""
+
+    confirmed_open_runs: int | None = None
+
+
+class RankingStartedOut(BaseModel):
+    """The handle. ``state`` may already be ``failed`` on the way out — a queue that could not be
+    reached is a fact about this job, recorded on its ledger row, not a 503 about the service."""
+
+    job_id: str
+    matter: str
+    state: str
+
+
+class RankingJobOut(BaseModel):
+    """A ranking job's progress, read from the application-owned ledger and never from the queue
+    (AD-17).
+
+    It carries no percentage: ``run_cascade`` is one monolithic pass that persists nothing until it
+    ends, so any figure would be invented — unlike an import, which has units. It also does not
+    answer *superseded*: that is an artefact-stamp comparison over the live ranking, read through
+    ``GET /api/matters/{matter}/freshness``, not a state this job could ever know."""
+
+    job_id: str
+    matter: str
+    state: str
+    version_no: int | None = None
+    detail_fr: str | None = None
+
+
+def _matter_wall(store: SqlStore, ident: Identity, matter: str) -> str | None:
+    """The wall a *matter* is filed under, or ``None`` when the caller may not see it — one lookup
+    that answers *held?* and *which wall?* together. The wall must travel onto the ledger row
+    because the worker is a different process; re-deriving it there would be a second referent for
+    the one fact that decides what a ranking may read."""
+    for m in store.matters(ident.tenant, ident.scopes):
+        if m.matter == matter:
+            return m.scope
+    return None
+
+
+def _rerank_cost_or_404(store: SqlStore, ident: Identity, matter: str) -> RerankCost:
+    """The cost, refusing on ``None``. ``None`` means **not read**, and coercing it to a zero cost
+    is exactly the flattering direction: it would let a re-rank through in silence over a matter
+    whose runs could not be assessed."""
+    cost = rerank_cost(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=store,
+        config_get=lambda key: store.get_config(ident.tenant, key))
+    if cost is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    return cost
+
+
+@app.post("/api/matters/{matter}/ranking/preview", response_model=RerankCostOut)
+def preview_ranking_cost(
+    matter: str, ident: Identity = Depends(current_identity)
+) -> RerankCostOut:
+    """What a re-rank of this *matter* would invalidate (FR-22/FR-45(a)) — a pure read that writes
+    nothing.
+
+    Until this existed, a lawyer met the consequence of a re-rank on her NEXT verdict, as a 409,
+    after which the abandonment audited ``verdicts_kept=`` the count of the hour she had just lost.
+    404 when out of scope or absent, indistinguishably (FR-14)."""
+    store = _require_store()
+    if _matter_wall(store, ident, matter) is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    cost = _rerank_cost_or_404(store, ident, matter)
+    return RerankCostOut(
+        open_runs=cost.open_runs, verdicts_at_risk=cost.verdicts_at_risk,
+        sentence_fr=cost.sentence_fr())
+
+
+@app.post("/api/matters/{matter}/ranking", response_model=RankingStartedOut, status_code=202)
+async def start_ranking(
+    matter: str, req: StartRankingIn, ident: Identity = Depends(current_identity)
+) -> RankingStartedOut:
+    """Ask the tool to classer the *matter* — validate, authorise, enqueue, return (AD-6).
+
+    The cost is stated and consented to **here**, not at the store. ``_guard_open_run`` is a write
+    guard: it fires when the cascade has already been paid for and can only refuse to commit, and
+    putting the confirmation there would make the operator command refuse too.
+
+    A second request while a job is open is **409, and never the running job's handle** — the shape
+    ``ingest_upload`` uses, which is right for an import (a re-submitted folder is the same act) and
+    wrong here (the case theory may have moved, which is what ``record_ranking``'s conditional
+    commit raises over). Handing back the in-flight handle would tell a lawyer her re-rank was
+    accepted while the running job computes on the old theory.
+    """
+    store = _require_store()
+    wall = _matter_wall(store, ident, matter)
+    if wall is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    cost = _rerank_cost_or_404(store, ident, matter)
+    if not cost.is_free:
+        if req.confirmed_open_runs is None:
+            raise HTTPException(status_code=409, detail=cost.sentence_fr())
+        try:
+            check_confirmed_runs(cost.open_runs, req.confirmed_open_runs)
+        except RerankCountMismatch as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+    job_id = uuid4().hex
+    now = datetime.now(UTC)
+    try:
+        store.create_ranking_job(
+            job_id=job_id, tenant=ident.tenant, matter=matter, scope=wall, actor=ident.actor,
+            now=now)
+    except IntegrityError as exc:
+        raise HTTPException(
+            status_code=409, detail="un classement est déjà en cours sur ce dossier") from exc
+    try:
+        await enqueue_ranking(job_id)
+    except Exception as exc:  # noqa: BLE001 — the queue's reachability is a fact about THIS job
+        # NOT a 503. A 503 is a claim about availability over what is usually a permanent cause
+        # (story 7.4), in the direction a caller retries rather than reports. The ledger row says
+        # what happened, in French, and the matter's re-rank is not wedged because a failed job is
+        # terminal under this table's open-job index.
+        store.fail_ranking_job(
+            job_id, now=now,
+            detail=f"la demande n'a pas pu être mise en file d'attente : {exc}")
+        return RankingStartedOut(job_id=job_id, matter=matter, state="failed")
+    return RankingStartedOut(job_id=job_id, matter=matter, state="queued")
+
+
+@app.get("/api/rankings/{job_id}", response_model=RankingJobOut)
+def ranking_status(job_id: str, ident: Identity = Depends(current_identity)) -> RankingJobOut:
+    """A ranking job's state, from the ledger (AD-17 — never from the queue). Scope-checked: a
+    caller sees only a job for a *matter* within their wall, and an unknown job and a walled one
+    answer identically (FR-14)."""
+    store = _require_store()
+    job = store.read_ranking_job(job_id)
+    if job is None or job.tenant != ident.tenant or _matter_wall(store, ident, job.matter) is None:
+        raise HTTPException(status_code=404, detail="classement introuvable")
+    return RankingJobOut(
+        job_id=job.id, matter=job.matter, state=job.state, version_no=job.version_no,
+        detail_fr=job.detail)
+
+
+@app.post("/api/matters/{matter}/line", response_model=LineOut)
+def place_matter_line(
+    matter: str, version_no: int, ident: Identity = Depends(current_identity)
+) -> LineOut:
+    """Draw and commit **the line** over a NAMED *ranking version* (FR-17).
+
+    ``version_no`` is required, and that is the whole point of the route. ``place_line`` will
+    default to the latest, which story 7.5 calls *"right by accident today and wrong the moment two
+    acts overlap — and the failure direction is the catastrophic one: a stamp whose ``line_seq``
+    belongs to another version reads FRESH"*. This route exists to place a cut over the version a
+    failed job already recorded, so the number is the request's, never the server's guess.
+
+    A ``None`` placement is a **real answer**, returned 200: the tool commits to no line when no
+    *pièce* is in a retain band, and a line is never fabricated (AD-19)."""
+    store = _require_store()
+    if _matter_wall(store, ident, matter) is None:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
+    try:
+        placement = place_line(
+            store, tenant=ident.tenant, matter=matter, actor=ident.actor, scopes=ident.scopes,
+            version_no=version_no)
+    except ScopeDenied as exc:
+        raise HTTPException(status_code=404, detail=_MATTER_ABSENT) from exc
+    if placement is None:
+        return LineOut(placed=False)
+    return LineOut(
+        placed=True, last_retained_piece_id=placement.last_retained_piece_id,
+        last_retained_rank=None, basis=placement.basis, seq=placement.seq, at=placement.at)
 
 
 # One artifact serves both: the API routes above (/api/*, matched first) and the built

@@ -279,6 +279,33 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
                 judge=FixedJudge(), config=_cfg(), inputs=_inputs(), tenant=TENANT, matter=MATTER,
                 actor="me.durand", scopes={WALL}, recorder=store, placer=store)
 
+        enqueued: dict[str, str] = {}
+
+        def _preview_rerank() -> None:
+            """The cost, stated before it is paid for. Driven on the REAL path — a matter that
+            exists, under a wall the caller holds — because a step that drove the 404 branch would
+            be exercised in the one configuration where it cannot fail."""
+            r = client.post(f"/api/matters/{MATTER}/ranking/preview")
+            assert r.status_code == 200, r.text
+
+        def _enqueue_ranking() -> None:
+            """The queued act. 202 and a handle; the cascade is the worker's, not the request's."""
+            r = client.post(f"/api/matters/{MATTER}/ranking", json={})
+            assert r.status_code == 202, r.text
+            enqueued["job_id"] = r.json()["job_id"]
+
+        def _read_ranking_job() -> None:
+            r = client.get(f"/api/rankings/{enqueued['job_id']}")
+            assert r.status_code == 200, r.text
+
+        def _place_over_named_version() -> None:
+            """The remedy route, over the version NAMED — which is the whole reason it exists."""
+            current = store.read_ranking(tenant=TENANT, matter=MATTER, scopes={WALL})
+            assert current is not None
+            r = client.post(
+                f"/api/matters/{MATTER}/line", params={"version_no": current.version_no})
+            assert r.status_code == 200, r.text
+
         def _place() -> None:
             line = place_line(
                 store, tenant=TENANT, matter=MATTER, actor="me.durand", scopes={WALL})
@@ -540,6 +567,16 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             _Step(("rank.rank_and_draw_the_line",), _rank_and_draw),
             _Step(("line.place_line",), _place),
             _Step(("line.move_line",), _move),
+            # Story 7.6 — the queued ranking act over HTTP, and the remedy that places a cut over
+            # a NAMED version. BEFORE _cut_the_line_for_sampling, because the remedy places the
+            # tool's own recall-first cut and would undo the arrangement that gives the sampling
+            # run a non-empty discarded set to draw from. The enqueue meets a matter with no open
+            # run here, so it takes the free branch; the confirmation branch has its own
+            # regressions, and a probe step could only ever exercise one of the two.
+            _Step(("preview-rerank-cost",), _preview_rerank),
+            _Step(("enqueue-ranking",), _enqueue_ranking),
+            _Step(("read-ranking-progress",), _read_ranking_job),
+            _Step(("place-line-route",), _place_over_named_version),
             # Story 5.1 — the sampling run. AFTER the order and the line exist: its population is
             # derive_triage_sets(order, line, pins).discarded, so there is nothing to draw before.
             # The line cut is its OWN step, declaring no action: arrangement inside a probed step

@@ -54,6 +54,7 @@ from apx.adapters.store_postgres.models import (
     PieceProvenance,
     PinEntry,
     RankedEntry,
+    RankingJob,
     RecallReview,
     RegisterOverride,
     SamplingRun,
@@ -488,6 +489,29 @@ class ImportJobView:
     state: str
     submitted: int | None
     provisional: bool
+
+
+@dataclass(frozen=True)
+class RankingJobView:
+    """A detached snapshot of a ``ranking_job`` row — the worker and the poll route read this,
+    never a live ORM object across sessions.
+
+    It carries no progress figure, deliberately. An import has units and can honestly say
+    *processed against submitted*; :func:`~apx.core.app.cascade.run_cascade` is one monolithic pass
+    that persists nothing until it ends, so any percentage would be invented. It also cannot say
+    *superseded* — that is an artefact-stamp comparison over the live ranking
+    (``Freshness.superseded``), not a job state, and it is read through the freshness route.
+    """
+
+    id: str
+    tenant: str
+    matter: str
+    scope: str
+    actor: str
+    state: str
+    attempts: int
+    version_no: int | None
+    detail: str | None
 
 
 @dataclass(frozen=True)
@@ -1551,6 +1575,121 @@ class SqlStore:
             return ImportProgress(
                 job_id, j.tenant, j.matter, j.state, j.submitted, committed + quarantined,
                 committed, quarantined, pending, j.provisional)
+
+    # ── Story 7.6: the application-owned RANKING-job ledger (AD-6/AD-17) ────────────────────
+    # The sole authority for a ranking job's state. Every method opens its own transaction, and
+    # the attempt counter is a deliberately independent commit taken BEFORE the work (AD-17).
+
+    def open_ranking_job(self, tenant: str, matter: str) -> str | None:
+        """The id of an open (neither done nor failed) ranking job for this *matter*, if any.
+
+        Unlike :meth:`open_import_job`, whose caller hands the existing handle back, this exists so
+        the caller can REFUSE. A re-submitted folder is the same act; a second rank is not — the
+        case theory may have moved underneath it, which is exactly what ``record_ranking``'s
+        conditional commit raises ``StaleRankingInput`` over. Handing back the in-flight handle
+        would tell a lawyer her re-rank was accepted while the running job computes on the old
+        theory."""
+        with self._sf() as session:
+            return session.scalar(
+                select(RankingJob.id).where(
+                    RankingJob.tenant == tenant, RankingJob.matter == matter,
+                    RankingJob.state.not_in(("done", "failed"))))
+
+    def create_ranking_job(
+        self, *, job_id: str, tenant: str, matter: str, scope: str, actor: str, now: datetime,
+    ) -> None:
+        """Create the ledger row (``state=queued``, ``version_no`` NULL). Idempotent by id.
+
+        ``version_no`` is NOT written here. It is minted inside ``record_ranking``'s transaction as
+        ``max+1`` under ``UniqueConstraint(tenant, matter, version_no)``; a number written at
+        enqueue would be a *prediction*, and two jobs would both predict n+1, leaving one
+        permanently wrong on a row a lawyer's status panel reads.
+
+        The partial unique index refuses a second open job for the *matter* at the database, so a
+        concurrent double-submit raises rather than creating two (the caller's read-then-create is
+        a TOCTOU alone). No audit entry: ``record_ranking`` writes ``ACT_RANKING_RECORDED``
+        atomically with the version and its stamp, and a second entry would be a second record of
+        one act on a table AD-7 forbids removing from."""
+        with self._sf() as session, session.begin():
+            if session.get(RankingJob, job_id) is None:
+                session.add(RankingJob(
+                    id=job_id, tenant=tenant, matter=matter, scope=scope, actor=actor,
+                    state="queued", attempts=0, version_no=None, detail=None,
+                    created_at=now, updated_at=now))
+
+    def read_ranking_job(self, job_id: str) -> RankingJobView | None:
+        """The job as a detached view — ``None`` when there is no such job."""
+        with self._sf() as session:
+            j = session.get(RankingJob, job_id)
+            if j is None:
+                return None
+            return RankingJobView(
+                id=j.id, tenant=j.tenant, matter=j.matter, scope=j.scope, actor=j.actor,
+                state=j.state, attempts=j.attempts, version_no=j.version_no, detail=j.detail)
+
+    def bump_ranking_attempt(self, job_id: str, now: datetime) -> int:
+        """Advance the attempt counter in its OWN committed transaction, **before** the work — the
+        AD-17 mechanic, for the same reason the import's unit counter has it: an OS-level kill still
+        advances it, so a re-dispatch can never re-pay a cascade that was already started. Returns
+        the new count; 0 when there is no such job."""
+        with self._sf() as session, session.begin():
+            j = session.get(RankingJob, job_id)
+            if j is None:
+                return 0
+            j.attempts += 1
+            j.updated_at = now
+            return j.attempts
+
+    def start_ranking_job(self, job_id: str, now: datetime) -> None:
+        """``queued`` → ``running``. A no-op on any other state, so a re-dispatch of a terminal job
+        never re-opens it."""
+        with self._sf() as session, session.begin():
+            j = session.get(RankingJob, job_id)
+            if j is not None and j.state == "queued":
+                j.state = "running"
+                j.updated_at = now
+
+    def finish_ranking_job(self, job_id: str, *, version_no: int, now: datetime) -> None:
+        """Mark the job done and record the version it minted (AD-23 — the identity is complete).
+
+        Deliberately writes **no** job-level audit entry and runs **no** inventory consistency
+        check. The import does both; neither transfers. ``record_ranking`` has already audited the
+        act atomically with the version, and a ranking changes no inventory — so the only reachable
+        behaviour of a copied ``require_consistent()`` would be to roll back a completed ranking
+        over an unrelated pre-existing inconsistency, leaving the job wedged with the version
+        already committed by the earlier transaction."""
+        with self._sf() as session, session.begin():
+            j = session.get(RankingJob, job_id)
+            if j is None or j.state in ("done", "failed"):
+                return
+            j.state = "done"
+            j.version_no = version_no
+            j.detail = None
+            j.updated_at = now
+
+    def fail_ranking_job(
+        self, job_id: str, *, detail: str, now: datetime, version_no: int | None = None,
+    ) -> None:
+        """Mark the job failed with a reason, in its own transaction.
+
+        The row is **marked**, never deleted. ``import_job`` is on ``TRANSIENT_TABLES`` because a
+        job whose enqueue failed is rolled back so the upload path is not wedged; that reason does
+        not hold here, and leaving ``ranking_job`` evidential is what makes the runtime probe
+        enforce this design.
+
+        ``version_no`` is recorded when the ranking committed and a LATER step raised — the state
+        story 7.5 exists to close (a version with no cut). Naming it is what makes the remedy
+        reachable: the place-line route needs the number, and *the latest* is precisely the referent
+        that is right by accident today and catastrophic the moment two acts overlap."""
+        with self._sf() as session, session.begin():
+            j = session.get(RankingJob, job_id)
+            if j is None or j.state in ("done", "failed"):
+                return
+            j.state = "failed"
+            j.detail = detail
+            if version_no is not None:
+                j.version_no = version_no
+            j.updated_at = now
 
     def existing_piece_ids(self, tenant: str, matter: str, ids: list[str]) -> set[str]:
         """Which of ``ids`` are ALREADY corpus pièces for this matter (Story 2.8). A pièce already

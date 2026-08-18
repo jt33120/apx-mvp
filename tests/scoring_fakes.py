@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
 
+from apx.core.domain.ranking import JudgeIdentity
 from apx.core.domain.triage import Label, Verdict
 
 
@@ -23,9 +24,16 @@ class FakeScorer:
 
 
 class FixedJudge:
-    """Returns a fixed verdict for every call and records the (question, text) pairs it saw."""
+    """Returns a fixed verdict for every call and records the (question, text) pairs it saw.
+
+    Its ``identity`` is TRUTHFUL (story 7.3): the identity a ranking is fingerprinted with must
+    come from the thing that actually decided the order, so a fake that borrowed a real model's
+    name would put a permanent false claim on every version a test produces."""
 
     name = "fake-judge"
+    identity = JudgeIdentity(
+        provider="fake", endpoint="local:fake-judge", model="fixed-verdict",
+        temperature=0.0, sampling={})
 
     def __init__(self, label: Label = Label.RELEVANT) -> None:
         self._label = label
@@ -41,6 +49,9 @@ class FailingJudge:
     unscored path (a provider failure must NOT degrade to an in-band label)."""
 
     name = "failing-judge"
+    identity = JudgeIdentity(
+        provider="fake", endpoint="local:failing-judge", model="always-raises",
+        temperature=0.0, sampling={})
 
     def __init__(
         self, *, fails_on: Callable[[str], bool] = lambda _t: True, error: Exception | None = None,

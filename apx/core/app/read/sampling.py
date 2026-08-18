@@ -27,6 +27,7 @@ from apx.core.domain.sampling import (
     STATUS_COMPLETED,
     STATUS_OPEN,
     Estimate,
+    RerankCost,
     SamplingRunView,
     derive_run_state,
 )
@@ -279,3 +280,40 @@ def read_sampling_runs(
         readings.append(SamplingRunReading(
             run=run, stamped=stamped, changed=changed, unfit_relevant_share=share))
     return tuple(readings)
+
+
+def rerank_cost(
+    *, tenant: str, matter: str, scopes: set[str], store: SamplingRunStore,
+    config_get: Callable[[str], object],
+) -> RerankCost | None:
+    """What a re-rank of this *matter* would destroy — read **before** the act, so the lawyer can
+    refuse it (FR-22 / FR-45(a), story 7.6).
+
+    Three things this deliberately does not do, each of which falls to the flattering side.
+
+    It does not count the **stored** status. A run stored ``open`` may already be invalidated by an
+    earlier act, and :func:`~apx.core.domain.sampling.derive_run_state` turns that pair into
+    ``invalidated``. Counting stored status would promise *"you will invalidate three runs"* when
+    two were already dead — and that count is the load-bearing number in a confirmation the server
+    then re-checks.
+
+    It does not gate on ``invalidated_in_flight``. Before the re-rank the run is genuinely **fresh**
+    — that is the whole point — so a warning gated on the existing invalidation flag would never
+    fire, and would pass every test written in the one configuration where it can be observed:
+    afterwards. This is a *prediction*, a different computation from the retrospective comparison
+    the rest of this module performs.
+
+    And it does not turn ``None`` into a zero cost. ``None`` means **not read** — empty scopes, a
+    walled or absent *matter*, a freshness read that failed mid-sweep. Every one of those is
+    "nothing at risk, proceed silently" if it is coerced to zero. Only ``()`` means read-and-none.
+    """
+    readings = read_sampling_runs(
+        tenant=tenant, matter=matter, scopes=scopes, store=store, config_get=config_get)
+    if readings is None:
+        return None
+    at_risk = [r for r in readings if r.state == STATUS_OPEN]
+    return RerankCost(
+        open_runs=len(at_risk),
+        # judged FAMILIES — the same arithmetic ``abandon_sampling_run`` later audits as
+        # ``verdicts_kept`` (max-seq per family), never the row count
+        verdicts_at_risk=sum(r.run.verdicts_recorded for r in at_risk))

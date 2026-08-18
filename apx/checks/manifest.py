@@ -70,6 +70,7 @@ from apx.checks import (
     read_path,
     register_ownership,
     renders_sanitized,
+    rerank_cost,
     sampling_freeze,
     sampling_population,
     scope_admin,
@@ -725,6 +726,14 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "API deferred onto a pool that did not exist and answered 503 to every upload on every "
        "real deployment; the suite runs on SQLite, whose in-memory connector is the one "
        "implementation with no such guard"),
+    # ── story 7.6: a re-rank states what it will destroy before it is paid for (FR-22) ───────
+    _p("rerank-states-its-cost", "FR-22", "AD-6", "no ranking is enqueued without stating its cost",
+       rerank_cost.every_rerank_enqueue_states_its_cost,
+       "every function under apx/api that calls enqueue_ranking — each must first read what the "
+       "re-rank will invalidate. A new ranking version moves ranking_version_no and "
+       "INPUTS_BY_KIND[KIND_SAMPLING_RUN] is every observable, so every open sampling run in the "
+       "matter dies; _guard_open_run is a WRITE guard, so the lawyer met that on her next verdict "
+       "as a 409, after abandon_sampling_run had already audited the hour she lost"),
     _p("override-ground-named", "FR-25", "AD-33", "an override names its FR-25 ground",
        override.override_names_its_ground,
        "the act catalogue (every override names one of FR-25's three grounds; the override class "
