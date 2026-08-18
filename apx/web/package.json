@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
-  "description": "APX web — a static SPA (Vite + React Router). Build-time Node only; no Node runtime ships (AD-29).",
+  "description": "APX web \u2014 a static SPA (Vite + React Router). Build-time Node only; no Node runtime ships (AD-29).",
   "engines": {
     "node": ">=24.18 <27"
   },
@@ -11,7 +11,9 @@
     "dev": "vite",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
-    "typecheck": "tsc -b --noEmit"
+    "typecheck": "tsc -b --noEmit",
+    "e2e": "playwright test",
+    "e2e:ui": "playwright test --ui"
   },
   "dependencies": {
     "pdfjs-dist": "6.2.108",
@@ -20,6 +22,7 @@
     "react-router": "8.2.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "6.0.4",
