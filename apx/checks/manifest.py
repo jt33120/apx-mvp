@@ -33,6 +33,7 @@ from pathlib import Path
 from apx.checks import (
     artefact_stamp_ownership,
     audit_record,
+    backup_completeness,
     case_theory_ownership,
     confidence_derivation,
     configuration,
@@ -699,6 +700,14 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "every rglob/glob/iterdir/walk/scandir/listdir call across apx/** — the confined walk is "
        "where the submitted subtree's boundary is applied, and the route validated a "
        "caller-supplied absolute path with is_dir() before handing it to a second traversal"),
+    # ── story 7.2: the backup is complete by construction (AD-32 / C2) ───────────────────────
+    _p("backup-plan-is-total", "FR-52", "AD-32", "a tenant backup's coverage is total over the "
+       "model",
+       backup_completeness.the_backup_plan_is_total,
+       "every table in the live SQLAlchemy metadata against the derived backup plan and its "
+       "written exclusions — the hand-written tuple this replaces named 20 of 35 tables, had "
+       "been added to by three separate stories, and a list cannot be reviewed for what is "
+       "not in it"),
     _p("override-ground-named", "FR-25", "AD-33", "an override names its FR-25 ground",
        override.override_names_its_ground,
        "the act catalogue (every override names one of FR-25's three grounds; the override class "

@@ -16,6 +16,7 @@ from collections.abc import Callable
 from apx.checks import (
     artefact_stamp_ownership,
     audit_record,
+    backup_completeness,
     case_theory_ownership,
     confidence_derivation,
     configuration,
@@ -223,6 +224,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     continuity.the_continuity_claim_is_derived_from_the_document,
     continuity.an_audit_write_failure_is_never_swallowed,
     traversal.the_filesystem_has_one_walk,
+    # ── story 7.2: a backup's coverage is derived, not listed (AD-32/C2) ──
+    backup_completeness.the_backup_plan_is_total,
     statement.the_sentence_has_one_composer,
     statement.the_sentence_is_composed_offline,
     statement.unfitness_offers_no_line_move,

@@ -18,7 +18,7 @@ import json
 import logging
 import secrets
 from collections.abc import Callable, Sequence
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import uuid4
 
@@ -27,6 +27,7 @@ from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from sqlalchemy.orm import Session, sessionmaker
 
 from apx.adapters.store_postgres.backfill import case_theory_version_id, link_id
+from apx.adapters.store_postgres.backup_plan import backup_plan
 from apx.adapters.store_postgres.chunk_writer import UnauthorizedScope
 from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.deterministic_query import exact_search_stmt
@@ -245,25 +246,9 @@ _PROVISIONING = AUDIT.system_actor("provisioning")
 
 _APP_VERSION = "0.1.0"           # the application version stamped on a head-journal entry (AD-35)
 _HEAD_SCHEMA_VERSION = "slice-a"  # the payload schema version (AD-40) stamped on the head
-# The tenant-owned tables a logical backup captures (each has a `tenant` column). `user_scope` is
-# keyed by user_id (tenant-bound via the user) and is handled specially in backup/restore.
-_BACKUP_TABLES = (
-    "matter_scope", "user_account", "session", "tenant_setting",
-    "piece", "chunk", "failure", "noise_exclusion", "piece_label", "audit_record",
-    # The chain heads travel WITH the record (Story 5.5, AD-43). Two things break without them:
-    # a restored matter chain has no anchor, so its first link is unprovable and the restore-time
-    # verification cannot pass; and the sequence authority is gone, so the next act after a restore
-    # allocates seq 1 again — colliding with the restored entries, or worse, silently forking the
-    # chain. A backup that omits the allocator restores a record it cannot continue.
-    "audit_chain_head",
-    "recall_review",
-    "backup_record", "truncation_marker", "taxonomy_label_entry", "line_placement", "pin_entry",
-    "piece_justification", "justification_rejection",
-    # Story 5.9 — the heads the journal could not record. They travel because they are evidence
-    # about the record's own witness: a restore that dropped them would restore a record whose
-    # unwitnessed stretches nobody could name any more.
-    "journal_gap",
-)
+# What a logical backup captures is DERIVED from the mapped model — see
+# `apx.adapters.store_postgres.backup_plan`. The hand-written tuple that used to live here named 20
+# tables of 35 and had been added to three times without anyone asking whether it was complete.
 
 
 def _join_family_sizes(families: Sequence[SamplingUnit]) -> str:
@@ -381,12 +366,13 @@ class TenantBackup:
 
     tenant: str
     schema_version: str
+    #: EVERY captured table's raw rows, keyed by table name — including the ones keyed by a parent
+    #: rather than by tenant (``user_scope``, the piece SETS of Story 2.5, the sampling run's drawn
+    #: families and verdicts). They used to be separate fields, which is two representations of one
+    #: fact: a table could be in the model, absent from the tuple, and absent from the dataclass,
+    #: and nothing anywhere would say so. There is one collection now, and it is derived.
     tables: dict[str, list[dict]]
-    user_scopes: list[dict]
     head_tail: list[dict]
-    # the piece SETS (Story 2.5) — keyed by piece_id, not tenant, so gathered/restored specially
-    # (like ``user_scopes``); "piece_provenance"/"piece_custodian" → their raw (ciphertext) rows.
-    piece_links: dict[str, list[dict]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -3205,35 +3191,19 @@ class SqlStore:
         repairing. REPEATABLE READ makes the allocator and the entries the same moment. (SQLite
         serialises writers, so it has the property already and rejects the SET; the guard is on the
         dialect.)"""
+        plan = backup_plan()
         with self._sf() as session:
             conn = session.connection()
             snapshot = _snapshot_isolation_sql(conn.dialect.name)
             if snapshot is not None:
                 conn.execute(text(snapshot))
             tables: dict[str, list[dict]] = {}
-            for tbl in _BACKUP_TABLES:
+            for cap in plan:
                 rows = conn.execute(
-                    text(f"SELECT * FROM {tbl} WHERE tenant = :t"), {"t": tenant}  # noqa: S608
+                    text(f"SELECT * FROM {cap.table} WHERE {cap.predicate}"),  # noqa: S608
+                    {"t": tenant},
                 ).mappings().all()
-                tables[tbl] = [dict(r) for r in rows]
-            uids = [
-                uid for (uid,) in conn.execute(
-                    text("SELECT id FROM user_account WHERE tenant = :t"), {"t": tenant}).all()
-            ]
-            scopes = [
-                {"user_id": r.user_id, "scope": r.scope}
-                for r in session.execute(
-                    select(UserScope).where(UserScope.user_id.in_(uids))).scalars().all()
-            ] if uids else []
-            # the piece SETS (Story 2.5) — keyed by piece_id, so captured via the tenant's pieces
-            # (like user_scope via the tenant's users), RAW so ciphertext is preserved.
-            piece_links: dict[str, list[dict]] = {}
-            for tbl in ("piece_provenance", "piece_custodian"):
-                rows = conn.execute(
-                    text(f"SELECT * FROM {tbl} WHERE piece_id IN "  # noqa: S608
-                         "(SELECT id FROM piece WHERE tenant = :t)"), {"t": tenant}
-                ).mappings().all()
-                piece_links[tbl] = [dict(r) for r in rows]
+                tables[cap.table] = [dict(r) for r in rows]
         head_tail: list[dict] = []
         if self._journal is not None:
             # EVERY chain of this tenant, not just the tenant chain (AD-43 + AD-35). A backup that
@@ -3244,8 +3214,7 @@ class SqlStore:
                 asdict(entry) for scope, entry in sorted(self._journal.all_latest().items())
                 if tenant_of(scope) == tenant
             ]
-        return TenantBackup(
-            tenant, _HEAD_SCHEMA_VERSION, tables, scopes, head_tail, piece_links=piece_links)
+        return TenantBackup(tenant, _HEAD_SCHEMA_VERSION, tables, head_tail)
 
     def _chain_verifies(self, session: Session, tenant: str) -> bool:
         """Recompute EVERY chain of a tenant end to end from the rows in ``session`` — the same
@@ -3322,33 +3291,38 @@ class SqlStore:
         restore, not caught later on a read). After commit the backup's copied head tail is seeded
         into the journal (true DR: the journal volume may have died with the primary), then the head
         is reconciled — a restore that moved the head backwards is a truncation."""
+        plan = backup_plan()
         with self._sf() as session, session.begin():
             conn = session.connection()
-            for tbl in _BACKUP_TABLES:
+            for cap in plan:
                 if conn.execute(
-                    text(f"SELECT 1 FROM {tbl} WHERE tenant = :t LIMIT 1"),  # noqa: S608
+                    text(f"SELECT 1 FROM {cap.table} WHERE {cap.predicate} LIMIT 1"),  # noqa: S608
                     {"t": backup.tenant},
                 ).first():
                     raise ValueError(
-                        f"tenant {backup.tenant!r} already has {tbl} rows — restore is into an "
-                        "empty store (AD-32)")
-            for tbl in _BACKUP_TABLES:
-                for row in backup.tables.get(tbl, []):
+                        f"tenant {backup.tenant!r} already has {cap.table} rows — restore is into "
+                        "an empty store (AD-32)")
+            # Asymmetric ON PURPOSE. A table the backup carries and the plan does not is a
+            # refusal: its rows would be dropped and the restore would report success, which is
+            # this story's whole subject. A table the plan has and the backup does not is
+            # ACCEPTED: that is a table added to the model after the backup was taken, and it has
+            # no historical rows by definition. Refusing it would make every schema upgrade
+            # un-restorable from yesterday's bundle, which is a worse failure than the one it
+            # would catch.
+            unknown = sorted(set(backup.tables) - {cap.table for cap in plan})
+            if unknown:
+                raise ValueError(
+                    f"backup of tenant {backup.tenant!r} carries table(s) this model has no plan "
+                    f"for: {unknown} — restoring the rest would restore a subset while reporting "
+                    "success (AD-32)")
+            for cap in plan:                      # plan order is FK-safe: parents before children
+                for row in backup.tables.get(cap.table, []):
                     cols = list(row.keys())
                     collist = ", ".join(cols)
                     binds = ", ".join(f":{c}" for c in cols)
                     conn.execute(
-                        text(f"INSERT INTO {tbl} ({collist}) VALUES ({binds})"), row)  # noqa: S608
-            for sc in backup.user_scopes:
-                conn.execute(
-                    text("INSERT INTO user_scope (user_id, scope) VALUES (:user_id, :scope)"), sc)
-            for tbl in ("piece_provenance", "piece_custodian"):  # the piece SETS (Story 2.5)
-                for row in backup.piece_links.get(tbl, []):
-                    cols = list(row.keys())
-                    collist = ", ".join(cols)
-                    binds = ", ".join(f":{c}" for c in cols)
-                    conn.execute(
-                        text(f"INSERT INTO {tbl} ({collist}) VALUES ({binds})"), row)  # noqa: S608
+                        text(f"INSERT INTO {cap.table} ({collist}) "  # noqa: S608
+                             f"VALUES ({binds})"), row)
             # The allocator is reconciled FIRST: a pre-5.5 backup carries no head rows, and the
             # verification below reads the anchors from them.
             self._reconcile_allocator(session, backup.tenant)

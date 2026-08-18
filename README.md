@@ -373,16 +373,41 @@ head **behind** the journal is a **truncation** — surfaced (`GET /api/admin/dr
 future export, cleared only by a recorded, audited **override** with a reason, and **never
 repaired**.
 
-**Backup is logical and per-tenant** (inside the *tenant* boundary): it captures the tenant's
-*pièces*, *failure register*, *audit record*, configuration, users and scopes — content-bearing
-columns stay **ciphertext** (encrypted at rest, no re-encryption). Restore is **exercised, not
-assumed**: a restore into an **empty** store reproduces the tenant's inventory (the *denominator*),
-its audit sequence and its configuration **identically**, the chain **re-verifies**, and the head
-**reconciles**. On demand:
+**Backup is logical, per-tenant, and complete by construction** (Story 7.2). What it captures is
+**derived from the mapped model**, never listed: every table is classified before a row is read —
+by its own `tenant` column, as the child of a captured table through its **declared foreign key**,
+by a written predicate, or by a written exclusion — and a table matching none of the four makes the
+backup **raise**. The `backup-plan-is-total` structural check states the same property at build
+time. (The hand-written tuple this replaces named **20 of 35** tables. It had been added to by three
+separate stories, none of which asked whether it was complete, so a restore returned a *matter* with
+no *ranking version*, no ranked order, no *sampling run* and therefore no *confidence bound*, and no
+*validation act* — **while the audit record survived and attested every one of them**.)
+
+The **retained originals travel with it**, copied as the ciphertext they already are: taking a
+backup needs no encryption key and never holds a firm's corpus in the clear. Their AAD binds
+`(tenant, content_hash, kind)`, so a blob restored under an identity that is not its own fails
+authentication rather than being served as that document.
+
+A backup is a **sealed directory**, and nothing in it is in the clear — `chunk.full_text` is the one
+column AD-31 deliberately leaves plaintext, protected by the encrypted *volume*, and a backup file
+is the one artefact designed to leave that volume:
 
 ```
-python -m apx.manage backup  --tenant cabinet --out /backups/cabinet.json
-python -m apx.manage restore --from /backups/cabinet.json     # into an empty store; head reconciled
+<bundle>/tables.json.sealed     the rows, AES-256-GCM under the application key
+<bundle>/originals/<hash>       each retained blob, byte-for-byte as it sits on disk
+```
+
+The blob inventory lives **inside** the sealed payload, so a restore puts back what the key attests
+and not what happens to be in the folder. Restore is **exercised, not assumed**: a restore into an
+**empty** store reproduces the *denominator*, the **ranked orders**, the audit sequence and the
+**confidence bounds** identically — read back through the product, not off the rows — the chain
+**re-verifies**, and the head **reconciles**. The recorded outcome **states its coverage**, and a
+retained *pièce* whose document is not on the volume makes the backup a recorded **failure**: *the
+backup succeeded* can no longer coexist with *nine tables were not in it*. On demand:
+
+```
+python -m apx.manage backup  --tenant cabinet --out /backups/cabinet-2026-08-18
+python -m apx.manage restore --from /backups/cabinet-2026-08-18   # empty store; head reconciled
 ```
 
 The product **states** a tenant's storage footprint at the *design target* (100 000 *pièces*) and a
@@ -508,6 +533,7 @@ could contain is an inflated claim about what the suite proves).
 | `continuity-claim-is-derived` | FR-53 | AD-33 | structural | the_continuity_claim_is_derived_from_the_document | every `recomputable_from_this_document=` keyword across apx/** — the flag asserts a property of the bytes the READER holds, and used to be handed over from the adapter carrying a fact about whether a row in the database had an anchor, so it printed **true** on a court document that carried no entries at all |
 | `audit-write-never-swallowed` | FR-53 | AD-22 | structural | an_audit_write_failure_is_never_swallowed | every `try`/`except` around an `_append_audit` call across apx/** — FR-53's first consequence is that the act FAILS, and it is defeated by one handler that logs and continues, which reads as defensive programming and produces an act that happened beside a record saying it did not |
 | `filesystem-has-one-walk` | FR-1 | AD-33 | structural | the_filesystem_has_one_walk | every `rglob`/`glob`/`iterdir`/`walk`/`scandir`/`listdir` call across apx/** — the confined walk is where the submitted subtree's boundary is applied, and until Story 7.1 the ingest route validated a **caller-supplied absolute path** with `is_dir()` alone before handing it to `rglob`, while the capacity pre-flight ran a second traversal of its own. A second walk is not a duplicate; it is a path on which the boundary does not exist |
+| `backup-plan-is-total` | FR-52 | AD-32 | structural | the_backup_plan_is_total | every table in the live SQLAlchemy metadata against the derived backup plan and its written exclusions. The hand-written tuple this replaces named 20 of 35 tables and had been added to by three separate stories, none of which asked whether it was complete — so a restore returned a matter with no ranking, no sampling run and therefore no confidence bound, no validation act, while the audit record survived and attested every one of them. A list cannot be reviewed for what is not in it |
 | `override-ground-named` | FR-25 | AD-33 | structural | override_names_its_ground | the act catalogue — every override names one of FR-25's three grounds and the override class has a real writer — plus any comparison against the override act **class** across apx/**: a pin is an override whose FR-24 class is `pin`, so a class-based count reports zero on a matter with forty pins and looks right on every matter that has none |
 | `statement-one-composer` | FR-23 | AD-37 | structural | the_sentence_has_one_composer | confidence-bound wording in runtime string literals + apx/web/src — the sentence is composed only in core/domain/statement.py, never re-assembled by a read seam or by the client (a client-composed claim can omit the RBAC scope and the staleness the server puts inside the string) |
 | `statement-composed-offline` | FR-55 | AD-4 | structural | the_sentence_is_composed_offline | the transitive import closure of core/domain/statement.py — Domain-only, no networking module, and the composer must exist and export `statement_fr`. A check on an ABSENCE, deliberately the belt: the braces is the round-trip test that regenerates the sentence from the recorded artefact and compares it character for character |

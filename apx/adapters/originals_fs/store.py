@@ -19,10 +19,11 @@ import hashlib
 import os
 import re
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from pathlib import Path
 
 from apx.core.domain.crypto import Cipher
+from apx.core.domain.traversal import walk_confined
 
 _HEX64 = re.compile(r"[0-9a-f]{64}")            # a sha256 content_hash (AD-40) — the ONLY blob name
 _SAFE_KIND = re.compile(r"[a-z][a-z0-9-]*")     # an artifact kind: original | ocr-layout | …
@@ -78,8 +79,11 @@ class FilesystemOriginalStore:
             return  # content-addressed: identical bytes are stored once (idempotent)
         path.parent.mkdir(parents=True, exist_ok=True)
         token = self._cipher.encrypt_bytes(data, aad=_aad(tenant, content_hash, kind))
-        # Atomic publish: write a temp sibling, fsync, then rename onto the final name — a crash
-        # mid-write leaves a stray temp file, never a half-written blob read as whole.
+        self._publish(path, token)
+
+    def _publish(self, path: Path, token: bytes) -> None:
+        """Atomic publish: write a temp sibling, fsync, then rename onto the final name — a crash
+        mid-write leaves a stray temp file, never a half-written blob read as whole."""
         fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".tmp-", suffix=".blob")
         try:
             with os.fdopen(fd, "wb") as f:
@@ -118,3 +122,59 @@ class FilesystemOriginalStore:
             return None
         overhead = len(self._cipher.encrypt_bytes(b""))  # constant: prefix + nonce + tag
         return max(0, path.stat().st_size - overhead)
+
+    # ── the sealed face: backup and restore (Story 7.2, AD-32) ──────────────────────────────────
+
+    def sealed_blobs(self, tenant: str) -> Iterator[tuple[str, str]]:
+        """Every retained ``(content_hash, kind)`` for ``tenant``, read off the store itself.
+
+        Enumerated from the tenant's own directory rather than from a table listing what *should*
+        be retained, because the table is exactly the thing that was wrong: a derived kind that no
+        column names (``ocr-layout``) would be absent from any list-driven backup and present on
+        disk. The partition IS the tenant boundary.
+
+        Through ``walk_confined`` (FR-1's one door), so the tenant partition is a boundary here and
+        not merely a naming convention: a symbolic link planted in this directory — pointing at
+        another firm's blobs, or anywhere else on the volume — is out of scope and **refuses the
+        enumeration** rather than being copied into this tenant's backup under this tenant's name.
+
+        An unrecognised name raises for the same reason. A backup is the one operation where "I
+        skipped a file I did not understand" is indistinguishable from "there was nothing there";
+        the interrupted write's own temp prefix is the single tolerated exception, because it is by
+        construction not a blob.
+        """
+        root = self._root / hashlib.sha256(tenant.encode("utf-8")).hexdigest()
+        if not root.is_dir():
+            return
+        walk = walk_confined(root)
+        if walk.out_of_scope:
+            raise ValueError(
+                f"{len(walk.out_of_scope)} link(s) in the retained-original store leave the "
+                f"tenant's own partition (first: {walk.out_of_scope[0].relative} → "
+                f"{walk.out_of_scope[0].target}) — a backup does not follow them out")
+        for walked in walk.files:
+            name = walked.path.name
+            if name.startswith(".tmp-"):
+                continue                       # an interrupted _publish, never a blob
+            content_hash, _, kind = name.partition(".")
+            kind = kind or "original"
+            if not _HEX64.fullmatch(content_hash) or not _SAFE_KIND.fullmatch(kind):
+                raise ValueError(
+                    f"unrecognised file in the retained-original store: {name!r} — a backup "
+                    "cannot decide on its own that a file it does not understand is not data")
+            yield content_hash, kind
+
+    def read_sealed(self, tenant: str, content_hash: str, kind: str = "original") -> bytes:
+        """The blob exactly as stored — still ciphertext, never decrypted. Taking a backup
+        therefore needs no encryption key and never holds a firm's documents in the clear."""
+        return self._blob_path(tenant, content_hash, kind).read_bytes()
+
+    def put_sealed(self, tenant: str, content_hash: str, kind: str, sealed: bytes) -> None:
+        """Put back bytes taken by :meth:`read_sealed`, byte-for-byte. The AAD is *inside* them and
+        binds (tenant, content_hash, kind), so a blob restored under an identity that is not its
+        own fails authentication on the first read rather than being served as that document."""
+        path = self._blob_path(tenant, content_hash, kind)
+        if path.exists():
+            return                             # content-addressed: idempotent, like ``put``
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self._publish(path, sealed)

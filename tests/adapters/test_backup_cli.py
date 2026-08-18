@@ -9,15 +9,26 @@ from __future__ import annotations
 import json
 from datetime import UTC, date, datetime
 
+import pytest
 from sqlalchemy import create_engine, select, update
 from sqlalchemy.orm import sessionmaker
 
 from apx.adapters.store_postgres.models import Base, Piece
 from apx.adapters.store_postgres.store import SqlStore
+from apx.backup_bundle import _json_default, _revive
 from apx.core.app.ingest import IngestedPiece, IngestionResult
-from apx.manage import _json_default, _revive, backup, restore
+from apx.manage import backup, restore
 
 TENANT = "cabinet"
+
+
+@pytest.fixture(autouse=True)
+def _data_volume(tmp_path, monkeypatch):  # noqa: ANN001, ANN201
+    """The retained-original volume the CLI backs up from (Story 7.2). A SUBDIRECTORY of tmp_path,
+    never tmp_path itself — the conftest's ingest root is tmp_path, and a root that can reach
+    ``originals/`` is the configuration Story 7.1 refuses."""
+    monkeypatch.setenv("APX_DATA_PATH", str(tmp_path / "data"))
+    return tmp_path / "data"
 
 
 def _store(tmp_path, name: str) -> SqlStore:  # noqa: ANN001
@@ -58,7 +69,7 @@ def test_cli_backup_restore_round_trips_a_determined_piece_date(tmp_path) -> Non
         s.execute(update(Piece).where(Piece.id == "p0").values(
             piece_date=determined, piece_date_status="determined"))
 
-    out = tmp_path / "cabinet.json"
+    out = tmp_path / "bundle-cabinet"
     backup(src, TENANT, str(out))     # exercises the manage-CLI backup path end to end
     dst = _store(tmp_path, "dst")
     restore(dst, str(out))            # and the restore path, into an empty store
@@ -67,3 +78,54 @@ def test_cli_backup_restore_round_trips_a_determined_piece_date(tmp_path) -> Non
         got = s.scalar(select(Piece.piece_date).where(Piece.id == "p0"))
     assert got == determined                                   # the determined date survived
     assert dst.inventory("m", TENANT, {"w"}).in_corpus == 1    # and the denominator with it
+
+
+# ── Story 7.2 — the CLI writes a sealed bundle, and the record says what it covered ────────────
+
+def _last_backup_record(store: SqlStore):  # noqa: ANN202
+    from apx.adapters.store_postgres.models import BackupRecord
+    with store._sf() as s:
+        return s.scalars(select(BackupRecord).where(BackupRecord.tenant == TENANT)).all()[-1]
+
+
+def test_the_cli_records_the_coverage_it_achieved(tmp_path) -> None:  # noqa: ANN001
+    """AD-32's outcome line stops being a bare 'success'. The one it replaces was recorded over a
+    backup carrying 20 of 35 tables and none of the originals, and said nothing about either."""
+    src = _store(tmp_path, "src")
+    src.provision_tenant(TENANT, "a@x.fr", "pw12345678", "Admin", {"w"}, ["conclusions"])
+    backup(src, TENANT, str(tmp_path / "bundle"))
+
+    record = _last_backup_record(src)
+    assert record.outcome == "success"
+    from apx.adapters.store_postgres.backup_plan import backup_plan
+
+    assert f"{len(backup_plan())} tables" in record.detail and "originaux" in record.detail
+
+
+def test_a_backup_missing_a_retained_document_is_recorded_as_a_FAILURE(tmp_path) -> None:  # noqa: ANN001
+    """The bundle is still written — a firm holding an incomplete backup is better off than one
+    holding none — but the *worklist* must not read green over a tenant whose *pièce* has no
+    document. AD-32's subject is the backup whose failure nobody knew about."""
+    src = _store(tmp_path, "src")
+    src.provision_tenant(TENANT, "a@x.fr", "pw12345678", "Admin", {"w"}, ["conclusions"])
+    src.save(IngestionResult(pieces=[_piece("p0")]), "w", actor="admin")   # no original retained
+
+    out = tmp_path / "bundle"
+    message = backup(src, TENANT, str(out))
+    assert out.is_dir()
+    assert "INCOMPLET" in message
+
+    record = _last_backup_record(src)
+    assert record.outcome == "failure"
+    assert src.backup_status(TENANT, interval_hours=24).overdue
+
+
+def test_a_backup_with_no_data_volume_configured_is_refused(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    """``from_env`` falls back to the host temp directory when ``APX_DATA_PATH`` is unset, and that
+    directory is empty — so the bundle would be written with zero originals and report success.
+    Refused instead, on the same gate the head journal has."""
+    monkeypatch.delenv("APX_DATA_PATH", raising=False)
+    src = _store(tmp_path, "src")
+    src.provision_tenant(TENANT, "a@x.fr", "pw12345678", "Admin", {"w"}, ["conclusions"])
+    with pytest.raises(RuntimeError, match="APX_DATA_PATH"):
+        backup(src, TENANT, str(tmp_path / "bundle"))

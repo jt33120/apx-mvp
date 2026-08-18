@@ -14,8 +14,9 @@ import pytest
 from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import sessionmaker
 
+from apx.adapters.store_postgres.backup_plan import backup_plan
 from apx.adapters.store_postgres.models import EMBEDDING_DIM, Base, Chunk
-from apx.adapters.store_postgres.store import _BACKUP_TABLES, SqlStore
+from apx.adapters.store_postgres.store import SqlStore
 from apx.core.app.ingest import IngestedPiece, IngestionResult
 from apx.core.domain.head_journal import HeadJournal, journal_scope
 
@@ -56,18 +57,19 @@ def _seed(store: SqlStore) -> None:
 
 
 def _wipe(store: SqlStore) -> None:
-    """Simulate a dump restore's clean slate: drop every tenant-owned row (and user_scope), so a
-    backup can be restored into the now-empty store the way real disaster recovery would."""
+    """Simulate a dump restore's clean slate: drop every row the backup plan captures, so a backup
+    can be restored into the now-empty store the way real disaster recovery would.
+
+    Driven by the plan and in REVERSE plan order (Story 7.2): a child keyed by its parent must go
+    before the parent, or its predicate can no longer find it and an orphan survives to collide
+    with the restore's re-insert. The old hand-rolled version cleared two child tables by name and
+    would have left the other four behind."""
+    plan = backup_plan()
     with store._sf() as s, s.begin():
-        # the piece SETS (Story 2.5) reference pieces by id (no tenant column) — clear them BEFORE
-        # the pieces, so no orphan link row survives to collide with the restore's re-insert.
-        for tbl in ("piece_provenance", "piece_custodian"):
-            s.execute(text(
-                f"DELETE FROM {tbl} WHERE piece_id IN "  # noqa: S608
-                "(SELECT id FROM piece WHERE tenant = 'cabinet')"))
-        for tbl in _BACKUP_TABLES:
-            s.execute(text(f"DELETE FROM {tbl} WHERE tenant = 'cabinet'"))  # noqa: S608
-        s.execute(text("DELETE FROM user_scope"))
+        for cap in reversed(plan):
+            s.execute(
+                text(f"DELETE FROM {cap.table} WHERE {cap.predicate}"),  # noqa: S608
+                {"t": TENANT})
 
 
 def test_backup_restore_reproduces_the_tenant_identically(tmp_path) -> None:  # noqa: ANN001

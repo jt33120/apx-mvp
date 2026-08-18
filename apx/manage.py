@@ -16,19 +16,18 @@ manages configuration, users and scopes.
 from __future__ import annotations
 
 import argparse
-import base64
 import getpass
-import json
 import os
 from collections.abc import Sequence
-from datetime import date, datetime
-from decimal import Decimal
 from pathlib import Path
 
 from sqlalchemy.exc import IntegrityError
 
+from apx.adapters.originals_fs import FilesystemOriginalStore
+from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.opening import open_store
-from apx.adapters.store_postgres.store import SqlStore, TenantAlreadyProvisioned, TenantBackup
+from apx.adapters.store_postgres.store import SqlStore, TenantAlreadyProvisioned
+from apx.backup_bundle import read_bundle, restore_originals, write_bundle
 
 
 def _open_store() -> SqlStore:
@@ -85,62 +84,64 @@ def rekey(store: SqlStore) -> str:
             f"rotation recorded for {len(firms)} tenant(s)")
 
 
-def _json_default(o: object) -> object:
-    """Serialise the column types a raw ``SELECT *`` yields that JSON cannot carry natively. A
-    Postgres date/timestamp column comes back as a ``date``/``datetime`` object (SQLite hands back a
-    string, which needs no help) — so a DETERMINED ``piece_date`` (a pure ``date``, AD-40) MUST be
-    handled or the backup crashes. ``datetime`` is tested FIRST because it is a subclass of ``date``
-    (else a timestamp would be narrowed to a bare date). ``bytes`` (a future binary column, e.g. an
-    embedding) is base64'd; ``Decimal`` is stringified losslessly (a float would round)."""
-    if isinstance(o, datetime):
-        return {"$dt": o.isoformat()}
-    if isinstance(o, date):
-        return {"$d": o.isoformat()}
-    if isinstance(o, bytes):
-        return {"$b64": base64.b64encode(o).decode("ascii")}
-    if isinstance(o, Decimal):
-        return str(o)
-    raise TypeError(f"not serialisable: {type(o).__name__}")
+def _originals() -> FilesystemOriginalStore:
+    """The retained-original store this deployment actually uses — **required** for a backup.
 
-
-def _revive(d: dict) -> object:
-    if len(d) == 1:
-        if "$dt" in d:
-            return datetime.fromisoformat(d["$dt"])
-        if "$d" in d:
-            return date.fromisoformat(d["$d"])
-        if "$b64" in d:
-            return base64.b64decode(d["$b64"])
-    return d
+    ``from_env`` falls back to the host temp directory when ``APX_DATA_PATH`` is unset, which is a
+    reasonable last resort for a dev run and a disaster for a backup: the fallback directory is
+    empty, so the bundle would be written with zero originals in it and would report success. The
+    one operation whose entire job is completeness refuses a configuration it cannot be complete
+    under (the same gate ``_open_store`` puts on the head journal).
+    """
+    if not (os.environ.get("APX_DATA_PATH") or "").strip():
+        raise RuntimeError(
+            "APX_DATA_PATH is not set — the retained originals cannot be located, and a backup "
+            "taken without them would report success over a tenant whose documents are absent "
+            "(AD-32)")
+    return FilesystemOriginalStore.from_env()
 
 
 def backup(store: SqlStore, tenant: str, out_path: str) -> str:
-    """On-demand logical backup of a tenant to a file (AD-32) — content stays ciphertext (encrypted
-    at rest); the outcome is recorded so 'no backup within the interval' is answerable."""
+    """On-demand backup of a tenant to a sealed bundle (AD-32) — every table the model has, plus
+    the retained originals as the ciphertext they already are. The outcome is recorded WITH its
+    coverage, so 'no backup within the interval' and 'the backup was incomplete' are both
+    answerable."""
     b = store.backup_tenant(tenant)
-    payload = {"tenant": b.tenant, "schema_version": b.schema_version, "tables": b.tables,
-               "user_scopes": b.user_scopes, "head_tail": b.head_tail}
-    data = json.dumps(payload, default=_json_default, ensure_ascii=False)
-    Path(out_path).write_text(data, encoding="utf-8")
-    size = len(data.encode("utf-8"))
-    store.record_backup(tenant, "success", byte_size=size)
-    return f"backup : tenant={tenant} → {out_path} ({size} octets)"
+    coverage = write_bundle(Path(out_path), b, _originals(), cipher())
+    # An incomplete backup is recorded as a FAILURE even though the bundle was written. AD-32's
+    # criterion is a COMPLETE restorable backup, and the failure it exists to prevent is "a backup
+    # whose failure nobody knew about" — so a retained pièce with no document on the volume makes
+    # the worklist say the tenant has no good backup, rather than a green line over a known hole.
+    # The bundle is still written: it is better than nothing, and refusing to write it would leave
+    # the firm with neither.
+    outcome = "success" if coverage.is_complete else "failure"
+    store.record_backup(
+        tenant, outcome, byte_size=coverage.byte_size, detail=coverage.sentence_fr())
+    return f"backup : tenant={tenant} → {out_path} ({coverage.sentence_fr()})"
 
 
 def restore(store: SqlStore, in_path: str) -> str:
-    """Restore a tenant from a backup file into an EMPTY store (AD-32); reconciles the head — a
-    restore that moved the head backwards is a truncation, named here (AD-35)."""
-    payload = json.loads(Path(in_path).read_text(encoding="utf-8"), object_hook=_revive)
-    b = TenantBackup(payload["tenant"], payload["schema_version"], payload["tables"],
-                     payload["user_scopes"], payload["head_tail"])
+    """Restore a tenant from a sealed bundle into an EMPTY store (AD-32); reconciles the head — a
+    restore that moved the head backwards is a truncation, named here (AD-35).
+
+    The rows go back first: that transaction re-verifies the AD-43 chain and rolls the whole restore
+    back if it does not hold, so a rejected backup never leaves blobs behind on the data volume."""
+    bundle = read_bundle(Path(in_path), cipher())
+    b = bundle.backup
     recs = store.restore_tenant(b)
+    covered = restore_originals(Path(in_path), bundle, _originals())
     truncated = [r.scope for r in recs if r.truncated]
     # Story 5.9 — a FORK is reported too, and apart. Reporting only truncations meant a restore of
     # a record that had been rewritten and re-chained to the same length printed the ordinary
     # success line: the operator was told the restore worked, on the one finding that says the
     # record in front of them is not the record.
     forked = [r.scope for r in recs if r.forked]
-    msg = f"restore : tenant={b.tenant} restauré depuis {in_path}"
+    msg = (f"restore : tenant={b.tenant} restauré depuis {in_path} "
+           f"({covered.originals} originaux)")
+    if covered.orphaned_pieces:
+        msg += (f" — ATTENTION : {covered.orphaned_pieces} pièce(s) conservée(s) sans document "
+                "d'origine (la sauvegarde elle-même était incomplète ; le registre les atteste "
+                "et la visionneuse ne peut pas les ouvrir)")
     if truncated:
         msg += (f" — ATTENTION : troncature détectée pour {truncated} (la tête vive est en deçà "
                 "du journal ; acquitter via l'override DR)")
