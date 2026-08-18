@@ -216,6 +216,12 @@ class Freshness:
     artefact_id: str
     changed: tuple[str, ...]  # trigger keys, in TRIGGERS order
     superseded: bool = False
+    #: the *ranking version* this artefact belongs to — its own where it has one, and the matter
+    #: maximum its stamp recorded where it has none (a bound). Carried so a surface naming the
+    #: version can take it from the ARTEFACT (AD-23: no unqualified reference to a ranking
+    #: version). The worklist banner used to take it from a separate "current version" prop the
+    #: screen happened to hold, which is the same number only while the two cannot diverge.
+    version_no: int | None = None
 
     @property
     def fresh(self) -> bool:
@@ -337,7 +343,7 @@ def _subsume(changed: tuple[str, ...], keys: tuple[str, ...]) -> tuple[str, ...]
 
 def assess_freshness(
     *, kind: str, artefact_id: str, recorded: FreshnessStamp, current: FreshnessStamp,
-    superseded: bool = False,
+    superseded: bool = False, version_no: int | None = None,
 ) -> Freshness:
     """Assess one derived artefact against the inputs it depends on. Pure — no clock, no I/O, no
     store."""
@@ -345,7 +351,8 @@ def assess_freshness(
         raise ValueError(f"unknown artefact kind: {kind!r}")
     return Freshness(
         kind=kind, artefact_id=artefact_id,
-        changed=compare_stamps(recorded, current, kind=kind), superseded=superseded)
+        changed=compare_stamps(recorded, current, kind=kind), superseded=superseded,
+        version_no=version_no)
 
 
 def config_digest(values: Mapping[str, Any]) -> str:

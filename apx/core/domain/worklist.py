@@ -64,6 +64,45 @@ _OFFER_FR = {
 # The *ranking version* itself is the work, not one of its stamped artefacts (FR-23, Story 5.4).
 KIND_RANKING_UNFIT = "ranking_unfit"
 
+# What each line is ABOUT, in the lawyer's language — composed here, where the kind is minted.
+# ``{v}`` is filled with the artefact's own *ranking version* where it has one (AD-23: no
+# unqualified reference to a ranking version).
+#
+# This lived in the client as ``STALE_SUBJECT``, a four-entry map with a ``?? line.kind`` fallback.
+# ``ranking_unfit`` was not one of the four, so the fallback printed the raw constant on a lawyer's
+# screen — and a fallback is exactly the shape that lets that happen quietly: it turns a missing
+# translation into a rendered string instead of into a failure. Here a kind with no subject raises,
+# and :func:`subjects_are_total` fails the build before it can.
+_SUBJECT_FR: dict[str, str] = {
+    KIND_RANKING: "Le classement n° {v}",
+    KIND_LINE: "La ligne du classement n° {v}",
+    KIND_BOUND: "La borne de confiance",
+    KIND_SAMPLING_RUN: "Le tirage sur les écartées",
+    KIND_RANKING_UNFIT: "Le classement n° {v}",
+}
+
+
+def subject_fr(kind: str, version_no: int | None) -> str:
+    """The line's subject, version-qualified where the kind belongs to a *ranking version*.
+
+    Raises on an unknown kind rather than falling back to it: a surface that prints
+    ``ranking_unfit`` to a lawyer is worse than one that fails, because it looks like content."""
+    try:
+        template = _SUBJECT_FR[kind]
+    except KeyError as exc:
+        raise ValueError(f"no French subject for worklist kind {kind!r}") from exc
+    if "{v}" not in template:
+        return template
+    if version_no is None:
+        # A version-bound artefact that cannot name its version is AD-23's unqualified reference.
+        raise ValueError(f"worklist kind {kind!r} names a ranking version and none was carried")
+    return template.format(v=version_no)
+
+
+def subjects_are_total() -> bool:
+    """Every kind a line can carry has a subject. Asserted by a test rather than hoped for."""
+    return set(_SUBJECT_FR) == {*_OFFER_BY_KIND, KIND_RANKING_UNFIT}
+
 
 @dataclass(frozen=True)
 class WorklistLine:
@@ -80,6 +119,14 @@ class WorklistLine:
     changed_fr: tuple[str, ...]
     offer: str
     offer_fr: str
+    #: what this line is about, named and version-qualified — the surface renders it, never a map
+    #: of its own keyed on ``kind``
+    subject_fr: str = ""
+    #: why the line exists. *« périmé depuis : … »* for a staleness line; for the FR-23 line, the
+    #: declaration **quoted verbatim** from its one composer. The client used to prefix every line
+    #: with *« — périmé depuis : »*, which is a false statement about a ranking that is current and
+    #: simply not ranking anything.
+    reason_fr: str = ""
 
 
 def worklist_line(assessment: Freshness) -> WorklistLine | None:
@@ -96,10 +143,12 @@ def worklist_line(assessment: Freshness) -> WorklistLine | None:
     offer = _OFFER_BY_KIND[assessment.kind]
     return WorklistLine(
         kind=assessment.kind, artefact_id=assessment.artefact_id, changed=assessment.changed,
-        changed_fr=assessment.changed_fr, offer=offer, offer_fr=_OFFER_FR[offer])
+        changed_fr=assessment.changed_fr, offer=offer, offer_fr=_OFFER_FR[offer],
+        subject_fr=subject_fr(assessment.kind, assessment.version_no),
+        reason_fr="périmé depuis : " + ", ".join(assessment.changed_fr))
 
 
-def unfitness_line(*, version_id: str, said_fr: str) -> WorklistLine:
+def unfitness_line(*, version_id: str, version_no: int, said_fr: str) -> WorklistLine:
     """FR-23's third clause, which had no code anywhere until the Story 5.4 review said so.
 
     The requirement has **four** parts: declare the *ranking version* unfit, say so in words,
@@ -118,7 +167,12 @@ def unfitness_line(*, version_id: str, said_fr: str) -> WorklistLine:
     return WorklistLine(
         kind=KIND_RANKING_UNFIT, artefact_id=version_id, changed=(KIND_RANKING_UNFIT,),
         changed_fr=(said_fr,), offer=OFFER_RERANK_REVISED_THEORY,
-        offer_fr=_OFFER_FR[OFFER_RERANK_REVISED_THEORY])
+        offer_fr=_OFFER_FR[OFFER_RERANK_REVISED_THEORY],
+        subject_fr=subject_fr(KIND_RANKING_UNFIT, version_no),
+        # QUOTED, never re-cut and never prefixed: the declaration is composed once
+        # (``unfitness_statement_fr``), it names the share it crossed and states that moving the
+        # line would not help, and it is the sentence that reaches an exported record.
+        reason_fr=said_fr)
 
 
 def worklist_lines(assessments: Iterable[Freshness]) -> tuple[WorklistLine, ...]:

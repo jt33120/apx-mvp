@@ -540,6 +540,11 @@ export type Freshness = {
 export type WorklistLine = {
   kind: string; artefact_id: string; changed: string[]; changed_fr: string[];
   offer: string; offer_fr: string;
+  // Story 7.7 — what the line is about and why, both composed server-side. This screen used to
+  // hold its own `kind -> French` map with a `?? line.kind` fallback, and the FR-23 unfitness kind
+  // was not in it, so the raw constant reached a lawyer. Neither field is optional: a line that
+  // cannot say what it is about must fail here, not render its own identifier.
+  subject_fr: string; reason_fr: string;
 };
 export type Bound = {
   artefact_id: string; population: number; sample_size: number; relevant_found: number;

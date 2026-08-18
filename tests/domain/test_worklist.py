@@ -12,13 +12,19 @@ from apx.core.domain.worklist import (
     worklist_lines,
 )
 
+# Story 7.7: an assessment carries the *ranking version* its artefact belongs to, and a
+# version-bound kind whose version is missing now RAISES rather than composing an unqualified
+# subject (AD-23). ``FreshnessStamp.ranking_version_no`` is an ``int``, never None, so a fixture
+# without one was building an artefact that cannot exist.
+_V = 3
+
 
 def _stale(kind: str, *changed: str) -> Freshness:
-    return Freshness(kind=kind, artefact_id=f"{kind}-1", changed=changed)
+    return Freshness(kind=kind, artefact_id=f"{kind}-1", changed=changed, version_no=_V)
 
 
 def _fresh(kind: str) -> Freshness:
-    return Freshness(kind=kind, artefact_id=f"{kind}-1", changed=())
+    return Freshness(kind=kind, artefact_id=f"{kind}-1", changed=(), version_no=_V)
 
 
 def test_a_fresh_artefact_is_not_work() -> None:

@@ -241,9 +241,10 @@ def test_a_superseded_artefact_is_still_assessed_but_is_not_work() -> None:
 
     current = dataclasses.replace(_STAMP, corpus_count=1700)
     live = assess_freshness(
-        kind=KIND_RANKING, artefact_id="v2", recorded=_STAMP, current=current)
+        kind=KIND_RANKING, artefact_id="v2", recorded=_STAMP, current=current, version_no=2)
     dead = assess_freshness(
-        kind=KIND_RANKING, artefact_id="v1", recorded=_STAMP, current=current, superseded=True)
+        kind=KIND_RANKING, artefact_id="v1", recorded=_STAMP, current=current, superseded=True,
+        version_no=1)
     assert live.stale and dead.stale                       # both verdicts stand
     assert live.superseded is False and dead.superseded is True
     lines = worklist_lines([dead, live])

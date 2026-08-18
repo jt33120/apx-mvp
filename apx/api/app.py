@@ -2721,6 +2721,12 @@ class WorklistLineOut(BaseModel):
     changed_fr: list[str]
     offer: str
     offer_fr: str
+    # What the line is ABOUT and WHY, both composed in the Domain (story 7.7). The client held a
+    # four-entry map from `kind` to French with a `?? line.kind` fallback, and KIND_RANKING_UNFIT
+    # was not one of the four — so FR-23's line printed the raw constant, under a "— périmé depuis"
+    # prefix that is false of a ranking which is current and simply not ranking anything.
+    subject_fr: str
+    reason_fr: str
 
 
 class BoundOut(BaseModel):
@@ -2844,7 +2850,8 @@ def get_worklist(
     return [
         WorklistLineOut(
             kind=line.kind, artefact_id=line.artefact_id, changed=list(line.changed),
-            changed_fr=list(line.changed_fr), offer=line.offer, offer_fr=line.offer_fr)
+            changed_fr=list(line.changed_fr), offer=line.offer, offer_fr=line.offer_fr,
+            subject_fr=line.subject_fr, reason_fr=line.reason_fr)
         for line in lines]
 
 

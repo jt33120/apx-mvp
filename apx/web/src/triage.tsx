@@ -162,7 +162,7 @@ export function TriageRoute() {
       {table && (
         <>
           <Header table={table} />
-          <StalenessBanner lines={worklist} version={table.version_no} />
+          <StalenessBanner lines={worklist} />
           <Denominator table={table} />
           <p className="apx-honesty">
             Ordre proposé par l'outil, révisable — ce n'est pas une preuve. Rien n'est
@@ -486,7 +486,7 @@ function Row({ row, table, onCommitted, onOpenDrawer }: {
  *  an explicit user act producing a NEW artefact, so there is deliberately no automatic refresh
  *  here, and no button on this screen that recomputes behind the user's back. */
 function StalenessBanner(
-  { lines, version }: { lines: WorklistLine[] | null; version: number | null },
+  { lines }: { lines: WorklistLine[] | null },
 ) {
   if (lines === null) {
     // The same rule as the change log: a failed read is not a verified absence. Saying nothing
@@ -504,13 +504,13 @@ function StalenessBanner(
     <section className="apx-stale" role="status" aria-label="Fraîcheur des artefacts dérivés">
       {lines.map((line) => (
         <p key={`${line.kind}-${line.artefact_id}`} style={{ margin: ".25rem 0" }}>
-          {/* AD-23 — the banner names the version it speaks of; the worklist carries only the
-              artefacts IN FORCE, so "Le classement" is the one on screen and not a superseded one */}
-          <strong>{STALE_SUBJECT[line.kind] ?? line.kind}</strong>
-          {version !== null && line.kind !== "bound" && line.kind !== "sampling_run" && (
-            <> v{version}</>
-          )} — périmé depuis&nbsp;:{" "}
-          {line.changed_fr.join(", ")}. <span className="apx-hint">{line.offer_fr}</span>
+          {/* Both strings are the SERVER's (story 7.7). The subject carries its own ranking
+              version (AD-23), so this screen no longer appends the one it happens to be showing —
+              the same number only while the two cannot diverge. And the reason is the line's own:
+              a staleness line says "périmé depuis …", FR-23's line says what it found, and this
+              screen used to prefix both with the first. */}
+          <strong>{line.subject_fr}</strong> — {line.reason_fr}{" "}
+          <span className="apx-hint">{line.offer_fr}</span>
         </p>
       ))}
       <p className="apx-hint" style={{ margin: ".4rem 0 0" }}>
@@ -519,13 +519,6 @@ function StalenessBanner(
     </section>
   );
 }
-
-const STALE_SUBJECT: Record<string, string> = {
-  ranking: "Le classement",
-  line: "La ligne",
-  bound: "La borne de confiance",
-  sampling_run: "Le tirage sur les écartées",
-};
 
 /** The confidence bound (FR-58/FR-23). A stale bound is visually distinct, cannot be exported as
  *  current, and the string the copy button puts on the clipboard is the SERVER's — so the number

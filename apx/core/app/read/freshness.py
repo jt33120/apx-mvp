@@ -23,7 +23,12 @@ from dataclasses import dataclass
 
 from apx.core.domain.confidence import RecordedBound, estimator_is_proven
 from apx.core.domain.config import coerce
-from apx.core.domain.freshness import Freshness, FreshnessStamp, assess_freshness
+from apx.core.domain.freshness import (
+    Freshness,
+    FreshnessStamp,
+    assess_freshness,
+    trigger,
+)
 from apx.core.domain.sampling import (
     KIND_BOUND,
     KIND_CENSUS,
@@ -218,8 +223,14 @@ def read_freshness(
             by_version[version_no] = current
         assessments.append(assess_freshness(
             kind=kind, artefact_id=artefact_id, recorded=recorded,
-            current=by_version[version_no], superseded=superseded))
+            current=by_version[version_no], superseded=superseded, version_no=version_no))
     return tuple(assessments)
+
+
+#: The trigger whose movement discharges FR-23's unfitness line. Resolved through ``trigger()`` so
+#: a typo is a loud import-time failure rather than a condition that silently never fires — which
+#: would leave the banner undischargeable again, in exactly the way this story exists to fix.
+_RANKING_VERSION_MOVED = trigger("ranking_version_no").key
 
 
 def read_worklist(
@@ -245,7 +256,31 @@ def read_worklist(
     lines = list(worklist_lines(assessments))
     bound = read_bound(
         tenant=tenant, matter=matter, scopes=scopes, reader=reader, config_get=config_get)
-    if bound is not None and bound.unfitness_fr is not None:
+    # FR-23's line is emitted only while the finding is about the ranking IN FORCE. The finding is
+    # MEASURED — a share of relevant units in a drawn sample — and it belongs to the *ranking
+    # version* the bound was drawn over. Once the matter has been re-ranked, that version is not the
+    # one on screen, and this module's own rule for a superseded artefact applies with full force:
+    # "the offer never discharges: the user accepts the re-rank and the banner still demands one,
+    # growing by one paragraph per act until nobody reads it". It was applied to every line except
+    # the one whose offer is hardest to satisfy, and it was harmless only while no re-rank control
+    # existed — story 7.6 shipped that control.
+    #
+    # Silence afterwards would be dishonest if it were silence. It is not: version n+1 has NOT been
+    # measured, so declaring it unfit would be a verdict nobody computed; and the bound itself is
+    # now stale on ``ranking_version_no``, so the worklist already carries "La borne de confiance —
+    # périmé depuis : un nouveau classement. Ré-échantillonner…", which is the next act.
+    #
+    # The comparison is the one this module already computes: the bound's own freshness reports
+    # ``ranking_version_no`` among its changed inputs exactly when the ranking has moved since the
+    # bound was drawn. Reading it here rather than fetching the current version again keeps one
+    # referent for one fact. An UNSTAMPED bound emits nothing, which is the stance BoundReading
+    # already takes — an absence of evidence is not evidence of validity.
+    in_force = (
+        bound is not None
+        and bound.freshness is not None
+        and not bound.freshness.superseded
+        and _RANKING_VERSION_MOVED not in bound.freshness.changed)
+    if bound is not None and bound.unfitness_fr is not None and in_force:
         # FR-23: the system *"does not offer a line move as the remedy"*. Raised by the review, and
         # correctly: the offer lives in ``worklist.OFFER_REPLACE_LINE``, which the structural check
         # was not looking at. No surface acts on it today — Story 4.9's control does not exist — but
@@ -258,6 +293,7 @@ def read_worklist(
         # reference to one, and an offer with no named subject is an instruction with no argument.
         lines.append(unfitness_line(
             version_id=f"ranking-v{bound.bound.ranking_version_no}",
+            version_no=bound.bound.ranking_version_no,
             said_fr=bound.unfitness_fr))
     return tuple(lines)
 
