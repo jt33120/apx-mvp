@@ -63,6 +63,7 @@ from apx.checks import (
     pin_ledger_ownership,
     pin_not_a_ranking_input,
     projection,
+    ranking_identity_source,
     ranking_ownership,
     ranking_sets_are_views,
     read_path,
@@ -708,6 +709,13 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "written exclusions — the hand-written tuple this replaces named 20 of 35 tables, had "
        "been added to by three separate stories, and a list cannot be reviewed for what is "
        "not in it"),
+    # ── story 7.3: the ranking act gets a caller, and names what ran (AD-23 / C4) ────────────
+    _p("ranking-identity-one-source", "FR-39", "AD-23", "the ranking identity has one source",
+       ranking_identity_source.the_ranking_identity_has_one_source,
+       "every RankingIdentityInputs construction across apx/** (one composer only) + every call "
+       "passing model_provider/model_endpoint/model_name as a config key outside the module that "
+       "composes the judge — configuration records a PREFERENCE, and this deployment silently "
+       "composes the deterministic criteria judge whenever no LLM credential is present"),
     _p("override-ground-named", "FR-25", "AD-33", "an override names its FR-25 ground",
        override.override_names_its_ground,
        "the act catalogue (every override names one of FR-25's three grounds; the override class "

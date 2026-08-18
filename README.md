@@ -417,6 +417,36 @@ not at 70 %. A tenant with **no successful backup within `backup_interval_hours`
 cron schedule are deploy artifacts (AD-46); the *worklist*/home-screen rendering is the front-end
 (AD-29); 1.11 builds and **tests** the mechanism they wrap.
 
+## Producing a ranked order (FR-39/AD-23)
+
+The *ranking act* runs the cascade over **every** *pièce* of a *matter* and mints one immutable
+*ranking version*. It is an operator command today, not the lawyer's gesture — AD-6 makes any
+operation whose cost scales with the size of a *matter* a **queued job**, and the queued job, the
+HTTP surface and the client controls are story 7.4:
+
+```
+python -m apx.manage rank       --tenant cabinet --matter dossier-x --actor "Me Durand" --scope mur
+python -m apx.manage place-line --tenant cabinet --matter dossier-x --actor "Me Durand" --scope mur
+```
+
+**The identity names what actually ran.** Every judge reports its own `JudgeIdentity` — provider,
+endpoint, model, temperature, sampling — and the *ranking version*'s model half is taken from the
+judge that was composed, never from configuration. Configuration records a *preference*: this
+deployment composes the bare deterministic `CriteriaJudge` whenever no LLM credential is present,
+and substitutes `LLM_BASE_URL`/`LLM_MODEL` when a tenant's value equals the schema default, so a
+config-sourced identity would have stamped *mistral-small-latest @ api.mistral.ai, temperature 0,
+top_p 1.0* onto an order decided entirely by a comma-splitting keyword matcher. `temperature` and
+`sampling` had **no source at all** before this: the temperature was a literal inside the adapter's
+private request body and the live request sends no sampling parameter, so the `{"top_p": 1.0}` in
+every fixture was invention. The sampling map is now empty, which is the true answer and a different
+fact from *nobody recorded one*. One composer (`core/app/rank.identity_inputs`), one judge door
+(`apx/wiring.py`), and `ranking-identity-one-source` holds both.
+
+The cascade's input is the **whole population** with its chunk ids, never `representatives()` —
+that reader has already collapsed near-duplicates and dropped the members, while stage 1 does its
+own grouping and keeps every member **in** the recorded order (AD-36). Feeding it representatives
+would delete those *pièces* from the ranked table and turn SM-18's cost share from 0.1 into 1.0.
+
 ## Structural properties (AD-33/FR-56)
 
 Where the design says *no code path does X*, a **static check decides it and a violation fails the
@@ -534,6 +564,7 @@ could contain is an inflated claim about what the suite proves).
 | `audit-write-never-swallowed` | FR-53 | AD-22 | structural | an_audit_write_failure_is_never_swallowed | every `try`/`except` around an `_append_audit` call across apx/** — FR-53's first consequence is that the act FAILS, and it is defeated by one handler that logs and continues, which reads as defensive programming and produces an act that happened beside a record saying it did not |
 | `filesystem-has-one-walk` | FR-1 | AD-33 | structural | the_filesystem_has_one_walk | every `rglob`/`glob`/`iterdir`/`walk`/`scandir`/`listdir` call across apx/** — the confined walk is where the submitted subtree's boundary is applied, and until Story 7.1 the ingest route validated a **caller-supplied absolute path** with `is_dir()` alone before handing it to `rglob`, while the capacity pre-flight ran a second traversal of its own. A second walk is not a duplicate; it is a path on which the boundary does not exist |
 | `backup-plan-is-total` | FR-52 | AD-32 | structural | the_backup_plan_is_total | every table in the live SQLAlchemy metadata against the derived backup plan and its written exclusions. The hand-written tuple this replaces named 20 of 35 tables and had been added to by three separate stories, none of which asked whether it was complete — so a restore returned a matter with no ranking, no sampling run and therefore no confidence bound, no validation act, while the audit record survived and attested every one of them. A list cannot be reviewed for what is not in it |
+| `ranking-identity-one-source` | FR-39 | AD-23 | structural | the_ranking_identity_has_one_source | every `RankingIdentityInputs` construction across apx/** — one composer, in `core/app/rank.py` — plus every call passing `model_provider`/`model_endpoint`/`model_name` as a config key outside the module that composes the judge. The identity is hashed into an immutable fingerprint and printed on the header a lawyer reads; configuration records a *preference*, and this deployment composes the deterministic criteria judge whenever no LLM credential is present, so a config-sourced identity would stamp a Mistral model onto an order decided by a keyword matcher |
 | `override-ground-named` | FR-25 | AD-33 | structural | override_names_its_ground | the act catalogue — every override names one of FR-25's three grounds and the override class has a real writer — plus any comparison against the override act **class** across apx/**: a pin is an override whose FR-24 class is `pin`, so a class-based count reports zero on a matter with forty pins and looks right on every matter that has none |
 | `statement-one-composer` | FR-23 | AD-37 | structural | the_sentence_has_one_composer | confidence-bound wording in runtime string literals + apx/web/src — the sentence is composed only in core/domain/statement.py, never re-assembled by a read seam or by the client (a client-composed claim can omit the RBAC scope and the staleness the server puts inside the string) |
 | `statement-composed-offline` | FR-55 | AD-4 | structural | the_sentence_is_composed_offline | the transitive import closure of core/domain/statement.py — Domain-only, no networking module, and the composer must exist and export `statement_fr`. A check on an ABSENCE, deliberately the belt: the braces is the round-trip test that regenerates the sentence from the recorded artefact and compares it character for character |

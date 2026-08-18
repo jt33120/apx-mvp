@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
+from apx.core.domain.ranking import JudgeIdentity
 from apx.core.domain.triage import Label, Verdict
 
 
@@ -58,6 +59,8 @@ def test_long_text_is_truncated_before_sending() -> None:
 
 class _Spy:
     name = "spy"
+    identity = JudgeIdentity(
+        provider="spy", endpoint="local:spy", model="spy", temperature=0.0, sampling={})
 
     def __init__(self, verdict: Verdict) -> None:
         self.verdict = verdict

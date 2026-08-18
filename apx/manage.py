@@ -23,11 +23,20 @@ from pathlib import Path
 
 from sqlalchemy.exc import IntegrityError
 
+from apx.adapters.embedder_bgem3.bgem3 import Bgem3Embedder
 from apx.adapters.originals_fs import FilesystemOriginalStore
 from apx.adapters.store_postgres.crypto_types import cipher
 from apx.adapters.store_postgres.opening import open_store
 from apx.adapters.store_postgres.store import SqlStore, TenantAlreadyProvisioned
 from apx.backup_bundle import read_bundle, restore_originals, write_bundle
+from apx.core.app.ingest import SCHEMA_VERSION
+from apx.core.app.line import place_line
+from apx.core.app.rank import identity_inputs, produce_ranking
+from apx.core.domain.chunking import chunking_config
+from apx.core.domain.config import cascade_config
+from apx.core.ports.embedding import Embedder
+from apx.core.ports.judge import Judge
+from apx.wiring import open_judge
 
 
 def _open_store() -> SqlStore:
@@ -151,6 +160,81 @@ def restore(store: SqlStore, in_path: str) -> str:
     return msg
 
 
+def rank(
+    store: SqlStore, *, tenant: str, matter: str, actor: str, scopes: set[str],
+    embedder: Embedder | None = None, judge: Judge | None = None,
+) -> str:
+    """Produce ONE ranked order for a *matter* and mint its *ranking version* (FR-39, AD-23).
+
+    **The first production caller of the ranking act.** Retro action C4 found that
+    ``produce_ranking`` had none at all: no route, no worker job, no command — twenty-two shipped
+    stories standing on an act nobody could perform. It is an operator command rather than the
+    lawyer's gesture on purpose. AD-6 says any operation whose cost scales with the size of a
+    *matter* is a **queued job** and that the HTTP layer validates, authorises, enqueues and
+    returns; the cascade is one model call per uncertain *pièce*, so it does not belong in a
+    request. A CLI command is where a long job legitimately runs synchronously — the same place
+    ``backup`` runs — and it makes the act performable today without pretending the queue exists.
+
+    Every identity input is sourced from the thing that actually produced the order: the model half
+    from the judge this deployment composed (never from configuration, which records a preference
+    and would name a model that never ran), the cascade numbers from the tenant's own
+    configuration-as-data, and the chunking/embedder/schema halves from the build that read the
+    corpus.
+    """
+    if not store.matter_is_held(tenant=tenant, matter=matter, scopes=scopes):
+        # Fail closed BEFORE anything is read. ``read_case_theory`` answers None for out-of-scope
+        # and for absent alike (FR-14, non-disclosing) — and a None case theory is also how the
+        # act says "rank on intrinsic signals". Without this gate, a caller who does not hold the
+        # matter would get a complete, permanently fingerprinted intrinsic ranking whose header
+        # reads « signaux intrinsèques nommés » — the name of a deliberate methodology — for a
+        # theory that was simply never fetched.
+        raise ValueError(
+            f"matter {matter!r}: not held under the scope(s) given — nothing was read (FR-14)")
+    units = store.cascade_units(matter, tenant, scopes)
+    theory = store.read_case_theory(tenant=tenant, matter=matter, scopes=scopes)
+    current = theory.current if theory is not None else None
+    embedder = embedder or Bgem3Embedder()
+    judge = judge or open_judge(store, tenant)
+    get = lambda key: store.get_config(tenant, key)  # noqa: E731 — the config-as-data getter
+    version = produce_ranking(
+        units,
+        case_theory=current.text if current is not None else None,
+        scorer=store.semantic_scorer(embedder),
+        judge=judge,
+        config=cascade_config(get),
+        inputs=identity_inputs(
+            judge=judge.identity,
+            case_theory_version_id=current.version_id if current is not None else None,
+            embedder_model_id=embedder.model_id, embedder_model_version=embedder.model_version,
+            chunking_config_version=chunking_config(get).version,
+            schema_version=SCHEMA_VERSION),
+        tenant=tenant, matter=matter, actor=actor, scopes=scopes, recorder=store)
+    basis = "théorie du cas" if current is not None else "signaux intrinsèques"
+    return (f"rank : dossier={matter} → classement n° {version.version_no} "
+            f"({len(units)} pièces, base : {basis}, juge : {judge.identity.model})")
+
+
+def place(store: SqlStore, *, tenant: str, matter: str, actor: str, scopes: set[str]) -> str:
+    """Draw and commit **the line** over the *matter*'s latest *ranking version* (FR-17).
+
+    Shipped beside ``rank`` because a ranking with no line is a *matter* the product cannot finish
+    reasoning about: the retained and discarded sets are views over the ranked order **and the
+    cut**, so with no cut every row reads *classées, en attente de la ligne*, the *sampling run*
+    refuses to start, and no *confidence bound* can exist. A re-rank supersedes the previous
+    placement, so this is also the remedy for the state a second ``rank`` leaves behind."""
+    if not store.matter_is_held(tenant=tenant, matter=matter, scopes=scopes):
+        raise ValueError(
+            f"matter {matter!r}: not held under the scope(s) given — nothing was read (FR-14)")
+    placement = place_line(store, tenant=tenant, matter=matter, actor=actor, scopes=scopes)
+    if placement is None:
+        # A real answer, not a failure: the tool commits to no line when no pièce is in a retain
+        # band (recall-first — a line is never fabricated).
+        return (f"place-line : dossier={matter} — aucune ligne posée (aucune pièce en bande "
+                "retenue ; la ligne n'est jamais fabriquée)")
+    return (f"place-line : dossier={matter} → dernière pièce retenue "
+            f"{placement.last_retained_piece_id} (classement n° {placement.version_no})")
+
+
 def _provision(store: SqlStore, args: argparse.Namespace, password: str) -> str:
     return store.provision_tenant(
         args.tenant, args.admin_email, password, args.admin_name,
@@ -181,6 +265,21 @@ def build_parser() -> argparse.ArgumentParser:
     bk.add_argument("--out", required=True, help="destination file (encrypted content at rest)")
     rs = sub.add_parser("restore", help="restore a tenant from a backup file into an empty store")
     rs.add_argument("--from", dest="src", required=True, help="the backup file")
+    rk = sub.add_parser(
+        "rank", help="produce a ranked order for a matter and mint its ranking version (FR-39)")
+    rk.add_argument("--tenant", required=True)
+    rk.add_argument("--matter", required=True)
+    rk.add_argument("--actor", required=True, help="who is recorded as having run the act (FR-24)")
+    # Required and repeatable, never "all scopes": the act is performed AS somebody, and an
+    # operator command that could rank across every wall would be the one caller for which the
+    # Chinese wall does not exist.
+    rk.add_argument("--scope", action="append", default=[], required=True, help="repeatable")
+    pl = sub.add_parser(
+        "place-line", help="draw and commit the line over the matter's latest ranking (FR-17)")
+    pl.add_argument("--tenant", required=True)
+    pl.add_argument("--matter", required=True)
+    pl.add_argument("--actor", required=True)
+    pl.add_argument("--scope", action="append", default=[], required=True, help="repeatable")
     sub.add_parser(
         "worker", help="run the resumable import worker (applies the queue schema first)")
     return parser
@@ -228,6 +327,12 @@ def main(argv: Sequence[str] | None = None) -> None:
         print(backup(_open_store(), args.tenant, args.out))
     elif args.cmd == "restore":
         print(restore(_open_store(), args.src))
+    elif args.cmd == "rank":
+        print(rank(_open_store(), tenant=args.tenant, matter=args.matter, actor=args.actor,
+                   scopes=set(args.scope)))
+    elif args.cmd == "place-line":
+        print(place(_open_store(), tenant=args.tenant, matter=args.matter, actor=args.actor,
+                    scopes=set(args.scope)))
 
 
 if __name__ == "__main__":

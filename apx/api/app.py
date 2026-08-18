@@ -43,8 +43,6 @@ from apx.adapters.expansion.pdf import PdfPortfolioExpander
 from apx.adapters.extraction.composite import CompositeExtractor
 from apx.adapters.extraction.files import FileExtractor
 from apx.adapters.extraction.msg import MsgExpander, MsgExtractor
-from apx.adapters.judge.criteria import CriteriaJudge
-from apx.adapters.llm_openai_compat.judge import CascadeJudge, LLMJudge
 from apx.adapters.ocr_tesseract.tesseract import TesseractExtractor, WithOcr
 from apx.adapters.originals_fs import FilesystemOriginalStore
 from apx.adapters.render_html import CompositePieceRenderer, HtmlPieceRenderer, MsgRenderer
@@ -95,7 +93,6 @@ from apx.core.domain.config import (
     DEFAULT_EXCLUSION_LIST,
     ConfigError,
     ExpansionBounds,
-    default_of,
     expansion_bounds,
 )
 from apx.core.domain.crypto import DecryptionError
@@ -120,6 +117,7 @@ from apx.core.ports.extraction import Extractor
 from apx.core.ports.judge import Judge
 from apx.core.ports.sampling import InvalidatedRun, RunAlreadyClosed
 from apx.core.projection import project_all
+from apx.wiring import judge_workers, open_judge
 
 
 @asynccontextmanager
@@ -894,51 +892,14 @@ def _is_blank(s: str) -> bool:
     return not any(unicodedata.category(ch)[0] not in ("Z", "C") for ch in s)
 
 
-def _chat_url(base: str) -> str:
-    """Normalise a base endpoint to the OpenAI-compatible chat-completions URL the judge posts."""
-    base = base.rstrip("/")
-    return base if base.endswith("/chat/completions") else base + "/chat/completions"
-
-
-def _llm_judge(store: SqlStore, tenant: str) -> Judge | None:
-    """The LLM tier (provider-agnostic, AD-27). None when no credential is configured — then the
-    cascade is the deterministic filter alone and the system stays fully offline. The API **key**
-    is a SECRET, read from the environment only (LLM_API_KEY/MISTRAL_API_KEY), never stored as
-    config-as-data. The **endpoint** and **model** ARE configuration-as-data (AD-24): a tenant's
-    non-default `model_endpoint`/`model_name` is honoured live; otherwise the deployment default
-    (LLM_BASE_URL/LLM_MODEL env) applies, then the Mistral EU default. The `model_provider` key is
-    config-as-data too, but the code never branches on it (AD-27: application code never knows
-    which engine serves it) — it is recorded/displayed, not a switch."""
-    key = os.environ.get("LLM_API_KEY") or os.environ.get("MISTRAL_API_KEY")
-    if not key:
-        return None
-    endpoint = store.get_config(tenant, "model_endpoint")
-    base_url = (
-        _chat_url(str(endpoint)) if endpoint != default_of("model_endpoint")
-        else os.environ.get("LLM_BASE_URL", "https://api.mistral.ai/v1/chat/completions"))
-    model = store.get_config(tenant, "model_name")
-    if model == default_of("model_name"):
-        model = os.environ.get("LLM_MODEL", "mistral-small-latest")
-    return LLMJudge(base_url=base_url, api_key=key, model=str(model))
-
-
 def _judge(store: SqlStore, tenant: str) -> Judge:
-    """The judgment cascade, composed at the edge: the deterministic criteria filter
-    first, and — when a model is configured — the LLM only on the uncertain band it
-    leaves, at the tenant's configured endpoint/model. The core imports neither an LLM
-    SDK nor these adapters (AD-27)."""
-    criteria = CriteriaJudge()
-    llm = _llm_judge(store, tenant)
-    return CascadeJudge(criteria, llm) if llm is not None else criteria
+    """The judgment cascade for this tenant — composed in ``apx.wiring``, the one door (Story 7.3).
+    Kept as a name here because it is the seam tests steer."""
+    return open_judge(store, tenant)
 
 
 def _judge_workers() -> int:
-    """How many judgments run concurrently (JUDGE_WORKERS, default 8). The LLM tier is
-    network-bound, so concurrency — not CPU — is what makes a large band tractable."""
-    try:
-        return max(1, int(os.environ.get("JUDGE_WORKERS", "8")))
-    except ValueError:
-        return 8
+    return judge_workers()
 
 
 @app.get("/api/health")

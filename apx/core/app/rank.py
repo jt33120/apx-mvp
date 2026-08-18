@@ -18,6 +18,8 @@ from apx.core.app.cascade import run_cascade
 from apx.core.domain.cascade import CascadeUnit
 from apx.core.domain.config import CascadeConfig
 from apx.core.domain.ranking import (
+    PROMPT_VERSION,
+    JudgeIdentity,
     RankingIdentityInputs,
     RankingVersion,
     assemble_identity,
@@ -57,3 +59,42 @@ def produce_ranking(
     order = rank_cascade(result, config)
     return recorder.record_ranking(
         tenant=tenant, matter=matter, actor=actor, identity=identity, order=order)
+
+
+def identity_inputs(
+    *, judge: JudgeIdentity, case_theory_version_id: str | None,
+    embedder_model_id: str, embedder_model_version: str,
+    chunking_config_version: str, schema_version: str,
+) -> RankingIdentityInputs:
+    """The **one** place a :class:`RankingIdentityInputs` is assembled (Story 7.3, AD-23).
+
+    Story 4.3 left this to "a later surface story", and until then every construction site was a
+    test fixture full of plausible literals — a model name, an endpoint, ``temperature=0.0``,
+    ``sampling={"top_p": 1.0}``. Those literals are the danger: the identity is hashed into an
+    immutable fingerprint and rendered on the header a lawyer reads, so an invented value is not a
+    placeholder, it is a false statement about how an order was produced, recorded permanently.
+
+    Two rules make that impossible here rather than merely discouraged:
+
+    * **the model half comes from the judge that ran**, never from configuration — configuration
+      records a preference, and this deployment silently substitutes a deterministic local judge
+      whenever no LLM credential is present;
+    * **there is one door**, so a second composer cannot grow somewhere else with a different set
+      of literals. A structural check holds it (``ranking-identity-one-source``).
+
+    The chunking and embedder halves are still the caller's, because they describe the *corpus*,
+    not the act — and the caller is the only layer that knows which corpus it read.
+    """
+    return RankingIdentityInputs(
+        case_theory_version_id=case_theory_version_id,
+        model_provider=judge.provider,
+        model_endpoint=judge.endpoint,
+        model_name=judge.model,
+        prompt_version=PROMPT_VERSION,
+        temperature=judge.temperature,
+        sampling=judge.sampling,
+        embedder_model_id=embedder_model_id,
+        embedder_model_version=embedder_model_version,
+        chunking_config_version=chunking_config_version,
+        schema_version=schema_version,
+    )

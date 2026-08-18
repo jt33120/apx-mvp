@@ -170,6 +170,31 @@ class RankingIdentity:
 
 
 @dataclass(frozen=True)
+class JudgeIdentity:
+    """What actually decided, as the decider itself reports it (Story 7.3, AD-23).
+
+    The *ranking version* records the model that produced the order. Reading that from tenant
+    configuration records a **preference**, not a fact: this deployment falls back to the
+    deterministic ``criteria`` judge whenever no LLM credential is present, and substitutes the
+    environment's endpoint and model whenever the tenant's value equals the schema default. A
+    configuration-sourced identity would therefore have stamped *mistral-small-latest @
+    api.mistral.ai, temperature 0, top_p 1.0* onto an order produced entirely by a comma-splitting
+    keyword matcher — and FR-39's promise that a fixed *ranking version* reproduces the same order
+    would be asserted against a model that never ran.
+
+    So the judge answers for itself. ``endpoint`` is non-blank for every judge, including a local
+    one (``local:…``), because AD-23's identity has no optional fields: *no endpoint* and *an
+    endpoint nobody recorded* must not be the same value.
+    """
+
+    provider: str
+    endpoint: str
+    model: str
+    temperature: float
+    sampling: Mapping[str, float | int | str]
+
+
+@dataclass(frozen=True)
 class RankingIdentityInputs:
     """The identity inputs a ranking act is GIVEN (never guesses): the model, embedder, chunking,
     schema, prompt and sampling identities, plus the referenced *case-theory* version. The cascade

@@ -19,6 +19,7 @@ import json
 import urllib.request
 from collections.abc import Callable
 
+from apx.core.domain.ranking import JudgeIdentity
 from apx.core.domain.triage import Label, Verdict
 
 _SYSTEM = (
@@ -55,6 +56,8 @@ class LLMJudge:
         base_url: str,
         api_key: str,
         model: str,
+        provider: str = "openai-compatible",
+        temperature: float = 0.0,
         timeout: float = 30.0,
         max_chars: int = 16000,
         transport: Callable[[list[dict]], str] | None = None,
@@ -64,8 +67,17 @@ class LLMJudge:
         self._model = model
         self._timeout = timeout
         self._max_chars = max_chars
+        self._temperature = temperature
         self._transport = transport or self._http
         self.name = f"llm:{model}"
+        # Reported, not configured (Story 7.3, AD-23). `temperature` and `sampling` used to have no
+        # source anywhere in the product: the temperature was a literal inside the request body and
+        # the request carried no sampling parameter at all, so every caller invented a plausible
+        # `{"top_p": 1.0}` for the fingerprint. An empty mapping is the true answer — this judge
+        # sends no sampling parameter — and it is a different fact from "nobody recorded one".
+        self.identity = JudgeIdentity(
+            provider=provider, endpoint=base_url, model=model,
+            temperature=temperature, sampling={})
 
     def judge(self, *, question: str, text: str) -> Verdict:
         body = text[: self._max_chars]
@@ -85,7 +97,7 @@ class LLMJudge:
         payload = json.dumps({
             "model": self._model,
             "messages": messages,
-            "temperature": 0,
+            "temperature": self._temperature,
             "response_format": {"type": "json_object"},
         }).encode()
         request = urllib.request.Request(  # noqa: S310 — configured HTTPS endpoint
@@ -112,6 +124,17 @@ class CascadeJudge:
         self._primary = primary
         self._fallback = fallback
         self.name = f"{primary.name}+{fallback.name}"  # type: ignore[attr-defined]
+        # BOTH deciders are named. The primary promotes to RELEVANT with no model call, so an
+        # identity naming only the LLM would attribute to a model the very verdicts it never saw.
+        # The endpoint and the sampling are the fallback's, because they are the only network ones.
+        first: JudgeIdentity = primary.identity   # type: ignore[attr-defined]
+        second: JudgeIdentity = fallback.identity  # type: ignore[attr-defined]
+        self.identity = JudgeIdentity(
+            provider=f"{first.provider}+{second.provider}",
+            endpoint=second.endpoint,
+            model=f"{first.model}+{second.model}",
+            temperature=second.temperature,
+            sampling=second.sampling)
 
     def judge(self, *, question: str, text: str) -> Verdict:
         verdict = self._primary.judge(question=question, text=text)  # type: ignore[attr-defined]

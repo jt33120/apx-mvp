@@ -27,6 +27,7 @@ from apx.adapters.judge.criteria import CriteriaJudge
 from apx.adapters.llm_openai_compat.judge import CascadeJudge
 from apx.core.app.triage import triage_pieces
 from apx.core.domain.dedup import text_key
+from apx.core.domain.ranking import JudgeIdentity
 from apx.core.domain.triage import Label, Verdict
 from apx.core.ports.judge import Judge
 
@@ -37,6 +38,11 @@ class StubJudge:
     judge's concern; this exists only to measure throughput."""
 
     name = "stub"
+    #: It says what it is. A *ranking version* produced with this judge must name it, not a model
+    #: it never called — which is the whole reason the port asks a judge to answer for itself.
+    identity = JudgeIdentity(
+        provider="stub", endpoint="local:timedrun-stub", model="stub-discard-all",
+        temperature=0.0, sampling={})
 
     def __init__(self, latency: float = 0.0) -> None:
         self.latency = latency
@@ -53,6 +59,7 @@ class _Counting:
     def __init__(self, inner: Judge) -> None:
         self._inner = inner
         self.name = inner.name
+        self.identity = inner.identity     # a counter is not a decider: it forwards the identity
         self.calls = 0
         self._lock = threading.Lock()
 

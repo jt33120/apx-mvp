@@ -74,7 +74,7 @@ from apx.adapters.store_postgres.semantic_query import results_from_rows, semant
 from apx.core.app.ingest import IngestedFailure, IngestedPiece, IngestionResult
 from apx.core.domain import audit as AUDIT
 from apx.core.domain.auth import hash_password, verify_and_upgrade, verify_password
-from apx.core.domain.cascade import INTRINSIC_SIGNALS
+from apx.core.domain.cascade import INTRINSIC_SIGNALS, CascadeUnit
 from apx.core.domain.chunking import (
     PIECE_GONE,
     FailedResolution,
@@ -230,8 +230,10 @@ from apx.core.domain.validation import (
     check_confirmed_count,
     in_force,
 )
+from apx.core.ports.embedding import Embedder
 from apx.core.ports.read import ExactSearch, PieceView
 from apx.core.ports.sampling import InvalidatedRun, RunAlreadyClosed
+from apx.core.ports.scorer import SemanticScorer
 from apx.core.projection import Snapshot
 
 _log = logging.getLogger("apx.store")
@@ -2400,6 +2402,55 @@ class SqlStore:
             groups.setdefault(key, []).append(pid)
         reps = sorted(min(pids) for pids in groups.values())
         return [(rid, text[rid]) for rid in reps]
+
+    def cascade_units(self, matter: str, tenant: str, scopes: set[str]) -> list[CascadeUnit]:
+        """Every *pièce* of the *matter* as a cascade input — the WHOLE population, with the chunk
+        ids stage 3 draws its retained extract from. Scope-checked; deterministic (by ``piece_id``).
+
+        **Not** :meth:`representatives`, and the difference is not an optimisation. That reader has
+        already collapsed near-duplicates to one survivor per ``text_key`` and dropped the members;
+        the cascade does its own grouping (stage 1) and emits an ``exact-duplicate-member`` REJECTED
+        row for every member so it stays **in** the recorded order (AD-36). Feeding it
+        representatives would delete those *pièces* from the ranked table — on a thousand-*pièce*
+        *matter* collapsing to a hundred texts, nine hundred documents that were in the dossier
+        before the ranking would read as *arrivées après ce classement* — and it would redefine
+        SM-18 underneath its own docstring, since ``stage3_share`` divides by ``len(units)`` and is
+        meant to be the share of the **matter**, so that near-duplicate collapsing counts as the
+        saving it is. The measured cost would then read 1.0 where it is 0.1.
+        """
+        with self._sf() as session:
+            scope = session.scalar(
+                select(MatterScope.scope).where(
+                    MatterScope.matter == matter, MatterScope.tenant == tenant))
+            if scope is None or scope not in scopes:
+                raise ScopeDenied(matter)
+            pieces = session.execute(
+                select(Piece.id, Piece.full_text).where(
+                    Piece.matter == matter, Piece.tenant == tenant)).all()
+            chunks = session.execute(
+                select(Chunk.piece_id, Chunk.chunk_id)
+                .where(Chunk.matter == matter, Chunk.tenant == tenant)
+                .order_by(Chunk.piece_id, Chunk.position)).all()
+        by_piece: dict[str, list[str]] = {}
+        for piece_id, chunk_id in chunks:
+            by_piece.setdefault(piece_id, []).append(chunk_id)
+        return [
+            CascadeUnit(
+                piece_id=pid, text=full_text or "", chunk_ids=tuple(by_piece.get(pid, ())))
+            for pid, full_text in sorted(pieces)
+        ]
+
+    def semantic_scorer(self, embedder: Embedder) -> SemanticScorer:
+        """The stage-2 scorer over this store's own sessions (Story 7.3).
+
+        A factory rather than a public session factory: ``PgSemanticScorer`` needs the sessions and
+        nothing else needs them, and the alternative — reaching into ``store._sf`` from the
+        composition root — is a test-only idiom that would put the store's internals in the runtime
+        tree. The embedder stays the caller's, because AD-11 says there is exactly one and the
+        composition root owns it."""
+        from apx.adapters.store_postgres.scorer import PgSemanticScorer
+
+        return PgSemanticScorer(self._sf, embedder)
 
     def save_labels(self, matter: str, tenant: str, scopes: set[str],
                     outcome: TriageOutcome, judge: str, actor: str) -> None:

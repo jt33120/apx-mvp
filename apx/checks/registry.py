@@ -47,6 +47,7 @@ from apx.checks import (
     pin_ledger_ownership,
     pin_not_a_ranking_input,
     projection,
+    ranking_identity_source,
     ranking_ownership,
     ranking_sets_are_views,
     read_path,
@@ -226,6 +227,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     traversal.the_filesystem_has_one_walk,
     # ── story 7.2: a backup's coverage is derived, not listed (AD-32/C2) ──
     backup_completeness.the_backup_plan_is_total,
+    # ── story 7.3: the ranking act names what actually ran (AD-23/C4) ──
+    ranking_identity_source.the_ranking_identity_has_one_source,
     statement.the_sentence_has_one_composer,
     statement.the_sentence_is_composed_offline,
     statement.unfitness_offers_no_line_move,

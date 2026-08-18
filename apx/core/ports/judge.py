@@ -11,11 +11,18 @@ from __future__ import annotations
 
 from typing import Protocol
 
+from apx.core.domain.ranking import JudgeIdentity
 from apx.core.domain.triage import Verdict
 
 
 class Judge(Protocol):
     name: str  # self-identifying, recorded on every label for transparency (FR-33)
+
+    #: what this judge IS — provider, endpoint, model, temperature and sampling, reported by the
+    #: judge rather than read from configuration, so a *ranking version* names the decider that
+    #: actually ran (Story 7.3, AD-23). ``name`` is for a label; this is for the immutable
+    #: fingerprint, and the two must not be confused.
+    identity: JudgeIdentity
 
     def judge(self, *, question: str, text: str) -> Verdict:
         """Decide whether a piece's ``text`` is responsive to the matter's triage
