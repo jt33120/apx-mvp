@@ -89,10 +89,11 @@ cd <repo-root> && export PATH="$PWD/.venv/bin:$PATH" && \
 cd <repo-root>/apx/web && npm run typecheck && npm run build
 ```
 
-Expected as of Story 7.3 (2026-08-18): ruff clean · `Contracts: 3 kept, 0 broken` ·
-**107** structural checks passed · fitness frame green, 6 asserted / 7 pending ·
-**2 191 passed, 12 skipped** · client typecheck and build clean.
-*(Epic 5 close: 103 / 2 077. 7.1: 104 / 2 113. B2: 105 / 2 141. 7.2: 106 / 2 173.)*
+Expected as of Story 7.4 (2026-08-18): ruff clean · `Contracts: 3 kept, 0 broken` ·
+**108** structural checks passed · fitness frame green, 6 asserted / 7 pending ·
+**2 199 passed, 12 skipped** · client typecheck and build clean.
+*(Epic 5 close: 103 / 2 077. 7.1: 104 / 2 113. B2: 105 / 2 141. 7.2: 106 / 2 173.
+7.3: 107 / 2 191.)*
 
 - **uv only** — `.venv/bin/ruff`, `.venv/bin/python`. Never `pip`. `uv sync --group dev`
   on a fresh clone; `cd apx/web && npm ci` for the client.

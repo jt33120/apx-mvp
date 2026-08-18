@@ -63,6 +63,7 @@ from apx.checks import (
     pin_ledger_ownership,
     pin_not_a_ranking_input,
     projection,
+    queue_open,
     ranking_identity_source,
     ranking_ownership,
     ranking_sets_are_views,
@@ -716,6 +717,14 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        "passing model_provider/model_endpoint/model_name as a config key outside the module that "
        "composes the judge — configuration records a PREFERENCE, and this deployment silently "
        "composes the deterministic criteria judge whenever no LLM credential is present"),
+    # ── story 7.4: the queue is opened by whoever defers onto it (AD-6) ──────────────────────
+    _p("defer-opens-the-queue", "FR-2", "AD-6", "nothing defers onto a queue it has not opened",
+       queue_open.every_defer_opens_the_queue,
+       "every function in the sealed queue package that calls defer/defer_async — each must open "
+       "the queue first. open_async lived in `manage worker` alone, a DIFFERENT process, so the "
+       "API deferred onto a pool that did not exist and answered 503 to every upload on every "
+       "real deployment; the suite runs on SQLite, whose in-memory connector is the one "
+       "implementation with no such guard"),
     _p("override-ground-named", "FR-25", "AD-33", "an override names its FR-25 ground",
        override.override_names_its_ground,
        "the act catalogue (every override names one of FR-25's three grounds; the override class "

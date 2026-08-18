@@ -13,6 +13,7 @@ unit's (so an exception handler cannot roll the quarantine back with the failure
 
 from __future__ import annotations
 
+import asyncio
 import functools
 import os
 import shutil
@@ -199,8 +200,49 @@ def run_import(job_id: str) -> None:
     _run_import(open_store(), job_id)
 
 
+_open_lock = asyncio.Lock()
+_opened = False
+
+
+async def ensure_open() -> None:
+    """Open the queue's connection pool, once per process, before anything is deferred.
+
+    **This existed nowhere, and the consequence was that no upload could ever be accepted on a real
+    deployment.** ``PsycopgConnector.pool`` raises ``AppNotOpen`` until ``open_async`` has been
+    called, ``open_async`` was called only by ``manage worker`` — a *different process* — and the
+    upload route wrapped its ``defer`` in ``except Exception`` and answered *« file d'import
+    indisponible »*. So the product's front door returned 503 to every submission, and the test
+    suite could not see it: ``_connector`` picks the connector from ``DATABASE_URL`` at import time
+    and the suite runs on SQLite, which yields the in-memory connector — the one implementation with
+    no such guard.
+
+    Opening here rather than only at start-up is deliberate. A start-up hook is a *habit*: it works
+    until a second process, a management command or a test harness defers without having run it, and
+    that failure is silent in exactly the same way. Deferring opens the queue, so the property
+    belongs to the act rather than to whoever remembered to call the hook. The API still opens it at
+    boot as well, so a queue that cannot be reached is discovered when the container starts and not
+    by the first lawyer who drops a folder on it.
+    """
+    global _opened
+    if _opened:
+        return
+    async with _open_lock:
+        if not _opened:                        # re-checked under the lock: two concurrent uploads
+            await app.open_async()             # must not both open the pool
+            _opened = True
+
+
+async def close_queue() -> None:
+    """Release the pool on shutdown. Idempotent — a process that never deferred closes nothing."""
+    global _opened
+    if _opened:
+        await app.close_async()
+        _opened = False
+
+
 async def enqueue_import(job_id: str) -> None:
     """Defer the import job onto the queue (non-blocking). Async so it composes with the async
     HTTP handler's event loop; the API calls this after durably creating the ledger row and
     spooling the bytes, then the request returns immediately (AD-6)."""
+    await ensure_open()
     await run_import.defer_async(job_id=job_id)

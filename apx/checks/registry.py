@@ -47,6 +47,7 @@ from apx.checks import (
     pin_ledger_ownership,
     pin_not_a_ranking_input,
     projection,
+    queue_open,
     ranking_identity_source,
     ranking_ownership,
     ranking_sets_are_views,
@@ -229,6 +230,8 @@ CHECKS: list[Callable[[], CheckResult]] = [
     backup_completeness.the_backup_plan_is_total,
     # ── story 7.3: the ranking act names what actually ran (AD-23/C4) ──
     ranking_identity_source.the_ranking_identity_has_one_source,
+    # ── story 7.4: a deferral opens the queue it defers onto (AD-6) ──
+    queue_open.every_defer_opens_the_queue,
     statement.the_sentence_has_one_composer,
     statement.the_sentence_is_composed_offline,
     statement.unfitness_offers_no_line_move,

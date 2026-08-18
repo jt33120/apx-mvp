@@ -49,7 +49,7 @@ from apx.adapters.render_html import CompositePieceRenderer, HtmlPieceRenderer, 
 from apx.adapters.render_image import Pdf2ImageRasterizer
 from apx.adapters.store_postgres.admission import admit
 from apx.adapters.store_postgres.opening import open_store
-from apx.adapters.store_postgres.queue import enqueue_import
+from apx.adapters.store_postgres.queue import close_queue, enqueue_import, ensure_open
 from apx.adapters.store_postgres.store import (
     AuditUnwritable,
     ScopeConflict,
@@ -135,7 +135,14 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
         # is a restore-truncation), then advance the journal to the current live head.
         store.reconcile_heads()
         store.record_current_heads()
-    yield
+    # AD-6: this process DEFERS jobs, so it opens the queue. Deferring opens it too, so this is not
+    # what makes the upload path work — it is what makes a queue this API cannot reach a failure at
+    # container start rather than a 503 handed to the first lawyer who drops a folder on it.
+    await ensure_open()
+    try:
+        yield
+    finally:
+        await close_queue()
 
 
 app = FastAPI(title="APX", version="0.1.0", lifespan=_lifespan)
