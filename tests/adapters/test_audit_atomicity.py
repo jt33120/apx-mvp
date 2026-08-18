@@ -269,7 +269,8 @@ def test_a_validation_act_leaves_no_ledger_entry_when_the_record_cannot_be_writt
     before = _count(store, ValidationActEntry)
     with _read_only_audit_store(engine), pytest.raises(SQLAlchemyError):
         store.validate_pieces(
-            tenant=TENANT, matter=MATTER, actor=ACTOR, piece_ids=["rel"], scopes={WALL})
+            tenant=TENANT, matter=MATTER, actor=ACTOR, piece_ids=["rel"], scopes={WALL},
+            version_no=1)
     assert _count(store, ValidationActEntry) == before
     assert store.read_validation_log(tenant=TENANT, matter=MATTER, scopes={WALL}) == ()
 
@@ -321,7 +322,8 @@ def test_no_audit_entry_survives_any_of_the_six(engine: Engine, store: SqlStore)
             lambda: store.complete_sampling_run(
                 tenant=TENANT, matter=MATTER, actor=ACTOR, scopes={WALL}, run_id=run_id),
             lambda: store.validate_pieces(
-                tenant=TENANT, matter=MATTER, actor=ACTOR, piece_ids=["rel"], scopes={WALL}),
+                tenant=TENANT, matter=MATTER, actor=ACTOR, piece_ids=["rel"], scopes={WALL},
+                version_no=1),
             lambda: store.grant_scope(TENANT, ACTOR, user_id, WALL),
             lambda: store.set_config(TENANT, ACTOR, "backup_interval_hours", 999),
         ):

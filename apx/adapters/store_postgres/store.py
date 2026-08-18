@@ -1659,10 +1659,14 @@ class SqlStore:
                 MatterScope.matter == matter, MatterScope.tenant == tenant
             )
         ) or 0
+        # retro B2/H1: open OR overridden. An override is a decision about a document, not a
+        # discovery about its contents — counting only the open ones made the "contents unknown"
+        # qualification disappear at the moment somebody decided to live without the archive.
         unknown = session.scalar(
             select(func.count()).select_from(Failure).where(
                 Failure.matter == matter, Failure.tenant == tenant,
-                Failure.resolution_state == "open", Failure.cardinality == "unknown",
+                Failure.resolution_state.in_(("open", "overridden")),
+                Failure.cardinality == "unknown",
             )
         ) or 0
         excluded = session.scalar(
@@ -1848,9 +1852,20 @@ class SqlStore:
     ) -> None:
         """Persist one register entry (`open`) — the single failure-write, shared by ``save`` and
         the retry reconcile. ``if_absent`` inserts only when the id is new, so a container member
-        recovered alongside failures never clobbers — nor re-opens — an existing entry (AD-7)."""
+        recovered alongside failures never clobbers — nor re-opens — an existing entry (AD-7).
+
+        **An `overridden` entry is never touched** (retro B2/H2). Story 5.6 asserted that *"a
+        retry never silently resolves what an override closed"* and put that guard on
+        ``retry_failure`` — the one route its review walked. This is the other one: ``save`` merged
+        the entry back as ``open``, so re-importing the same folder reversed a signed decision with
+        no audit entry, no conditional commit, and nothing on any surface to show it had happened.
+        An *override* is a person's decision under FR-25 carrying a written reason; only a person
+        undoes it."""
         fid = _failure_id(f.tenant, f.matter, f.submitted_path)
-        if if_absent and session.get(Failure, fid) is not None:
+        existing = session.get(Failure, fid)
+        if if_absent and existing is not None:
+            return
+        if existing is not None and existing.resolution_state == "overridden":
             return
         session.merge(Failure(
             id=fid, tenant=f.tenant, matter=f.matter, filename=f.filename,
@@ -2167,7 +2182,10 @@ class SqlStore:
             sampling_runs=tuple(
                 SamplingRunLine(
                     run_id=r.run_id, status=r.status, drawn=len(r.drawn),
-                    reviewed=r.relevant_found if r.relevant_found is not None else 0,
+                    # TWO numbers, two names (retro B2/H4): how many were reviewed, and how
+                    # many of those came back relevant. `reviewed` was fed `relevant_found`.
+                    reviewed=r.verdicts_recorded,
+                    relevant_found=r.relevant_found if r.relevant_found is not None else 0,
                     population_size=r.population_families,
                     bound_sentence_fr=quoted.get(r.run_id))
                 for r in runs),
@@ -2210,7 +2228,7 @@ class SqlStore:
 
     def export_matter_record(
         self, *, tenant: str, matter: str, actor: str, scopes: set[str], tier: Tier,
-        now: datetime | None = None,
+        now: datetime | None = None, bound_sentences: dict[str, str] | None = None,
     ) -> MatterRecord:
         """The *matter*'s record as a document, and the recorded act of producing it (FR-26 §11).
 
@@ -2226,14 +2244,21 @@ class SqlStore:
 
         Scope-checked first, and a refusal writes nothing: a refused export is not an export. The
         audit entry names the tier, the scope size and the counts, so the record says what left and
-        under which wall."""
+        under which wall.
+
+        ``bound_sentences`` maps a run to the sentence the ONE composer produced for it, and the
+        CALLER composes it (retro B2/H5): the composer is a core read seam over this same
+        store, and the document quotes what it produced rather than rebuilding it. Absent, §5
+        carries the numbers and no sentence — which is what *"no sentence was composed"* looks
+        like, and until this story that is what every exported record said."""
         stamp = now or datetime.now(UTC)
         with self._sf() as session:
             if not self._matter_held(session, tenant, matter, scopes):
                 raise ScopeDenied(matter)
 
         record = self._assemble_matter_record(
-            tenant=tenant, matter=matter, actor=actor, scopes=scopes, tier=tier, now=stamp)
+            tenant=tenant, matter=matter, actor=actor, scopes=scopes, tier=tier, now=stamp,
+            bound_sentences=bound_sentences)
 
         def _work(session: Session, _now: datetime) -> None:
             self._append_audit(
@@ -2513,8 +2538,10 @@ class SqlStore:
             overridden_register_entries=_count(
                 Failure, Failure.resolution_state == "overridden"),
             excluded_as_noise=_count(NoiseExclusion),
+            # open OR overridden — the same subset `_durable_inventory` takes (retro B2/H1)
             unknown_cardinality_entries=_count(
-                Failure, Failure.resolution_state == "open", Failure.cardinality == "unknown"),
+                Failure, Failure.resolution_state.in_(("open", "overridden")),
+                Failure.cardinality == "unknown"),
         )
 
     def open_import_jobs(self, *, tenant: str, scopes: set[str]) -> list[str]:
@@ -4977,13 +5004,18 @@ class SqlStore:
 
     def batch_split(
         self, *, tenant: str, matter: str, actor: str, piece_ids: Sequence[str], scopes: set[str],
+        version_no: int,
     ) -> BatchSplit | None:
         """What the bulk confirmation must state before anything is written (FR-45(a)).
 
-        The count **and** the split: how many of the selection this lawyer has opened, and
-        therefore how many entries will read *accepted from the list* rather than *read*. A
-        confirmation naming only the total is friction that obtains consent while telling her
-        nothing she did not already know. A pure read; ``None`` when out of scope or absent."""
+        The count, the split **and the version**: how many of the selection this lawyer has opened,
+        therefore how many entries will read *accepted from the list* rather than *read*, and whose
+        assessment she is about to accept. A confirmation naming only the total is friction that
+        obtains consent while telling her nothing she did not already know.
+
+        ``version_no`` is the version the SCREEN is showing, and it is required (retro B2/H7):
+        the preview and the commit must be about one version, or the dialog describes an act the
+        server will not perform. A pure read; ``None`` when out of scope or absent."""
         with self._sf() as session:
             if not self._matter_held(session, tenant, matter, scopes):
                 return None
@@ -4991,11 +5023,12 @@ class SqlStore:
                 session, tenant=tenant, matter=matter, piece_ids=piece_ids, actor=actor,
                 before=datetime.now(UTC))
         return BatchSplit(
-            total=len(piece_ids), opened=sum(1 for v in opens.values() if v is not None))
+            total=len(piece_ids), opened=sum(1 for v in opens.values() if v is not None),
+            version_no=version_no)
 
     def validate_pieces(
         self, *, tenant: str, matter: str, actor: str, piece_ids: Sequence[str], scopes: set[str],
-        confirmed_count: int | None = None, version_no: int | None = None,
+        version_no: int, confirmed_count: int | None = None,
     ) -> tuple[str, ...]:
         """Perform a *validation act* over one or more *pièces* — the ONE owning use case (AD-37).
 
@@ -5013,6 +5046,15 @@ class SqlStore:
         **The provenance is resolved here, per pièce, for this actor** (FR-45(c)) — never supplied
         by the caller and never stamped over the batch: a *pièce* in the batch that she *had* opened
         is recorded as opened, because it was.
+
+        **``version_no`` is required and has no default** (retro B2/H7). It defaulted to
+        ``None``, which resolved *the current version at commit time* — so the act recorded
+        acceptance of whatever ranking existed when the request landed, not the one the lawyer was
+        looking at, and a re-rank between the screen and the click silently moved the referent. The
+        surface names the version on the button; the request did not carry it. This is the same
+        argument Story 5.8 made for ``confirmed_count`` — *what the lawyer was shown, never
+        re-derived at the commit* — applied to the other half of the assertion. A default here is a
+        default on what a person is recorded as having accepted.
 
         Scope-checked (``ScopeDenied``). Raises ``ValueError`` when the *matter* has no such ranking
         version or a named *pièce* is not in it. Returns the batch identifier per *pièce* position

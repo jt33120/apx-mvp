@@ -354,7 +354,8 @@ def test_the_validation_counts_are_recomputable_from_the_document_alone(store: S
     store.audit_piece_open(tenant=TENANT, matter=MATTER, actor=who, piece_id=pieces[0])
     for piece_id in pieces:
         store.validate_pieces(
-            tenant=TENANT, matter=MATTER, actor=who, piece_ids=[piece_id], scopes={WALL})
+            tenant=TENANT, matter=MATTER, actor=who, piece_ids=[piece_id], scopes={WALL},
+            version_no=1)
     store.withdraw_validation(
         tenant=TENANT, matter=MATTER, actor=who, piece_id=pieces[2], scopes={WALL})
 

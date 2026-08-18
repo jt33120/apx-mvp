@@ -274,6 +274,36 @@ verdict rather than one boolean, the proposed entry's refusal to invent a timest
 fitness frame green, 6 asserted / 7 pending · **1 968 passed, 12 skipped** · client `typecheck` +
 `build` clean.
 
+## Re-review by the adversarial fleet (retro action B2)
+
+**Reviewed:** 2026-08-17 · **Method:** 4 named lenses over the whole diff, then **2 independent
+skeptics per candidate defect**, both instructed to REFUTE. Coverage: **12/12 lenses, 20/20
+skeptics, 0 lost** — the full table is in story 5.6's re-review section.
+
+**The retrospective's prediction, tested.** The inline pass recorded above confirmed **one** finding
+and reported *"everything else the lenses raised was already closed by construction"*. The fleet
+raised **24 candidates on this story**, with FOUR independent lenses converging on each of three
+separate defects. Two of them were confirmed and are fixed below. That is the measurement B2 existed
+to take, and it is the argument for never reviewing an egress story with one reader.
+
+### Confirmed and fixed here
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| H4 | HIGH | **§5 printed `relevant_found` under the name `reviewed`.** A draw of two hundred families that found three false discards read as a review of *three* — the strongest possible number for the firm, in the one document produced to be read against it. | Two numbers, two names: `reviewed` is the verdict tally, `relevant_found` is what those verdicts found. Both are on the document. |
+| H5 | HIGH | **The confidence bound never reached the exported record.** `_assemble_matter_record` has taken a `bound_sentences` map since Story 5.4 and **no caller ever filled it**, so `bound_sentence_fr` was `None` on every record ever produced — and this file's own contract says what that means: *"which is what 'no sentence was composed' looks like."* One had been. | The export route composes through the ONE read seam and the document **quotes** it. Asserted as an identity against the run surface, so a second composer fails rather than passing in different words. |
+
+H4 is this project's recurring defect — a comparison whose right-hand side is not the same thing as
+its left, failing toward the flattering side — landed on a court document. H5 is the epic's dominant
+finding in miniature: a parameter recorded, documented, tested at the domain level, and wired to
+nothing. **A decision recorded and never implemented is indistinguishable from one that was.**
+
+### Refuted
+
+Two candidates did not survive verification: a claimed tier leak through `pending` (the sections are
+static headings), and a claimed staleness gap on the cover (the freshness verdict is Story 4.13's and
+is deliberately not restated).
+
 ## Change Log
 
 | Date | Version | Description |

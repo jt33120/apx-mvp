@@ -18,6 +18,13 @@ reports.
   scroll position or a screen visit could produce an acceptance, and **one home** for the sentence
   the record attributes to the lawyer. A second, differently-worded control is how she comes to
   assert something she never read.
+- **validation-version-never-defaulted (FR-45/AD-23, retro B2/H7):** the *ranking version* an act
+  accepts is never supplied by a default. Added after the fleet found the fourth way, on the
+  assertion's OTHER load-bearing fact: ``validate_pieces`` defaulted ``version_no=None``, which
+  resolves *the current version at commit time*, and no route or client sent one — so a re-rank
+  landing between the reading and the click moved what a person was recorded as having accepted.
+  Same shape as the provenance defect, same direction, one field over. A default here is a default
+  on what a human is recorded as having accepted, which is the one thing FR-45 forbids by name.
 
 Build-time tooling, so this module is outside the scanned runtime (``_RUNTIME_EXCLUDE``) and may
 name the things it forbids.
@@ -42,6 +49,11 @@ _WITHDRAW = "ACT_VALIDATION_WITHDRAWN"
 
 #: The keyword carrying FR-45's load-bearing fact into the ledger.
 _PROVENANCE_ARG = "opened_at"
+
+#: The OTHER load-bearing fact: which *ranking version*'s assessment the act accepts (AD-23). The
+#: acts that take it, and the parameter's name at every layer.
+_VERSION_ARG = "version_no"
+_VERSION_TAKERS = ("validate_pieces", "batch_split")
 
 #: Where the assertion lives. The one module allowed to spell the sentence the record attributes to
 #: a lawyer.
@@ -227,6 +239,83 @@ def the_opened_fact_is_never_a_literal(roots: Iterable[Path] | None = None) -> C
         name, fr, True, f"{seen} call site(s) carry the opened fact; none asserts it")
 
 
+def _version_param(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> ast.arg | None:
+    for arg in (*fn.args.args, *fn.args.kwonlyargs):
+        if arg.arg == _VERSION_ARG:
+            return arg
+    return None
+
+
+def _version_has_default(fn: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:
+    """True if this function declares ``version_no`` WITH a default, positionally or keyword-only.
+
+    Positional defaults align to the TAIL of ``args``; keyword-only defaults align one-for-one with
+    ``kwonlyargs`` and carry ``None`` where there is none."""
+    tail = fn.args.args[len(fn.args.args) - len(fn.args.defaults):]
+    if any(a.arg == _VERSION_ARG for a in tail):
+        return True
+    return any(a.arg == _VERSION_ARG and d is not None
+               for a, d in zip(fn.args.kwonlyargs, fn.args.kw_defaults, strict=True))
+
+
+def the_accepted_version_is_never_defaulted(roots: Iterable[Path] | None = None) -> CheckResult:
+    """FR-45/AD-23 — the *ranking version* an act accepts comes from the caller, never a default.
+
+    Two legs, and the second is the one that catches a regression:
+
+    (a) **No call to** ``validate_pieces`` / ``batch_split`` **omits** ``version_no``. A call that
+        omits it is asking the store to pick, and the store's pick is *whatever is current when the
+        request lands* — which is not what was on the screen.
+    (b) **No layer ON THAT PATH declares** ``version_no`` **with a default** — the two acts
+        themselves, and any function that calls one. This is where the defect actually lived: the
+        store's signature said ``version_no: int | None = None``, the two routes repeated it, and
+        every layer was individually defensible while the act as a whole had no referent. A default
+        one layer up is the same defect with a longer stack trace.
+
+    **Scoped to the ACT, deliberately.** A default is perfectly honest on a READ — *"the current
+    version"* is what a table or a drawer should show when nobody named one, and thirty-seven
+    functions in this tree rely on it. It stops being honest the moment the answer is written down
+    as what a person accepted. So the check follows the act, not the parameter name: the two takers
+    and their callers, and nothing else.
+    """
+    name, fr = "the accepted ranking version is never defaulted", "FR-45"
+    trees, unparseable = _trees(roots)
+    if unparseable:
+        return _fail_closed(name, fr, unparseable)
+    violations: list[str] = []
+    calls = 0
+
+    for path, tree in trees:
+        for fn in _enclosing_functions(tree):
+            reaches_the_act = fn.name in _VERSION_TAKERS
+            for node in _own_nodes(fn):
+                if not isinstance(node, ast.Call):
+                    continue
+                target = node.func.attr if isinstance(node.func, ast.Attribute) else (
+                    node.func.id if isinstance(node.func, ast.Name) else "")
+                if target not in _VERSION_TAKERS:
+                    continue
+                calls += 1
+                reaches_the_act = True
+                if not any(kw.arg == _VERSION_ARG for kw in node.keywords):
+                    violations.append(
+                        f"{_where(path)}:{node.lineno} in {fn.name}() calls {target}() without "
+                        f"{_VERSION_ARG} — the act would accept whichever version is current when "
+                        "it commits, not the one the lawyer was shown")
+            if reaches_the_act and _version_param(fn) is not None and _version_has_default(fn):
+                violations.append(
+                    f"{_where(path)}:{fn.lineno} {fn.name}() performs or reaches a validation act "
+                    f"and declares {_VERSION_ARG} with a default — a default here resolves "
+                    "whatever version is current at the commit, on the record of what a person "
+                    "accepted (AD-23)")
+
+    if violations:
+        return CheckResult(name, fr, False, "; ".join(violations))
+    return CheckResult(
+        name, fr, True,
+        f"{calls} call site(s) name the ranking version; no layer of the act defaults it")
+
+
 def _is_assertion_home(path: Path) -> bool:
     return path.parts[-3:] == _ASSERTION_HOME
 
@@ -294,4 +383,5 @@ def run() -> list[CheckResult]:
         only_the_validation_act_accepts(),
         the_opened_fact_is_never_a_literal(),
         acceptance_is_never_manufactured(),
+        the_accepted_version_is_never_defaulted(),
     ]

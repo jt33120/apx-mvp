@@ -226,30 +226,44 @@ def check_confirmed_count(selected: int, confirmed: int) -> int:
 
 @dataclass(frozen=True)
 class BatchSplit:
-    """What a bulk confirmation must state: the count **and** the split (FR-45).
+    """What a bulk confirmation must state: the count, the split **and the version** (FR-45).
 
     A confirmation naming only the total is friction that obtains consent while telling the lawyer
     nothing she did not already know. The split is the information — how many of the set she has
-    opened, and therefore how many entries will read *accepted from the list* rather than *read*."""
+    opened, and therefore how many entries will read *accepted from the list* rather than *read*.
+
+    ``version_no`` is retro B2/H7. A *validation act* is *"I accept the tool's assessment"*
+    and the assessment belongs to one *ranking version* (AD-23 — no unqualified reference); the
+    confirmation named the count and never named the version, so a lawyer accepting one hundred and
+    eighty assessments was never told whose. The count travels from the screen to the commit because
+    Story 5.8 saw that a selection can move underneath a dialog; the version can move underneath it
+    the same way, and it did not travel."""
 
     total: int
     opened: int
+    #: the *ranking version* whose assessment this act accepts — the one on the screen
+    version_no: int
 
     @property
     def not_opened(self) -> int:
         return self.total - self.opened
 
     def sentence_fr(self) -> str:
-        """The consequence, in the lawyer's language, before anything is written."""
+        """The consequence, in the lawyer's language, before anything is written — and the
+        *ranking version* being accepted, named (AD-23)."""
+        version = (
+            f" L'appréciation acceptée est celle du classement n° {self.version_no}.")
         if self.opened == 0:
             return (
                 f"Vous n'en avez ouvert aucune. Les {self.total} seront inscrites comme "
-                "acceptées depuis la liste, jamais comme lues.")
+                f"acceptées depuis la liste, jamais comme lues.{version}")
         if self.not_opened == 0:
-            return f"Vous les avez toutes ouvertes. Les {self.total} seront inscrites comme lues."
+            return (
+                f"Vous les avez toutes ouvertes. Les {self.total} seront inscrites comme "
+                f"lues.{version}")
         return (
             f"Vous en avez ouvert {self.opened}. Les {self.not_opened} autres seront inscrites "
-            "comme acceptées depuis la liste, jamais comme lues.")
+            f"comme acceptées depuis la liste, jamais comme lues.{version}")
 
 
 # ── the counts the export prints (FR-26 §7/§8, FR-45(d), §13 q.5) ─────────────────────────────

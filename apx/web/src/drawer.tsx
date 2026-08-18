@@ -207,6 +207,21 @@ export function ValidationAct({ matter, pieceId, drawer }: {
   }
 
   const read = drawer.validation_provenance === "read";
+  const version = drawer.ranking_version_no;
+  // No version, no act (retro B2/H7). The assertion is "j'accepte l'appréciation de l'outil",
+  // and there is no assessment to accept until a ranking version exists. The button used to be
+  // offered anyway and the server resolved a version at the commit — which is how an act could name
+  // a version the screen had never shown.
+  if (version === null) {
+    return (
+      <div className="apx-act">
+        <p className="apx-hint" style={{ margin: 0 }}>
+          Aucune version de classement pour cette pièce — il n'y a pas encore d'appréciation à
+          accepter.
+        </p>
+      </div>
+    );
+  }
   return (
     <div className="apx-act">
       <button
@@ -214,14 +229,12 @@ export function ValidationAct({ matter, pieceId, drawer }: {
         className="apx-validate"
         disabled={busy}
         aria-describedby="apx-validation-provenance"
-        onClick={() => act(() => validatePiece(matter, pieceId))}
+        onClick={() => act(() => validatePiece(matter, pieceId, version))}
       >
         <span className="apx-validate-sentence">{drawer.validation_assertion_fr}</span>
-        {drawer.ranking_version_no !== null ? (
-          <span className="apx-validate-version">
-            Appréciation du classement n° {drawer.ranking_version_no}.
-          </span>
-        ) : null}
+        <span className="apx-validate-version">
+          Appréciation du classement n° {version}.
+        </span>
       </button>
       {/* aria-describedby, never a separate region: the consequence is announced WITH the control,
           not as something a keyboard user could pass by */}
@@ -280,8 +293,9 @@ export function ValidationBadge({ entry, currentVersion }: {
    forbidding it produces a workaround rather than compliance. The confirmation states the count
    AND THE SPLIT — a dialog naming only the total is friction that obtains consent while telling
    her nothing she did not already know. */
-export function BulkValidationConfirm({ matter, pieceIds, onDone, onCancel }: {
-  matter: string; pieceIds: string[]; onDone: (log: ValidationLog) => void; onCancel: () => void;
+export function BulkValidationConfirm({ matter, pieceIds, versionNo, onDone, onCancel }: {
+  matter: string; pieceIds: string[]; versionNo: number;
+  onDone: (log: ValidationLog) => void; onCancel: () => void;
 }) {
   const [split, setSplit] = useState<ValidationSplit | null>(null);
   const [busy, setBusy] = useState(false);
@@ -289,19 +303,21 @@ export function BulkValidationConfirm({ matter, pieceIds, onDone, onCancel }: {
 
   useEffect(() => {
     let live = true;
-    previewValidationBatch(matter, pieceIds)
+    previewValidationBatch(matter, pieceIds, versionNo)
       .then((s) => { if (live) setSplit(s); })
       .catch((e) => { if (live) setErr(e instanceof Error ? e.message : String(e)); });
     return () => { live = false; };
-  }, [matter, pieceIds]);
+  }, [matter, pieceIds, versionNo]);
 
   async function confirm() {
     if (!split) return;
     setBusy(true); setErr(null);
     try {
       // the count the lawyer was SHOWN, not one re-derived at the click: the server refuses a
-      // mismatch, which is what catches a selection that changed under the dialog
-      onDone(await validateBatch(matter, pieceIds, split.total));
+      // mismatch, which is what catches a selection that changed under the dialog. retro action B2
+      // (B2/H7): the VERSION travels for the same reason — it is the other half of what she
+      // accepted, and it was being resolved at the commit.
+      onDone(await validateBatch(matter, pieceIds, split.total, versionNo));
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally { setBusy(false); }
@@ -316,7 +332,7 @@ export function BulkValidationConfirm({ matter, pieceIds, onDone, onCancel }: {
         </h3>
         <p style={{ margin: ".4rem 0" }}>
           Vous êtes sur le point de déclarer avoir lu <b>{pieceIds.length} pièces</b> et d'accepter
-          l'appréciation de l'outil pour chacune.
+          l'appréciation du <b>classement n° {versionNo}</b> pour chacune.
         </p>
         {split ? (
           <p className="apx-provenance apx-provenance--list">{split.sentence_fr}</p>

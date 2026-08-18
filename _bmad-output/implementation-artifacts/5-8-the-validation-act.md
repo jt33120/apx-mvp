@@ -312,6 +312,63 @@ diff hunting the project's recurring defect shape.
 `apx/checks/user_actions.py` · `apx/web/src/api.ts` · `apx/web/src/drawer.tsx` ·
 `apx/web/src/tokens.css` · `README.md` · `…/DESIGN.md` · four test files carrying the tripwires
 
+## Re-review by the adversarial fleet (retro action B2)
+
+**Reviewed:** 2026-08-17 · **Method:** 4 named lenses over the whole diff, then **2 independent
+skeptics per candidate defect**, both instructed to REFUTE. Coverage: **12/12 lenses, 20/20
+skeptics, 0 lost** — the full table is in story 5.6's re-review section. 21 candidates on this
+story, one confirmed.
+
+### Confirmed and fixed here
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| H7 | HIGH | **The accepted *ranking version* was resolved at the commit, not pinned to the one shown**, and the bulk confirmation never named it. `validate_pieces` defaulted `version_no=None`, which resolves the CURRENT version; the client sent none. A re-rank landing between the reading and the click silently moved what a person is recorded as having accepted — toward whatever the tool now thinks. | `version_no` is required at the store, at all three routes (422 at the edge) and in the client, which sends the version the screen is showing. The bulk dialog names it. The drawer no longer offers the act when there is no version to accept. |
+
+**The argument was already in this file, made once.** `api.ts` carries the comment
+*"`confirmedCount` is what the lawyer was SHOWN, not `pieceIds.length` re-derived here"*, because
+Story 5.8 saw that a selection can move underneath a dialog. The version can move underneath it the
+same way, and the drawer's own button **prints** it — *« Appréciation du classement n° 1. »* — while
+the request carried nothing. Half of the assertion travelled; the other half was resolved at the
+commit.
+
+### The check this one earned (104 → 105)
+
+`validation-version-never-defaulted` sits beside this story's own three, and guards the same act's
+OTHER load-bearing fact. `the_opened_fact_is_never_a_literal` already forbids a constant where the
+*provenance* belongs; this forbids a **default** where the *version* belongs. Two legs: no call to
+`validate_pieces` / `batch_split` omits `version_no`, and no layer that performs or reaches the act
+declares it with a default — which is where the defect lived, spread across three individually
+defensible signatures.
+
+**It is scoped to the act, and that was the design decision.** A first draft flagged every function
+declaring `version_no` with a default and found **thirty-seven**, nearly all of them right: *"the
+current version"* is exactly what a table, a drawer or a line read should show when nobody named
+one. A check that broad would have been answered by weakening it, which is how a guard dies. It
+stops being honest only where the answer is written down as what a person accepted, so the check
+follows the act rather than the parameter name — and a test pins that scope, so narrowing it further
+or widening it back is a deliberate act.
+
+**What it does not reach:** the client. The omission that made the defect reachable was a TypeScript
+call that sent no version; this check reads Python. Named rather than implied.
+
+### Found while fixing, not fixed here
+
+- **`BulkValidationConfirm` is exported and imported by nothing.** The bulk act — FR-45(a)'s
+  confirmation, the split, the count — has no reachable surface in the SPA. It is the C5 family
+  (*the mechanism was built and the half that tells the lawyer was not*), and it belongs to the
+  worklist story rather than to a defect fix. Recorded as **C9**.
+- **A named version this *matter* does not have answers 403**, because `read_triage_table` makes
+  out-of-scope, absent and unknown-version indistinguishable (FR-14). Correct on non-disclosure
+  grounds, unhelpful to an honest client; pinned by test so the behaviour is deliberate.
+
+### Refuted
+
+Four candidates did not survive: a claimed batch-id collision (the moment is in the hash, by the
+original review's own fix), a claimed double-count of withdrawn entries, a claimed scope leak on
+`batch_split` (it is scope-checked), and a claimed ordering dependency in `inForce` (it takes the
+max-`seq`, not the last element).
+
 ## Change Log
 
 | Date | Change |

@@ -26,6 +26,9 @@ from tests.scoring_fakes import FakeScorer, FixedJudge
 
 TENANT, WALL, MATTER = "t", "wall", "m"
 ME = "me@x.fr"
+# retro B2/H7: the act names the *ranking version* it accepts, and the boundary
+# requires it. `_rank` produces the matter's first, so every act below accepts version 1.
+V1 = 1
 _FILES = {
     "bail.txt": "Contrat de bail commercial signé le 3 mars, clause résolutoire.",
     "facture.txt": "Facture EDF, 150 euros, échéance avril.",
@@ -145,7 +148,7 @@ def test_an_unopened_piece_says_so_before_the_act_and_records_it_after(
     assert drawer["validation_provenance"] == "from-the-list"
     assert "acceptée depuis la liste" in drawer["validation_provenance_fr"]
     assert "Vous n'avez pas ouvert" in drawer["validation_provenance_fr"]
-    log = client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate").json()
+    log = client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate?version_no={V1}").json()
     entry = log["entries"][0]
     assert entry["provenance"] == "from-the-list" and entry["opened_at"] is None
     assert entry["actor"] == "Me Durand" and entry["batch_id"] is None
@@ -161,7 +164,7 @@ def test_the_opened_fact_is_this_actors_and_never_another_lawyers(
     store.create_user(TENANT, "marc@x.fr", "motdepasse", "Me Marc", {WALL})
     store.audit_piece_open(tenant=TENANT, matter=MATTER, actor="Me Marc", piece_id=pieces[0])
     drawer = client.get(f"/api/matters/{MATTER}/pieces/{pieces[0]}/drawer").json()
-    log = client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate").json()
+    log = client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate?version_no={V1}").json()
     assert drawer["validation_provenance"] == "from-the-list"
     assert log["entries"][0]["provenance"] == "from-the-list"
 
@@ -172,7 +175,7 @@ def test_an_open_after_the_act_does_not_make_it_read(
     """*Before* the act, strictly. An open recorded afterwards is a different gesture, and letting
     it colour an entry already written would let the record improve retroactively."""
     store, client, pieces = _ready(tmp_path, monkeypatch)
-    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate")
+    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate?version_no={V1}")
     store.audit_piece_open(tenant=TENANT, matter=MATTER, actor="Me Durand", piece_id=pieces[0])
     log = client.get(f"/api/matters/{MATTER}/validations").json()
     assert log["entries"][0]["provenance"] == "from-the-list"
@@ -186,7 +189,7 @@ def test_the_batch_confirmation_states_the_count_and_the_split(
     store, client, pieces = _ready(tmp_path, monkeypatch)
     store.audit_piece_open(tenant=TENANT, matter=MATTER, actor="Me Durand", piece_id=pieces[0])
     split = client.post(
-        f"/api/matters/{MATTER}/validate-batch/preview",
+        f"/api/matters/{MATTER}/validate-batch/preview?version_no={V1}",
         json={"piece_ids": pieces, "confirmed_count": len(pieces)}).json()
     assert split["total"] == len(pieces) and split["opened"] == 1
     assert split["not_opened"] == len(pieces) - 1
@@ -203,7 +206,7 @@ def test_a_batch_records_each_piece_s_own_provenance_never_a_blanket_stamp(
     store, client, pieces = _ready(tmp_path, monkeypatch)
     store.audit_piece_open(tenant=TENANT, matter=MATTER, actor="Me Durand", piece_id=pieces[0])
     log = client.post(
-        f"/api/matters/{MATTER}/validate-batch",
+        f"/api/matters/{MATTER}/validate-batch?version_no={V1}",
         json={"piece_ids": pieces, "confirmed_count": len(pieces)}).json()
     by_piece = {e["piece_id"]: e for e in log["entries"]}
     assert by_piece[pieces[0]]["provenance"] == "read"
@@ -219,7 +222,7 @@ def test_a_batch_whose_count_does_not_match_the_selection_is_refused(
     """The selection changed under the dialog: she confirmed a different act. Nothing is written."""
     store, client, pieces = _ready(tmp_path, monkeypatch)
     res = client.post(
-        f"/api/matters/{MATTER}/validate-batch",
+        f"/api/matters/{MATTER}/validate-batch?version_no={V1}",
         json={"piece_ids": pieces, "confirmed_count": len(pieces) - 1})
     assert res.status_code == 400 and "confirms a different act" in res.json()["detail"]
     assert store.read_validation_log(tenant=TENANT, matter=MATTER, scopes={WALL}) == ()
@@ -232,17 +235,19 @@ def test_a_multi_piece_act_without_a_confirmation_is_refused(
     store refuses a multi-pièce act with no confirmation even if one got past it."""
     store, client, pieces = _ready(tmp_path, monkeypatch)
     assert client.post(
-        f"/api/matters/{MATTER}/validate-batch", json={"piece_ids": pieces}).status_code == 422
+        f"/api/matters/{MATTER}/validate-batch?version_no={V1}",
+        json={"piece_ids": pieces}).status_code == 422
     with pytest.raises(ValueError, match="explicit confirmation"):
         store.validate_pieces(
-            tenant=TENANT, matter=MATTER, actor="Me Durand", piece_ids=pieces, scopes={WALL})
+            tenant=TENANT, matter=MATTER, actor="Me Durand", piece_ids=pieces, scopes={WALL},
+            version_no=V1)
 
 
 # ── AC-6: the reversal is an entry ────────────────────────────────────────────────────────────
 
 def test_a_withdrawal_appends_and_erases_nothing(tmp_path: Path, monkeypatch) -> None:  # noqa: ANN001
     _store, client, pieces = _ready(tmp_path, monkeypatch)
-    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate")
+    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate?version_no={V1}")
     log = client.post(
         f"/api/matters/{MATTER}/pieces/{pieces[0]}/validation/withdraw").json()
     again = client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validation/withdraw")
@@ -255,7 +260,7 @@ def test_a_withdrawn_validation_is_counted_as_withdrawn_never_as_absent(
 ) -> None:
     """*Never validated* and *validated then withdrawn* are different facts, and §7 keeps both."""
     _store, client, pieces = _ready(tmp_path, monkeypatch)
-    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate")
+    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate?version_no={V1}")
     client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validation/withdraw")
     doc = client.post(f"/api/matters/{MATTER}/record/export?tier=numbers-only").json()
     summary = doc["validation_summary"]
@@ -271,7 +276,7 @@ def test_a_re_rank_makes_the_acceptance_stale_and_invalidates_nothing(
     tmp_path: Path, monkeypatch,  # noqa: ANN001
 ) -> None:
     store, client, pieces = _ready(tmp_path, monkeypatch)
-    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate")
+    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate?version_no={V1}")
     fresh = client.get(f"/api/matters/{MATTER}/validations").json()
     assert fresh["entries"][0]["stale"] is False
     _rank(store, client)                              # a second ranking version arrives
@@ -289,7 +294,7 @@ def test_the_export_counts_the_two_registers_apart_and_retires_the_pending_block
 ) -> None:
     store, client, pieces = _ready(tmp_path, monkeypatch)
     store.audit_piece_open(tenant=TENANT, matter=MATTER, actor="Me Durand", piece_id=pieces[0])
-    client.post(f"/api/matters/{MATTER}/validate-batch",
+    client.post(f"/api/matters/{MATTER}/validate-batch?version_no={V1}",
                 json={"piece_ids": pieces, "confirmed_count": len(pieces)})
     doc = client.post(f"/api/matters/{MATTER}/record/export?tier=numbers-only").json()
     summary = doc["validation_summary"]
@@ -309,7 +314,7 @@ def test_the_acceptance_writes_two_entries_one_gesture_one_consequence(
     """FR-24 §611 enumerates two recorded things and the record keeps them apart: *who validated
     what and when*, and *which values were accepted as-is*."""
     store, client, pieces = _ready(tmp_path, monkeypatch)
-    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate")
+    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate?version_no={V1}")
     trail = store.read_audit(MATTER, TENANT, {WALL})
     actions = [e.action for e in trail.entries]
     assert actions.count(AUDIT.ACT_VALIDATE_PIECE) == 1
@@ -325,7 +330,7 @@ def test_validation_is_non_disclosing_outside_the_wall(tmp_path: Path, monkeypat
     _login(other, "a@x.fr", pw="motdepasse")
     walled = other.get("/api/matters/m-b/validations")
     absent = other.get("/api/matters/inexistante/validations")
-    act = other.post(f"/api/matters/m-b/pieces/{pieces[0]}/validate")
+    act = other.post(f"/api/matters/m-b/pieces/{pieces[0]}/validate?version_no={V1}")
     assert walled.status_code == absent.status_code == 404
     assert walled.json() == absent.json()             # the same answer, byte for byte
     assert act.status_code == 403
@@ -338,7 +343,7 @@ def test_a_piece_outside_the_ranking_cannot_be_accepted(
     """A validation act accepts a NAMED version's assessment. There is none to accept for a pièce
     the ranking never saw, and inventing one is how an acceptance with no referent gets written."""
     _store, client, _pieces = _ready(tmp_path, monkeypatch)
-    res = client.post(f"/api/matters/{MATTER}/pieces/jamais-classee/validate")
+    res = client.post(f"/api/matters/{MATTER}/pieces/jamais-classee/validate?version_no={V1}")
     assert res.status_code == 400 and "not in ranking version" in res.json()["detail"]
 
 
@@ -351,8 +356,8 @@ def test_two_gestures_over_the_same_selection_are_two_batches(
     separate decisions."""
     _store, client, pieces = _ready(tmp_path, monkeypatch)
     body = {"piece_ids": pieces, "confirmed_count": len(pieces)}
-    first = client.post(f"/api/matters/{MATTER}/validate-batch", json=body).json()
-    second = client.post(f"/api/matters/{MATTER}/validate-batch", json=body).json()
+    first = client.post(f"/api/matters/{MATTER}/validate-batch?version_no={V1}", json=body).json()
+    second = client.post(f"/api/matters/{MATTER}/validate-batch?version_no={V1}", json=body).json()
     ids = {e["batch_id"] for e in second["entries"]}
     assert len(ids) == 2, "the second gesture must not inherit the first's identifier"
     assert {e["batch_id"] for e in first["entries"]} < ids
@@ -366,7 +371,7 @@ def test_never_validated_is_a_set_difference_not_a_subtraction(
     subtraction under-reports what nobody has looked at, and can go negative — which a clamp would
     have hidden as a flattering zero."""
     _store, client, pieces = _ready(tmp_path, monkeypatch)
-    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate")
+    client.post(f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate?version_no={V1}")
     doc = client.post(f"/api/matters/{MATTER}/record/export?tier=numbers-only").json()
     summary = doc["validation_summary"]
     # exactly the ranked pièces with no validation in force — never len(ranked) - len(entries)

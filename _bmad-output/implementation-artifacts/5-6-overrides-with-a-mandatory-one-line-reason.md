@@ -365,6 +365,61 @@ that computes it · the structural checks' own evasions · the surfaces (API, cl
 ruff clean · import-linter 3 kept / 0 broken · **95** structural checks (92 → 95) · fitness frame
 green, 6 asserted / 7 pending · **1 903 passed, 12 skipped** · client `typecheck` + `build` clean.
 
+## Re-review by the adversarial fleet (retro action B2)
+
+**Reviewed:** 2026-08-17 · **Method:** 4 named lenses over the whole diff, then **2 independent
+skeptics per candidate defect** — one attacking the mechanism, one the consequence, both instructed
+to REFUTE and to default to refuted when uncertain.
+
+**Why this happened at all.** The Epic-5 retrospective (`epic-5-retro-2026-08-14.md`) opened B2
+because 5.6, 5.7 and 5.8 were reviewed **inline by one reader** while every other story of the epic
+faced the fleet, and because these three are the stories that produce what leaves the building. The
+retro's prediction was explicit and it held: the inline pass on 5.7 had confirmed *one* finding; the
+fleet raised twenty-four candidates on it.
+
+### Coverage (retro action A2 — a silent lens is not a clean bill of health)
+
+| | Planned | Ran | Returned | Lost |
+|---|---|---|---|---|
+| Lenses (× 3 stories) | 12 | 12 | 12 | **0** |
+| Skeptics (2 per HIGH defect) | 20 | 20 | 20 | **0** |
+
+Candidates: **64** (5.6: 19 · 5.7: 24 · 5.8: 21), deduplicated to **10 distinct HIGH defects**.
+Adjudicated **5 confirmed / 5 refuted** — the split of a pass that is working rather than one that
+is agreeing with itself. Nothing was left unadjudicated.
+
+**What the fleet did NOT reach, stated rather than implied:** the client is TypeScript with no test
+runner in this repository, so `ExhaustivePanel`'s seal and the drawer's act are covered by
+`npm run typecheck` / `build` and by the server-side sentence they render — read by the lenses,
+not executed by them.
+
+### Confirmed and fixed here
+
+| # | Severity | Finding | Fix |
+|---|---|---|---|
+| H1 | HIGH | The exhaustive-search **proof** and the client seal named `open_register_entries` and stopped. One override turned an amber, qualified absence into an **unqualified green** — nothing about the corpus had changed. A skeptic reproduced it live: *« Le registre liste 0 pièce(s) au registre »* over a document nobody had read. | The face names the overridden count; the seal is qualified by it; the panel's equation carries SM-3's third term, which it had been printing without (`2 recherché = 1 indexé + 0 au registre`). |
+| H1b | HIGH | The same override erased the AD-38 clause *« dont N au contenu inconnu »*: `unknown_cardinality_entries` counted only `open` entries, so overriding an unopened **archive** took it to zero. The absence claim then rested on a hole of unknown size and said nothing about it. | The subset is taken over **both** register terms. An override is a decision about a document; it does not make its contents known. |
+| H2 | HIGH | A **re-import silently reversed an override**: `save` merged the entry back as `open` — no audit entry, no conditional commit, nothing on any surface. | `_write_failure` never touches an `overridden` entry. Only a person undoes a person's decision. |
+
+**The line this story wrote, and where it was placed.** 5.6's own review section says, under *Considered
+and not done*: *"the half that holds today is asserted — a retry never silently resolves what an
+override closed"*. The guard went on `retry_failure`. `save` is the other route into the same table
+and it was not asked. The reviewer had the right question and walked one of the two doors.
+
+### Refuted
+
+Three candidates on this story did not survive: the reason validator's length floor (weighed and
+declined in the original review, with its argument intact), the ground taxonomy's completeness, and
+a claimed race between the override and the watermark (the watermark is recomputed inside the same
+transaction).
+
+### Gate (all three re-reviews, one run)
+
+ruff clean · import-linter 3 kept / 0 broken · **105** structural checks (104 → 105, the new one is
+story 5.8's) · fitness frame green, 6 asserted / 7 pending · **2 141 passed, 12 skipped**
+(2 113 → 2 141) · client `typecheck` + `build` clean. Every one of the five fixes carries a
+regression **proven to fail against the pre-fix code**, by reverting the fix and re-running.
+
 ## Change Log
 
 | Date | Version | Description |

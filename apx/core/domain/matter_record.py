@@ -259,12 +259,23 @@ class SamplingRunLine:
     """§5 — one *sampling run* and the sentence it produced. ``bound_sentence_fr`` is **quoted**
     from the server's composer, never re-assembled here: every path through that composer carries
     the wall and the staleness, and a document that rebuilt the sentence from numeric fields could
-    drop either (FR-58/FR-23)."""
+    drop either (FR-58/FR-23).
+
+    ``reviewed`` and ``relevant_found`` are TWO numbers and this document names both (retro B2/H4).
+    ``reviewed`` used to be fed ``relevant_found``: §5 of a *bâtonnier*'s record printed
+    *how many discarded families turned out to be relevant* under the word *reviewed*, so a draw of
+    two hundred families that found three false discards read as a review of three — the strongest
+    possible number for the firm, in the one document produced to be read against it. The project's
+    recurring defect (a nearly-right referent, always failing toward the flattering side) on a court
+    document."""
 
     run_id: str
     status: str
     drawn: int
+    #: how many drawn families carry a verdict — what was actually reviewed
     reviewed: int
+    #: how many of those verdicts came back RELEVANT — the false discards the draw found
+    relevant_found: int
     population_size: int
     bound_sentence_fr: str | None = None
 

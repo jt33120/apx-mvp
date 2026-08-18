@@ -15,6 +15,7 @@ from apx.checks.matter_export import a_pending_section_is_not_a_zero
 from apx.checks.validation import (
     acceptance_is_never_manufactured,
     only_the_validation_act_accepts,
+    the_accepted_version_is_never_defaulted,
     the_opened_fact_is_never_a_literal,
 )
 from apx.core.domain import audit, matter_record
@@ -135,3 +136,37 @@ def test_a_section_whose_act_vanishes_must_be_declared_pending_again() -> None:
     finally:
         matter_record.SECTION_ACTS.clear()
         matter_record.SECTION_ACTS.update(original)
+
+
+# ── the accepted ranking version comes from the caller (FR-45/AD-23, retro B2/H7) ─────────────
+
+def test_the_version_check_passes_on_the_real_runtime_and_the_clean_fixture() -> None:
+    result = the_accepted_version_is_never_defaulted()
+    assert result.ok, result.detail
+    assert the_accepted_version_is_never_defaulted(_fixture("clean")).ok
+
+
+def test_a_defaulted_version_fails_the_build() -> None:
+    """The defect as it shipped. Both layers default it, and each is individually defensible —
+    which is why it survived a review and needed a check rather than a reader."""
+    result = the_accepted_version_is_never_defaulted(_fixture("version_defaulted"))
+    assert not result.ok
+    assert "declares version_no with a default" in result.detail
+    assert result.detail.count("version_no with a default") == 2, "both layers are named"
+
+
+def test_a_call_that_omits_the_version_fails_the_build() -> None:
+    result = the_accepted_version_is_never_defaulted(_fixture("version_omitted"))
+    assert not result.ok
+    assert "without version_no" in result.detail
+
+
+def test_a_READ_may_still_default_its_version() -> None:
+    """The scope of the rule, pinned. Thirty-seven functions in this tree default ``version_no``
+    and are right to: *the current version* is what a table or a drawer should show when nobody
+    named one. It stops being honest only where the answer is written down as an acceptance, so a
+    check that flagged every default would be answered by weakening it — which is how a guard dies.
+    """
+    result = the_accepted_version_is_never_defaulted()
+    assert result.ok
+    assert "read_triage_table" not in result.detail

@@ -442,7 +442,7 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             # what the dialog says, not a step of the act.
             _Step(("read-validations",), lambda: _get(f"/api/matters/{MATTER}/validations")),
             _Step(("preview-validation-batch",), lambda: _post(
-                f"/api/matters/{MATTER}/validate-batch/preview",
+                f"/api/matters/{MATTER}/validate-batch/preview?version_no=1",
                 {"piece_ids": list(pieces[:2]), "confirmed_count": 2})),
             _Step(("read-inventory",), lambda: _get(f"/api/matters/{MATTER}/inventory")),
             # Story 5.1 — the sampling run's reads. Pure: they render the DERIVED
@@ -594,11 +594,11 @@ def test_no_registered_action_reduces_any_evidential_count(tmp_path: Path, monke
             # this is where that reading is proven false — the ledger grows by one row, the
             # validation entry it withdraws is still there, and no evidential count falls.
             _Step(("validate-piece",), lambda: _post(
-                f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate")),
+                f"/api/matters/{MATTER}/pieces/{pieces[0]}/validate?version_no=1")),
             _Step(("withdraw-validation",), lambda: _post(
                 f"/api/matters/{MATTER}/pieces/{pieces[0]}/validation/withdraw")),
             _Step(("validate-pieces-in-batch",), lambda: _post(
-                f"/api/matters/{MATTER}/validate-batch",
+                f"/api/matters/{MATTER}/validate-batch?version_no=1",
                 {"piece_ids": list(pieces[:2]), "confirmed_count": 2})),
             _Step(("clear-truncation",), _clear_truncation),
         ]

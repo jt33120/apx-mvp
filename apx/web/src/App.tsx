@@ -622,8 +622,13 @@ function ExhaustivePanel({ q, res }: { q: string; res: ExhaustiveResult }) {
   // fail-closed: no scope → a 0/0 denominator. This is NOT a searched-and-empty absence — it is
   // "nothing was searched" (never a green proof of absence over an empty corpus). (Story 3.4 M1.)
   const nothingSearched = d.submitted_pieces === 0;
+  // retro B2/H1: the overridden count qualifies the claim exactly as the open one does. It
+  // was absent, so an override — the act that closes a register entry over a document that never
+  // entered the corpus — turned an amber, qualified absence into an unqualified GREEN seal. The
+  // one thing that could make this seal lie was the one thing it did not look at.
   const clean =
-    d.open_register_entries === 0 && d.unknown_cardinality_entries === 0 && res.ocr_share === 0;
+    d.open_register_entries === 0 && d.overridden_register_entries === 0
+    && d.unknown_cardinality_entries === 0 && res.ocr_share === 0;
   const claim = res.results.length > 0
     ? `${res.results.length} pièce(s) contenant « ${q} » — ensemble complet`
     : `Aucune occurrence de « ${q} ».`;
@@ -659,18 +664,32 @@ function ExhaustivePanel({ q, res }: { q: string; res: ExhaustiveResult }) {
             <div className="n">{d.open_register_entries}</div>
             <div className="c">au registre — illisibles / non indexées</div>
           </div>
-          {d.unknown_cardinality_entries > 0 && (
+          {/* SM-3's third term (FR-25). Absent, the equation printed here did not add up the
+              moment a single override existed: 2 recherché = 1 indexé + 0 au registre. */}
+          {d.overridden_register_entries > 0 && (
             <div className="apx-eq-row">
-              <div className="n">{d.unknown_cardinality_entries}</div>
-              <div className="c">au contenu inconnu (cardinalité inconnue)</div>
+              <div className="n">{d.overridden_register_entries}</div>
+              <div className="c">écartées sur dérogation motivée — jamais entrées au corpus</div>
             </div>
           )}
         </div>
       </div>
+      {/* NOT a row of the equation: an unknown cardinality is a SUBSET of the two register terms
+          and is never summed into a total (AD-38). Rendered as a fourth summand it made the sum
+          overshoot, and it is rendered in words for the same reason it is never added. */}
+      {d.unknown_cardinality_entries > 0 && (
+        <p className="apx-hint" style={{ padding: "0 1.3rem .5rem", margin: 0 }}>
+          Dont {d.unknown_cardinality_entries} archive(s) non ouverte(s), au contenu inconnu — un
+          nombre de pièces que personne ne connaît, jamais additionné à un total.
+        </p>
+      )}
       <div className={`apx-absence ${clean ? "apx-absence--ok" : "apx-absence--qual"}`}>
         <span className="lead">{claim}</span>
         Recherché dans tout l'indexé de ce périmètre ({d.in_corpus} sur {d.submitted_pieces}).
         Le registre liste {d.open_register_entries} pièce(s)
+        {d.overridden_register_entries > 0
+          ? ` et ${d.overridden_register_entries} pièce(s) écartée(s) sur dérogation motivée`
+          : ""}
         {d.unknown_cardinality_entries > 0
           ? `, dont ${d.unknown_cardinality_entries} au contenu inconnu`
           : ""}

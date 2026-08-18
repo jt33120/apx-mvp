@@ -511,13 +511,15 @@ class ValidationEntryOut(BaseModel):
 
 
 class ValidationSplitOut(BaseModel):
-    """What the bulk confirmation states before anything is written (FR-45(a)) — the count **and**
-    the split. A confirmation naming only the total obtains consent while telling the lawyer nothing
-    she did not already know."""
+    """What the bulk confirmation states before anything is written (FR-45(a)) — the count, the
+    split **and the version**. A confirmation naming only the total obtains consent while telling
+    the lawyer nothing she did not already know; one that never names the *ranking version* leaves
+    her accepting an assessment without being told whose (retro B2/H7)."""
 
     total: int
     opened: int
     not_opened: int
+    version_no: int
     sentence_fr: str
 
 
@@ -1605,7 +1607,14 @@ def _inventory_of(d: DenominatorOut) -> Inventory:
 def _exhaustive_header(out: ExhaustiveOut) -> str:
     """The truth-status FACE of an exhaustive export — the scoped denominator + the AD-42
     qualifications + the presence/absence claim, in the lawyer's language. Never a bare
-    'introuvable'; never the FR-23 banned phrasing."""
+    'introuvable'; never the FR-23 banned phrasing.
+
+    **The overridden count is on the face** (retro B2/H1). It was not, and an *override* is the
+    one act that moves a document out of ``open`` without it ever entering the *corpus*: the
+    sentence went from naming one document the search could not read to naming none, and the
+    strongest claim this product makes — *nothing relevant was lost silently* — got quieter each
+    time somebody decided to live without a document. FR-25 exists to keep that number visible;
+    this is the surface where it is worth the most."""
     d = out.denominator
     # DeterministicResult is per-PIÈCE (matter, piece_id, snippet), so a pièce is the unit here.
     claim = (f"{len(out.results)} pièce(s) contenant « {out.query} » — ensemble complet"
@@ -1613,6 +1622,9 @@ def _exhaustive_header(out: ExhaustiveOut) -> str:
     quals = (f"Recherché dans tout l'indexé de ce périmètre "
              f"({d.in_corpus} sur {d.submitted_pieces}). "
              f"Le registre liste {d.open_register_entries} pièce(s) au registre")
+    if d.overridden_register_entries:
+        quals += (f" et {d.overridden_register_entries} pièce(s) écartée(s) sur "
+                  f"dérogation motivée")
     if d.unknown_cardinality_entries:
         quals += f", dont {d.unknown_cardinality_entries} au contenu inconnu"
     quals += f" ; {round(out.ocr_share * 100)} % du corpus recherché provient d'un OCR"
@@ -2138,7 +2150,16 @@ def export_matter_record(
 
     A POST, not a GET, because producing it is an ACT: it is recorded on the *matter*'s own chain
     with the tier, the actor, the scope and the moment. A refusal is not an export and writes
-    nothing. 400 on an unknown tier, 403 outside the caller's scope."""
+    nothing. 400 on an unknown tier, 403 outside the caller's scope.
+
+    **The bound sentences are composed here** (retro B2/H5). ``_assemble_matter_record`` has
+    taken a ``bound_sentences`` map since Story 5.4 and NO caller ever filled it, so §5 of every
+    record ever exported carried the run's numbers and no sentence — and *"no sentence was
+    composed"* is precisely what that absence means on the page, while one had been. The
+    *confidence bound* is the sentence a firm says to a judge; it is the reason the sampling epic
+    exists. It is composed by the ONE composer through the ONE read seam, and the document
+    **quotes** it: rebuilt from the numeric fields it would lose the wall and the freshness
+    qualification that every path through that composer carries (FR-58/FR-23)."""
     store = _require_store()
     try:
         chosen = Tier(tier)
@@ -2146,10 +2167,17 @@ def export_matter_record(
         raise HTTPException(
             status_code=400,
             detail=f"niveau inconnu : {tier!r} — attendu 'numbers-only' ou 'full'") from exc
+    readings = read_sampling_runs(
+        tenant=ident.tenant, matter=matter, scopes=ident.scopes, store=store,
+        config_get=lambda key: store.get_config(ident.tenant, key))
+    # A run that supports nothing yet composes no sentence, and its absence stays honest.
+    sentences = {
+        r.run.run_id: sentence for r in (readings or ())
+        if (sentence := r.statement_fr) is not None}
     try:
         record = store.export_matter_record(
             tenant=ident.tenant, matter=matter, actor=ident.actor, scopes=ident.scopes,
-            tier=chosen)
+            tier=chosen, bound_sentences=sentences)
     except ScopeDenied as exc:
         raise HTTPException(status_code=403, detail="outside your scope") from exc
     payload = dataclasses.asdict(record)
@@ -2268,7 +2296,7 @@ def read_validations(
 
 @app.post("/api/matters/{matter}/pieces/{piece_id}/validate", response_model=ValidationLogOut)
 def validate_piece(
-    matter: str, piece_id: str, version_no: int | None = None,
+    matter: str, piece_id: str, version_no: int,
     ident: Identity = Depends(current_identity),
 ) -> ValidationLogOut:
     """Perform a *validation act* over one *pièce* (FR-45) — *"I have read this pièce and I accept
@@ -2277,7 +2305,15 @@ def validate_piece(
     Whether the *pièce* was opened in the viewer before the act is resolved by the store, for **this
     caller**, from opens strictly before the act. The edge cannot supply it and does not try: a
     boundary that accepted the provenance from a request would let a client assert that a document
-    was read. 403 outside the caller's scope, 400 when the *pièce* is not in the ranking."""
+    was read.
+
+    ``version_no`` is **required** (retro B2/H7): the assessment being accepted belongs to one
+    *ranking version*, the surface prints which one on the button, and a request that named none had
+    the server resolve the current version at commit — the flattering default, on the record of what
+    a person accepted. Omitting it is a 422 at the edge, before the act is attempted.
+
+    403 outside the caller's scope (and on a version this *matter* does not have — absent and walled
+    answer identically, FR-14), 400 when the *pièce* is not in that version."""
     store = _require_store()
     try:
         store.validate_pieces(
@@ -2292,16 +2328,18 @@ def validate_piece(
 
 @app.post("/api/matters/{matter}/validate-batch", response_model=ValidationLogOut)
 def validate_pieces_in_batch(
-    matter: str, req: ValidationBatchIn, version_no: int | None = None,
+    matter: str, req: ValidationBatchIn, version_no: int,
     ident: Identity = Depends(current_identity),
 ) -> ValidationLogOut:
     """A **bulk** *validation act* (FR-45) — permitted, and never undetectable.
 
     ``confirmed_count`` is required and must match the selection: FR-45(a) asks for *"an explicit
     confirmation naming the count"*, and a selection that changed between the dialog and the commit
-    is not the act the lawyer confirmed (400). Each *pièce* gets **its own** entry carrying the
-    shared batch identifier, the size, and **its own** opened-or-not fact — a *pièce* in the batch
-    that she had opened is recorded as opened, because it was."""
+    is not the act the lawyer confirmed (400). ``version_no`` is required for the same reason and
+    was not (retro B2/H7): the count travelled from the dialog to the commit and the version —
+    the other half of what she accepted — was resolved at the commit. Each *pièce* gets **its own**
+    entry carrying the shared batch identifier, the size, and **its own** opened-or-not fact — a
+    *pièce* in the batch that she had opened is recorded as opened, because it was."""
     store = _require_store()
     try:
         store.validate_pieces(
@@ -2316,22 +2354,25 @@ def validate_pieces_in_batch(
 
 @app.post("/api/matters/{matter}/validate-batch/preview", response_model=ValidationSplitOut)
 def preview_validation_batch(
-    matter: str, req: ValidationBatchIn, ident: Identity = Depends(current_identity),
+    matter: str, req: ValidationBatchIn, version_no: int,
+    ident: Identity = Depends(current_identity),
 ) -> ValidationSplitOut:
     """What the bulk confirmation must state before anything is written (FR-45(a)).
 
-    A pure read that writes nothing: the count **and** the split — how many of the selection this
-    caller has opened, and therefore how many entries will read *accepted from the list* rather than
-    *read*. 404 out of scope or absent."""
+    A pure read that writes nothing: the count, the split **and the version** — how many of the
+    selection this caller has opened, therefore how many entries will read *accepted from the list*
+    rather than *read*, and whose assessment she is about to accept. The preview and the commit take
+    the same required ``version_no`` (retro B2/H7), or the dialog would describe an act the
+    server does not perform. 404 out of scope or absent."""
     store = _require_store()
     split = store.batch_split(
         tenant=ident.tenant, matter=matter, actor=ident.actor, piece_ids=req.piece_ids,
-        scopes=ident.scopes)
+        scopes=ident.scopes, version_no=version_no)
     if split is None:
         raise HTTPException(status_code=404, detail=_MATTER_ABSENT)
     return ValidationSplitOut(
         total=split.total, opened=split.opened, not_opened=split.not_opened,
-        sentence_fr=split.sentence_fr())
+        version_no=split.version_no, sentence_fr=split.sentence_fr())
 
 
 @app.post(

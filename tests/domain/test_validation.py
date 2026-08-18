@@ -153,16 +153,16 @@ def test_the_confirmation_names_the_count_it_is_about_to_act_on() -> None:
 def test_the_split_is_the_information_not_the_total() -> None:
     """A confirmation naming only the total obtains consent while telling her nothing she did not
     already know. Each of the three sentences says what the RECORD will carry."""
-    mixed = BatchSplit(total=180, opened=12)
+    mixed = BatchSplit(total=180, opened=12, version_no=3)
     assert mixed.not_opened == 168
     assert "12" in mixed.sentence_fr() and "168" in mixed.sentence_fr()
     assert "jamais comme lues" in mixed.sentence_fr()
 
-    none_opened = BatchSplit(total=168, opened=0)
+    none_opened = BatchSplit(total=168, opened=0, version_no=3)
     assert "aucune" in none_opened.sentence_fr()
     assert "168" in none_opened.sentence_fr()
 
-    all_opened = BatchSplit(total=12, opened=12)
+    all_opened = BatchSplit(total=12, opened=12, version_no=3)
     assert "toutes" in all_opened.sentence_fr()
     assert "depuis la liste" not in all_opened.sentence_fr()
 

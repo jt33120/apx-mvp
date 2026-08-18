@@ -9,8 +9,9 @@ over **known** *pièces* after container expansion, is
 
 — ``excluded_as_noise`` (filesystem noise, FR-6) and ``retired`` (AD-7) sit **outside** the
 identity as their own named lines; ``unknown_cardinality_entries`` is a **subset** of
-``open_register_entries`` (an unopened *container* is one open entry standing for an UNKNOWN number
-of *pièces*) and is **never summed into any total** — it is rendered in words (AD-38). This is the
+``open_register_entries + overridden_register_entries`` (an unopened *container* is one register
+entry standing for an UNKNOWN number of *pièces*) and is **never summed into any total** — it is
+rendered in words (AD-38). This is the
 honest core of the triage product: *"nothing relevant was lost silently"* becomes a number a lawyer
 can state, checked here, in the domain, independent of any store.
 
@@ -30,6 +31,12 @@ to shrink the* denominator*, which is the one thing AD-38 exists to prevent; lea
 identity would have* ``require_consistent`` *raise on the next retry of that* matter*. So it is a
 named line INSIDE the identity — the count of documents the firm has decided to live without, which
 is precisely the number FR-25 exists to keep visible.)*
+
+*(Widened in retro B2/H1. ``unknown_cardinality_entries`` counted only ``open`` unopened
+containers, so an* override *on one of them took the count to zero and every surface stopped saying
+"contents unknown" — the qualification vanished at the moment somebody decided to live without the
+archive, which is the moment it matters most. An* override *is a decision about a document; it does
+not make the document's contents known. The subset is now taken over both register terms.)*
 """
 
 from __future__ import annotations
@@ -54,22 +61,23 @@ class Inventory:
     # ── outside the SM-3 identity, each its own named line ──
     excluded_as_noise: int = 0     # filesystem noise (FR-6): declared, configured, never a pièce
     retired: int = 0               # AD-7: retired by state, never hard-deleted (reserved; 0 today)
-    # ── a SUBSET annotation of `open_register_entries`, NEVER summed into a total (AD-38) ──
-    unknown_cardinality_entries: int = 0   # open `container-unopenable` entries — rendered in words
+    # ── a SUBSET annotation of the two REGISTER terms, NEVER summed into a total (AD-38) ──
+    unknown_cardinality_entries: int = 0   # `container-unopenable` entries — rendered in words
 
     def is_consistent(self) -> bool:
         """The SM-3 invariant: over **known** *pièces*, ``submitted_pieces == in_corpus +
         open_register_entries + overridden_register_entries``. ``excluded_as_noise`` and ``retired``
         sit **outside** the identity (their own named lines); ``unknown_cardinality_entries`` is a
-        subset of ``open_register_entries`` and is never a term here (AD-38 — an unknown cardinality
-        is never summed into a total)."""
+        subset of the two REGISTER terms together and is never a term here (AD-38 — an unknown
+        cardinality is never summed into a total)."""
         return (
             self.submitted_pieces == (
                 self.in_corpus + self.open_register_entries + self.overridden_register_entries)
             and min(
                 self.submitted_pieces, self.in_corpus, self.open_register_entries,
                 self.overridden_register_entries, self.excluded_as_noise, self.retired) >= 0
-            and 0 <= self.unknown_cardinality_entries <= self.open_register_entries
+            and 0 <= self.unknown_cardinality_entries <= (
+                self.open_register_entries + self.overridden_register_entries)
         )
 
     def unknown_cardinality_phrase(self) -> str:

@@ -694,7 +694,7 @@ export type ValidationLog = {
   entries: ValidationEntry[]; current_ranking_version_id: string | null;
 };
 export type ValidationSplit = {
-  total: number; opened: number; not_opened: number; sentence_fr: string;
+  total: number; opened: number; not_opened: number; version_no: number; sentence_fr: string;
 };
 
 export async function readValidations(
@@ -707,11 +707,16 @@ export async function readValidations(
   return res.json();
 }
 
+// `versionNo` is the version the SCREEN is showing, exactly as `confirmedCount` is the count the
+// lawyer was shown. Without it the server resolved the current version AT THE COMMIT, so a re-rank
+// between the button and the click moved what she is recorded as having accepted. The button
+// already printed the version; the request did not carry it.
 export async function validatePiece(
-  matter: string, pieceId: string,
+  matter: string, pieceId: string, versionNo: number,
 ): Promise<ValidationLog> {
   const res = await fetch(
-    `/api/matters/${encodeURIComponent(matter)}/pieces/${encodeURIComponent(pieceId)}/validate`,
+    `/api/matters/${encodeURIComponent(matter)}/pieces/${encodeURIComponent(pieceId)}/validate`
+    + `?version_no=${encodeURIComponent(String(versionNo))}`,
     { method: "POST" });
   if (!res.ok) throw new Error(await detail(res));
   return res.json();
@@ -731,9 +736,11 @@ export async function withdrawValidation(
 // The confirmation's own content (FR-45(a)) — the count AND the split. Writes nothing: a dialog
 // naming only the total obtains consent while telling her nothing she did not already know.
 export async function previewValidationBatch(
-  matter: string, pieceIds: string[],
+  matter: string, pieceIds: string[], versionNo: number,
 ): Promise<ValidationSplit | null> {
-  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/validate-batch/preview`, {
+  const res = await fetch(
+    `/api/matters/${encodeURIComponent(matter)}/validate-batch/preview`
+    + `?version_no=${encodeURIComponent(String(versionNo))}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ piece_ids: pieceIds, confirmed_count: pieceIds.length }),
@@ -746,9 +753,11 @@ export async function previewValidationBatch(
 // `confirmedCount` is what the lawyer was SHOWN, not `pieceIds.length` re-derived here: the server
 // refuses a mismatch, which is what catches a selection that changed under the dialog.
 export async function validateBatch(
-  matter: string, pieceIds: string[], confirmedCount: number,
+  matter: string, pieceIds: string[], confirmedCount: number, versionNo: number,
 ): Promise<ValidationLog> {
-  const res = await fetch(`/api/matters/${encodeURIComponent(matter)}/validate-batch`, {
+  const res = await fetch(
+    `/api/matters/${encodeURIComponent(matter)}/validate-batch`
+    + `?version_no=${encodeURIComponent(String(versionNo))}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ piece_ids: pieceIds, confirmed_count: confirmedCount }),

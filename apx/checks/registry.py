@@ -217,6 +217,7 @@ CHECKS: list[Callable[[], CheckResult]] = [
     validation.only_the_validation_act_accepts,
     validation.the_opened_fact_is_never_a_literal,
     validation.acceptance_is_never_manufactured,
+    validation.the_accepted_version_is_never_defaulted,
     # ── story 5.9: the record cannot be SHORTENED (FR-53/AD-35/AD-22) ──
     continuity.the_store_has_one_door,
     continuity.the_continuity_claim_is_derived_from_the_document,

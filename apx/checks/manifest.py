@@ -671,6 +671,12 @@ PROPERTY_MANIFEST: list[StructuralProperty] = [
        validation.acceptance_is_never_manufactured,
        "every name and French string literal across apx/** — no dwell/scroll/visit path to an "
        "acceptance, and ONE home for the sentence the record attributes to the lawyer"),
+    _p("validation-version-never-defaulted", "FR-45", "AD-33",
+       "the accepted ranking version comes from the caller",
+       validation.the_accepted_version_is_never_defaulted,
+       "every call to validate_pieces/batch_split across apx/**, and every layer that reaches one "
+       "— a default resolves whatever version is current AT THE COMMIT, on the record of what a "
+       "person accepted (retro B2/H7)"),
     # ── story 5.9: the record cannot be SHORTENED (FR-53/AD-35/AD-22) ─────────────────────────
     _p("store-has-one-door", "FR-53", "AD-35", "every writing store is journalled",
        continuity.the_store_has_one_door,
